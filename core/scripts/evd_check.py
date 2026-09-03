@@ -1,0 +1,448 @@
+#!/usr/bin/env python3
+"""evd_check.py — the evidence gate.
+
+Asks one question of a finished verification: **could a stranger reconstruct
+this verdict from the folder alone?** Every rule here exists because a real
+verification went wrong without it, and every rule can go RED.
+
+    python3 .ai-qa/scripts/evd_check.py --evd evd/SHOP-142 --expect-tcs 3
+
+Exit 0 = green. Exit 1 = red, with every failure printed. Nothing is written.
+
+Prove the gate itself:  python3 evd_check.py --selftest
+The selftest builds a green fixture, asserts it passes, then mutates it one rule
+at a time and asserts each mutation goes red. A gate that has never failed does
+not exist.
+
+Python 3.9 compatible.
+"""
+import argparse
+import os
+import re
+import sys
+import shutil
+import tempfile
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib"))
+try:
+    import ctx  # type: ignore
+except Exception:  # pragma: no cover - the gate must run without a config
+    ctx = None
+
+VERDICTS = ("PASS", "FAIL", "PARTIAL", "NEW-BUG", "BLOCKED", "UNCLEAR")
+CASE_RESULTS = ("PASS", "FAIL", "BLOCKED")
+KINDS = ("acceptance", "boundary", "whole-screen", "write-readback", "exploratory")
+
+# Fields every case manifest must carry. The names are the discipline: a field
+# you have to fill in is a question you cannot skip.
+REQUIRED_FIELDS = ("RESULT", "AS", "PRECONDITION", "ENTRY", "STEPS", "EXPECTED", "ACTUAL")
+UI_ONLY_FIELDS = ("AFTER", "BACK")
+
+STEP_IMAGE = re.compile(r"^\d{2}_.+\.(png|jpg|jpeg)$", re.I)
+BOXED_IMAGE = re.compile(r"_boxed\.(png|jpg|jpeg)$", re.I)
+
+
+class Result:
+    def __init__(self):
+        self.errors = []
+        self.warnings = []
+        self.notes = []
+
+    def err(self, where, msg):
+        self.errors.append("{}: {}".format(where, msg))
+
+    def warn(self, where, msg):
+        self.warnings.append("{}: {}".format(where, msg))
+
+    @property
+    def ok(self):
+        return not self.errors
+
+
+def read(path):
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as fh:
+            return fh.read()
+    except Exception:
+        return ""
+
+
+def fields(text):
+    """Parse 'KEY: value' lines out of a case manifest, one entry per key."""
+    out = {}
+    for line in text.splitlines():
+        m = re.match(r"^\s*(?:[-*]\s*)?([A-Z][A-Z_-]{1,20}):\s*(.*)$", line)
+        if m:
+            key = m.group(1).upper()
+            if key not in out:
+                out[key] = m.group(2).strip()
+    return out
+
+
+def cfg_get(dotted, default):
+    if ctx is None:
+        return default
+    try:
+        return ctx.get(ctx.load(), dotted, default)
+    except Exception:
+        return default
+
+
+def check_case(case_dir, res, opts):
+    name = os.path.basename(case_dir)
+    man_path = os.path.join(case_dir, "manifest.md")
+    if not os.path.exists(man_path):
+        res.err(name, "no manifest.md — a folder of images is not a verification")
+        return None
+
+    text = read(man_path)
+    f = fields(text)
+    kind = f.get("KIND", "").lower()
+    non_ui = f.get("TYPE", "").upper() == "NON-UI"
+
+    required = list(REQUIRED_FIELDS) + ([] if non_ui else list(UI_ONLY_FIELDS))
+    for key in required:
+        if key not in f or not f[key]:
+            res.err(name, "manifest.md is missing {} — {}".format(key, _why(key)))
+
+    result = f.get("RESULT", "").upper()
+    if result and result not in CASE_RESULTS:
+        res.err(name, "RESULT is {!r}; must be one of {}".format(result, "/".join(CASE_RESULTS)))
+
+    if kind and kind not in KINDS:
+        res.err(name, "KIND is {!r}; must be one of {}".format(kind, ", ".join(KINDS)))
+    if not kind:
+        res.warn(name, "no KIND: — the suite cannot tell whether the boundary case was ever designed")
+
+    # A case that could not run says so and stops; the rest of the rules are
+    # about evidence that only a real run can produce.
+    if result == "BLOCKED":
+        if not re.search(r"(?im)^\s*(?:[-*]\s*)?(BLOCKED_BY|REASON|UNBLOCK):", text):
+            res.err(name, "RESULT: BLOCKED needs a REASON: and an UNBLOCK: line — a blocker with no way out is a shrug")
+        return kind
+
+    entry = f.get("ENTRY", "")
+    if entry and opts["require_click_entry"] and not non_ui:
+        looks_like_url_only = re.match(r"^\s*https?://\S+\s*$", entry) is not None
+        if looks_like_url_only:
+            res.err(name, "ENTRY is only a URL — a typed address hides a missing menu item, a "
+                          "wrong permission and an unreachable row at once. Walk the click path.")
+
+    after = f.get("AFTER", "")
+    if after and opts["require_reload"] and not non_ui:
+        if not re.search(r"reload|refresh|F5|survives", after, re.I):
+            res.err(name, "AFTER does not mention a reload — a save that dies on refresh is not a save")
+
+    images = sorted(os.listdir(case_dir)) if os.path.isdir(case_dir) else []
+    step_shots = [i for i in images if STEP_IMAGE.match(i)]
+    boxed = [i for i in images if BOXED_IMAGE.search(i)]
+
+    if non_ui:
+        has_verify = any(os.path.exists(os.path.join(case_dir, n))
+                         for n in ("db_verify.md", "cmd_verify.md"))
+        if not has_verify:
+            res.err(name, "TYPE: NON-UI needs db_verify.md or cmd_verify.md — no images and no "
+                          "verification file is not verification")
+    else:
+        if not step_shots:
+            res.err(name, "no step screenshots named NN_<what>.png — filenames are the first "
+                          "thing a reader sees, and a folder of numbers makes them open every file")
+        if opts["require_annotation"] and not boxed:
+            res.err(name, "no *_boxed image — an unannotated screenshot makes the reader guess "
+                          "which pixels carried the verdict")
+
+    if opts["require_db_verify"] and kind == "write-readback":
+        if not os.path.exists(os.path.join(case_dir, "db_verify.md")):
+            res.err(name, "KIND: write-readback with no db_verify.md — the interface saying "
+                          "'Saved' is a claim about the interface, not about the data")
+    return kind
+
+
+def _why(key):
+    return {
+        "RESULT": "a case with no verdict is a folder of pictures",
+        "AS": "a verdict with no actor cannot be reproduced, and half of all UI defects are role-shaped",
+        "PRECONDITION": "an id from the ticket may not exist any more; an empty list from stale data is not a defect",
+        "ENTRY": "where the user starts and what they click to arrive",
+        "STEPS": "numbered, in the order a person does them",
+        "EXPECTED": "with its citation — this is the whole verification",
+        "ACTUAL": "what actually happened",
+        "AFTER": "what changed, including whether it survives a reload",
+        "BACK": "Back and Cancel — where 'it works' usually stops working",
+    }.get(key, "required")
+
+
+def check_report(evd, res):
+    path = os.path.join(evd, "REPORT.md")
+    if not os.path.exists(path):
+        res.err("REPORT.md", "missing — the report is the deliverable; everything else is preparation")
+        return
+    text = read(path)
+
+    head = text.splitlines()[0] if text.splitlines() else ""
+    verdict = next((v for v in VERDICTS if v in head.upper()), "")
+    if not verdict:
+        res.err("REPORT.md", "the first line carries no verdict; one of {}".format("/".join(VERDICTS)))
+
+    for key, why in (("COMMIT", "the verdict binds to the code it ran against"),
+                     ("VERIFIED-AT", "on squash/rebase repos the commit dies with the branch; "
+                                     "this timestamp is the fallback anchor"),
+                     ("ORACLE", "what 'correct' was compared against — write NONE if nothing was")):
+        if not re.search(r"(?im)^\s*{}:\s*\S".format(key), text):
+            res.err("REPORT.md", "no {}: line — {}".format(key, why))
+
+    if verdict in ("FAIL", "NEW-BUG", "PARTIAL"):
+        if not re.search(r"(?i)severity", text):
+            res.err("REPORT.md", "a failing verdict with no Severity — see docs/qa/method/severity.md")
+        if not re.search(r"(?i)origin", text):
+            res.err("REPORT.md", "a failing verdict with no Origin (DEV or SPEC) — a spec-origin "
+                                 "finding sent to a developer produces a fix that is still wrong")
+
+    # Jargon in the body is not fatal, but it is the most common reason a report
+    # gets ignored by the person who most needed to read it.
+    body = text.split("## Appendix")[0]
+    jargon = [w for w in ("stack trace", "null pointer", "controller", "endpoint", "regex", "async")
+              if re.search(r"\b{}\b".format(w), body, re.I)]
+    if jargon:
+        res.warn("REPORT.md", "technical vocabulary in the body ({}) — the bar is a non-programmer "
+                              "reading it in two minutes; move it to the appendix".format(", ".join(jargon)))
+
+
+def run(evd, expect_tcs, opts):
+    res = Result()
+    if not os.path.isdir(evd):
+        res.err(evd, "no such evidence folder")
+        return res
+
+    if not os.path.exists(os.path.join(evd, "manifest.md")):
+        res.err("manifest.md", "missing at the evidence root — the plain-language index of what was checked")
+
+    cases = sorted(d for d in os.listdir(evd)
+                   if re.match(r"^TC_\d+$", d) and os.path.isdir(os.path.join(evd, d)))
+    if not cases:
+        res.err(evd, "no TC_<n> folders — nothing was verified")
+        return res
+
+    if expect_tcs is not None and len(cases) != expect_tcs:
+        res.err(evd, "planned {} test cases, found {} — 'planned 5, ran 1' is exactly what this "
+                     "gate exists to catch".format(expect_tcs, len(cases)))
+
+    lo, hi = opts["min_tcs"], opts["max_tcs"]
+    if len(cases) < lo:
+        res.err(evd, "{} case(s); the minimum is {} — one case is a demo, not a verification".format(len(cases), lo))
+    if len(cases) > hi:
+        res.warn(evd, "{} cases exceeds the budget of {} — a large suite usually means the choice "
+                      "was never made by risk".format(len(cases), hi))
+
+    kinds = []
+    for case in cases:
+        k = check_case(os.path.join(evd, case), res, opts)
+        if k:
+            kinds.append(k)
+
+    ran = [c for c in cases
+           if fields(read(os.path.join(evd, c, "manifest.md"))).get("RESULT", "").upper() != "BLOCKED"]
+    if ran:
+        if opts["require_boundary"] and "boundary" not in kinds:
+            res.err(evd, "no case with KIND: boundary — the happy path passing tells you nothing "
+                         "about the input that must behave the other way")
+        if opts["require_whole_screen"] and "whole-screen" not in kinds:
+            res.err(evd, "no case with KIND: whole-screen — fixes break neighbours, and the "
+                         "neighbour is what users notice")
+
+    check_report(evd, res)
+
+    for name, why in (("verifysheet.md", "where expected values are derived and cited"),
+                      ("debate.md", "the challenger's card — a verdict nobody tried to break")):
+        if not os.path.exists(os.path.join(evd, name)):
+            res.err(name, "missing — {}".format(why))
+    return res
+
+
+def report(res, evd):
+    if res.errors:
+        print("EVIDENCE: RED  ({})".format(evd))
+        for e in res.errors:
+            print("  x {}".format(e))
+    else:
+        print("EVIDENCE: GREEN  ({})".format(evd))
+    for w in res.warnings:
+        print("  ! {}".format(w))
+    return 0 if res.ok else 1
+
+
+# ---------------------------------------------------------------------------
+# selftest
+# ---------------------------------------------------------------------------
+GREEN_CASE = """RESULT: PASS
+KIND: acceptance
+AS: staff@demo (role STAFF)
+PRECONDITION: order #4102 exists, state PENDING
+ENTRY: signed in -> Orders -> filter Pending -> row #4102 -> Edit
+STEPS: 1. change quantity 2 -> 3   2. press Save
+EXPECTED: total recalculates to 450,000 (spec 3.2)
+ACTUAL: total shows 450,000, "Saved" message appears
+AFTER: list row shows 3; value survives a reload
+BACK: Back returns to Orders with the Pending filter intact
+"""
+
+BOUNDARY_CASE = GREEN_CASE.replace("KIND: acceptance", "KIND: boundary")
+SCREEN_CASE = GREEN_CASE.replace("KIND: acceptance", "KIND: whole-screen")
+
+GREEN_REPORT = """# SHOP-142 — PASS
+COMMIT: abc1234
+VERIFIED-AT: 2026-09-03T10:00:00Z
+ORACLE: docs/specs/orders.md 3.2
+
+## 1. What was asked for
+On the order screen, changing a quantity must recalculate the total.
+
+## 4. Conclusion
+The requirement is met.
+"""
+
+
+def _mkcase(root, name, manifest, images=True):
+    d = os.path.join(root, name)
+    os.makedirs(d, exist_ok=True)
+    with open(os.path.join(d, "manifest.md"), "w", encoding="utf-8") as fh:
+        fh.write(manifest)
+    if images:
+        for fn in ("01_orders_list.png", "03_total_after_save.png", "03_total_after_save_boxed.png"):
+            with open(os.path.join(d, fn), "wb") as fh:
+                fh.write(b"\x89PNG\r\n\x1a\n")
+    return d
+
+
+def _green_fixture(root):
+    os.makedirs(root, exist_ok=True)
+    for n, t in (("manifest.md", "# SHOP-142\nWhat was checked, in plain language.\n"),
+                 ("REPORT.md", GREEN_REPORT),
+                 ("verifysheet.md", "EXPECTED per spec 3.2\n"),
+                 ("debate.md", "verifier card\nchallenger card\nresolution\n")):
+        with open(os.path.join(root, n), "w", encoding="utf-8") as fh:
+            fh.write(t)
+    _mkcase(root, "TC_1", GREEN_CASE)
+    _mkcase(root, "TC_2", BOUNDARY_CASE)
+    _mkcase(root, "TC_3", SCREEN_CASE)
+    return root
+
+
+DEFAULT_OPTS = {
+    "min_tcs": 2, "max_tcs": 5, "require_boundary": True, "require_whole_screen": True,
+    "require_reload": True, "require_annotation": True, "require_db_verify": True,
+    "require_click_entry": True,
+}
+
+
+def selftest():
+    tmp = tempfile.mkdtemp(prefix="aiqa-evd-")
+    fails = []
+
+    def expect(cond, msg):
+        if not cond:
+            fails.append(msg)
+
+    def fresh(name):
+        d = os.path.join(tmp, name)
+        if os.path.exists(d):
+            shutil.rmtree(d)
+        return _green_fixture(d)
+
+    # 1. the green fixture must pass — a gate that reds on correct work is noise
+    base = fresh("green")
+    expect(run(base, 3, DEFAULT_OPTS).ok, "the green fixture did not pass")
+    expect(not run(base, 5, DEFAULT_OPTS).ok, "expect-tcs mismatch (planned 5, found 3) did not go red")
+
+    # 2. every rule must be able to fail, one mutation at a time
+    mutations = [
+        ("missing REPORT.md", lambda d: os.remove(os.path.join(d, "REPORT.md"))),
+        ("missing debate.md", lambda d: os.remove(os.path.join(d, "debate.md"))),
+        ("missing root manifest", lambda d: os.remove(os.path.join(d, "manifest.md"))),
+        ("no COMMIT line", lambda d: _rewrite(d, "REPORT.md", lambda t: t.replace("COMMIT: abc1234\n", ""))),
+        ("no ORACLE line", lambda d: _rewrite(d, "REPORT.md", lambda t: t.replace("ORACLE: docs/specs/orders.md 3.2\n", ""))),
+        ("FAIL without severity", lambda d: _rewrite(d, "REPORT.md", lambda t: t.replace("— PASS", "— FAIL"))),
+        ("no boundary case", lambda d: _rewrite(d, "TC_2/manifest.md", lambda t: t.replace("KIND: boundary", "KIND: acceptance"))),
+        ("no whole-screen case", lambda d: _rewrite(d, "TC_3/manifest.md", lambda t: t.replace("KIND: whole-screen", "KIND: acceptance"))),
+        ("case missing AS", lambda d: _rewrite(d, "TC_1/manifest.md", lambda t: re.sub(r"(?m)^AS:.*\n", "", t))),
+        ("case missing EXPECTED", lambda d: _rewrite(d, "TC_1/manifest.md", lambda t: re.sub(r"(?m)^EXPECTED:.*\n", "", t))),
+        ("case missing BACK", lambda d: _rewrite(d, "TC_1/manifest.md", lambda t: re.sub(r"(?m)^BACK:.*\n", "", t))),
+        ("ENTRY is only a URL", lambda d: _rewrite(d, "TC_1/manifest.md",
+            lambda t: re.sub(r"(?m)^ENTRY:.*$", "ENTRY: http://localhost:3000/orders/4102/edit", t))),
+        ("AFTER never reloads", lambda d: _rewrite(d, "TC_1/manifest.md",
+            lambda t: re.sub(r"(?m)^AFTER:.*$", "AFTER: the list row shows 3", t))),
+        ("no boxed image", lambda d: os.remove(os.path.join(d, "TC_1", "03_total_after_save_boxed.png"))),
+        ("no step screenshots", lambda d: [os.remove(os.path.join(d, "TC_1", f))
+                                           for f in os.listdir(os.path.join(d, "TC_1")) if f.endswith(".png")]),
+        ("bad RESULT value", lambda d: _rewrite(d, "TC_1/manifest.md", lambda t: t.replace("RESULT: PASS", "RESULT: OK"))),
+        ("BLOCKED with no way out", lambda d: _rewrite(d, "TC_1/manifest.md", lambda t: t.replace("RESULT: PASS", "RESULT: BLOCKED"))),
+        ("write-readback with no db_verify", lambda d: _rewrite(d, "TC_1/manifest.md",
+            lambda t: t.replace("KIND: acceptance", "KIND: write-readback"))),
+        ("non-UI with no verification file", lambda d: _rewrite(d, "TC_1/manifest.md",
+            lambda t: t.replace("KIND: acceptance", "KIND: acceptance\nTYPE: NON-UI"))),
+        ("only one case", lambda d: [shutil.rmtree(os.path.join(d, "TC_2")), shutil.rmtree(os.path.join(d, "TC_3"))]),
+    ]
+    for i, (label, mutate) in enumerate(mutations):
+        d = fresh("mut{}".format(i))
+        mutate(d)
+        expect(not run(d, None, DEFAULT_OPTS).ok, "mutation did NOT go red: {}".format(label))
+
+    # 3. a legitimately blocked case, fully declared, must still pass
+    d = fresh("blocked")
+    _rewrite(d, "TC_1/manifest.md", lambda t: t.replace("RESULT: PASS", "RESULT: BLOCKED")
+             + "REASON: no account has refund permission\nUNBLOCK: ops to grant refund role to qa@demo\n")
+    expect(run(d, None, DEFAULT_OPTS).ok, "a fully-declared BLOCKED case should not red the gate")
+
+    # 4. a non-UI case WITH its verification file must pass
+    d = fresh("nonui")
+    _rewrite(d, "TC_1/manifest.md", lambda t: t.replace("KIND: acceptance", "KIND: acceptance\nTYPE: NON-UI"))
+    with open(os.path.join(d, "TC_1", "db_verify.md"), "w", encoding="utf-8") as fh:
+        fh.write("SELECT total FROM orders WHERE id=4102;\n-> 450000\n")
+    expect(run(d, None, DEFAULT_OPTS).ok, "a non-UI case with db_verify.md should pass")
+
+    shutil.rmtree(tmp, ignore_errors=True)
+    if fails:
+        print("evd_check --selftest FAILED")
+        for f in fails:
+            print("  x {}".format(f))
+        return 1
+    print("evd_check --selftest passed  ({} mutations, each went red)".format(len(mutations)))
+    return 0
+
+
+def _rewrite(root, rel, fn):
+    path = os.path.join(root, rel)
+    with open(path, "r", encoding="utf-8") as fh:
+        text = fh.read()
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(fn(text))
+
+
+def main():
+    ap = argparse.ArgumentParser(description="the evidence gate")
+    ap.add_argument("--evd", help="evidence folder, e.g. evd/SHOP-142")
+    ap.add_argument("--expect-tcs", type=int, default=None,
+                    help="the number of cases PLANNED, so 'planned 5, ran 1' goes red")
+    ap.add_argument("--selftest", action="store_true", help="prove this gate can fail")
+    args = ap.parse_args()
+
+    if args.selftest:
+        return selftest()
+    if not args.evd:
+        ap.error("--evd is required (or use --selftest)")
+
+    opts = {
+        "min_tcs": int(cfg_get("evidence.min_test_cases", 2)),
+        "max_tcs": int(cfg_get("evidence.max_test_cases", 5)),
+        "require_boundary": bool(cfg_get("evidence.require_boundary", True)),
+        "require_whole_screen": bool(cfg_get("evidence.require_whole_screen", True)),
+        "require_reload": bool(cfg_get("evidence.require_reload_check", True)),
+        "require_annotation": bool(cfg_get("evidence.require_annotation", True)),
+        "require_db_verify": bool(cfg_get("evidence.require_db_verify", True)),
+        "require_click_entry": True,
+    }
+    return report(run(args.evd, args.expect_tcs, opts), args.evd)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

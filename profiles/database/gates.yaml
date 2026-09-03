@@ -1,0 +1,26 @@
+# Database surface — read to verify, never to make a change.
+#
+# The read-only guard is the whole point. Test data is created the way a user
+# creates it, through the product; this surface is where you confirm what
+# really landed.
+surface: database
+
+preflight:
+  - id: connection
+    proves: 'the read-only connection works'
+    run: 'python3 .ai-qa/scripts/db_verify.py -e "SELECT 1"'
+    blocking: false
+    unblock: 'export the env var named by database.url_env, and install the client (psql / mysql / sqlite3)'
+
+selftest:
+  - id: write-guard
+    proves: 'writes are refused — including ones hidden in a CTE, behind a comment, or batched after a SELECT'
+    run: 'python3 .ai-qa/scripts/db_verify.py --selftest'
+  - id: evidence-gate
+    proves: 'the evidence gate can go red'
+    run: 'python3 .ai-qa/scripts/evd_check.py --selftest'
+
+rules:
+  read_only: 'the lane never writes through the database — not to set up, not to clean up'
+  migrations_on_a_clean_db: 'a migration that only works where old data masks the flaw is a broken migration'
+  tests_must_red: 'flip one core constraint, confirm the suite fails in the right place, restore. A green test proves nothing.'

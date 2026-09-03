@@ -1,0 +1,45 @@
+{
+  "name": "ai-qa",
+  "version": "0.1.0",
+  "description": "An AI QA engineer you can drop into any codebase. It onboards like a new hire — works out what it needs to know, says what is missing — then verifies tickets against the spec with evidence a non-programmer can read.",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "ai-qa": "bin/ai-qa.mjs"
+  },
+  "files": [
+    "bin",
+    "src",
+    "core",
+    "adapters",
+    "profiles",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node tests/conformance.mjs && node tests/e2e.mjs",
+    "selftest": "node src/cli/scan.mjs --selftest"
+  },
+  "keywords": [
+    "ai",
+    "qa",
+    "testing",
+    "agents",
+    "claude-code",
+    "cursor",
+    "test-evidence",
+    "onboarding",
+    "playwright",
+    "quality-gates"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/connorpham/ai-qa.git"
+  },
+  "homepage": "https://github.com/connorpham/ai-qa#readme",
+  "bugs": {
+    "url": "https://github.com/connorpham/ai-qa/issues"
+  }
+}

@@ -1,0 +1,22 @@
+# API surface — a status code is not a verdict.
+surface: api
+
+preflight:
+  - id: app
+    proves: 'the API is answering'
+    run: 'bash .ai-qa/scripts/app_check.sh --wait 60'
+    blocking: true
+    unblock: 'start it with app.start, or correct api.base_url / app.url'
+
+selftest:
+  - id: api-recorder
+    proves: 'requests and responses are recorded, assertions can fail, and tokens never reach disk'
+    run: 'node .ai-qa/scripts/api_check.mjs --selftest'
+  - id: evidence-gate
+    proves: 'the evidence gate can go red'
+    run: 'python3 .ai-qa/scripts/evd_check.py --selftest'
+
+rules:
+  body_over_status: 'a 200 carrying the wrong number is a defect; a 422 with the documented error shape may be correct'
+  contract_or_say_so: 'with no contract configured, a response cannot be called wrong — only different. Say which in the report.'
+  never_record_secrets: 'the recorded request names the token env var, never the token'
