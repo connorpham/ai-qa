@@ -35,6 +35,13 @@ a suspect area.
 
 ## T1 — CAPTURE WHAT WAS ACTUALLY SAID
 
+If the report is already a ticket, fetch it rather than working from what was
+pasted into chat — the comments usually carry half the context:
+
+```bash
+python3 .ai-qa/scripts/tracker.py get <TICKET> --out evd/<TICKET>/ticket.md
+```
+
 Restate the report in three separate blocks, and ask the reporter for anything
 missing before you spend time reproducing:
 

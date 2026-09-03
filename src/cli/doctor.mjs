@@ -138,11 +138,33 @@ export async function doctor(flags) {
         r.ok ? "" : (r.timedOut ? "timed out after 120s" : r.out.split("\n").slice(0, 5).join("\n")));
     }
   }
+  // The tracker is not surface-specific — every install reads tickets from
+  // somewhere — so it is checked here rather than from a profile.
+  {
+    const r = runCmd(root, "python3 .ai-qa/scripts/tracker.py --selftest");
+    seen.add("tracker");
+    record(r.ok ? "green" : "red", "tracker — reads Jira/Backlog, and never writes a secret",
+      r.ok ? "" : (r.timedOut ? "timed out after 120s" : r.out.split("\n").slice(0, 6).join("\n")));
+  }
+
   if (!seen.size) record("red", "gate selftests", "no gate ran a selftest — nothing here is proven to work");
 
   // ---- 5. preflight (informational) -----------------------------------------
   if (!flags.quiet) {
     say.head("  Preflight  " + c.gray("(environment, not installation — never fatal)"));
+    {
+      // Credentials are per-machine. Missing ones are worth SAYING, never worth
+      // failing an install over: a laptop with no Jira token is not broken.
+      const r = runCmd(root, "python3 .ai-qa/scripts/tracker.py check");
+      const lines = r.out.split("\n").filter(Boolean);
+      const verdict = lines.find((l) => /^TRACKER: (OK|DOWN|BLOCKED)/.test(l)) || lines[0] || "";
+      console.log(`  ${r.ok ? c.green("✓") : c.gray("·")} ${"tracker".padEnd(10)} ${c.gray(verdict.slice(0, 96))}`);
+      if (!r.ok) {
+        for (const l of lines.filter((x) => /MISSING|missing environment|base_url|project/.test(x)).slice(0, 4)) {
+          console.log(`      ${c.gray(l.trim())}`);
+        }
+      }
+    }
     for (const s of list.length ? list : ["web"]) {
       const text = readIfExists(path.join(root, ".ai-qa", "profiles", String(s), "gates.yaml"));
       if (!text) continue;

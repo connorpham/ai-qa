@@ -83,6 +83,8 @@ for (const rel of [
   ".ai-qa/scripts/db_verify.py",
   ".ai-qa/scripts/browser.mjs",
   ".ai-qa/scripts/lib/ctx.py",
+  ".ai-qa/scripts/tracker.py",
+  ".ai-qa/scripts/lib/trackers.py",
   ".ai-qa/profiles/web/gates.yaml",
   ".ai-qa/profiles/database/gates.yaml",
   "docs/qa/onboarding.md",
@@ -265,6 +267,94 @@ for (const [label, cmd, args] of [
     "with no app configured the workflow must render the not-configured branch");
   check(/BLOCKED, not skipped/.test(skill),
     "the not-configured branch must say cases get BLOCKED, not silently skipped");
+}
+
+
+// ---- 13. a credentialled tracker: coordinates in the config, secrets in env ----
+{
+  const tracked = path.join(tmp, "tracked");
+  fs.mkdirSync(tracked, { recursive: true });
+  fs.writeFileSync(path.join(tracked, "README.md"), "# tracked\n");
+  fs.writeFileSync(path.join(tracked, ".env.example"), "APP_PORT=3000\n");
+  spawnSync("git", ["init"], { cwd: tracked, encoding: "utf8" });
+
+  const r = run(tracked, ["init", "--yes", "--key", "SHOP", "--tracker", "backlog",
+    "--tracker-url", "https://acme.backlog.com", "--tracker-project", "SHOP"]);
+  check(r.status === 0, `init with a backlog tracker failed:\n${r.stdout}${r.stderr}`);
+
+  const cfg = fs.readFileSync(path.join(tracked, "aiqa.config.yaml"), "utf8");
+  check(/provider: backlog/.test(cfg), "the tracker provider was not written");
+  check(/base_url: 'https:\/\/acme\.backlog\.com'/.test(cfg), `base_url not written: ${cfg.match(/base_url:.*/)}`);
+  check(/project: 'SHOP'/.test(cfg), "tracker project not written");
+  check(!/BACKLOG_API_KEY\s*[:=]\s*\S/.test(cfg),
+    "a credential VALUE reached the config — the config is committed, this would be a leak");
+
+  // .env.example gets the NAME, appended, with the existing content intact.
+  const envEx = fs.readFileSync(path.join(tracked, ".env.example"), "utf8");
+  check(envEx.startsWith("APP_PORT=3000"), "init overwrote .env.example instead of appending");
+  check(/^BACKLOG_API_KEY=$/m.test(envEx),
+    `init did not add the credential NAME to .env.example:\n${envEx}`);
+
+  // With no credential in the environment: BLOCKED (exit 2), and it must name
+  // the variable. Exit 1 would mean "no such ticket", which is a different story.
+  const env = { ...process.env, NO_COLOR: "1" };
+  delete env.BACKLOG_API_KEY;
+  const chk = spawnSync("python3", [".ai-qa/scripts/tracker.py", "check"],
+    { cwd: tracked, encoding: "utf8", env, timeout: 60_000 });
+  check(chk.status === 2, `a missing credential should exit 2 (BLOCKED), got ${chk.status}:\n${chk.stdout}`);
+  check(/BACKLOG_API_KEY/.test(chk.stdout), `the block did not name the variable:\n${chk.stdout}`);
+  check(/MISSING/.test(chk.stdout), "the check did not mark the variable as missing");
+  check(/acme\.backlog\.com/.test(chk.stdout), "the check did not echo the configured space URL");
+
+  const st = spawnSync("python3", [".ai-qa/scripts/tracker.py", "--selftest"],
+    { cwd: tracked, encoding: "utf8", timeout: 120_000 });
+  check(st.status === 0, `tracker selftest failed from the installed tree:\n${st.stdout}${st.stderr}`);
+}
+
+// ---- 14. the markdown tracker reads a ticket and judges its testability -------
+{
+  const md = path.join(tmp, "mdtracker");
+  fs.mkdirSync(md, { recursive: true });
+  fs.writeFileSync(path.join(md, "README.md"), "# md\n");
+  spawnSync("git", ["init"], { cwd: md, encoding: "utf8" });
+  check(run(md, ["init", "--yes", "--key", "SHOP", "--tracker", "markdown"]).status === 0,
+    "init with the markdown tracker failed");
+
+  const tdir = path.join(md, "docs", "qa", "tickets");
+  fs.mkdirSync(tdir, { recursive: true });
+  fs.writeFileSync(path.join(tdir, "SHOP-1.md"),
+    "# Order total does not recalculate\nStatus: In Review\nAssignee: Mai\n\n" +
+    "Acceptance criteria\n- AC1 the total updates after changing quantity\n");
+
+  const out = path.join(md, "evd", "SHOP-1", "ticket.md");
+  const g = spawnSync("python3", [".ai-qa/scripts/tracker.py", "get", "SHOP-1", "--out", "evd/SHOP-1/ticket.md"],
+    { cwd: md, encoding: "utf8", timeout: 60_000 });
+  check(g.status === 0, `markdown get failed:\n${g.stdout}${g.stderr}`);
+  check(fs.existsSync(out), "the rendered ticket was not written");
+  const text = fs.readFileSync(out, "utf8");
+  check(text.includes("Order total does not recalculate"), "the title is missing from the rendered ticket");
+  check(text.includes("DATA, not the oracle"),
+    "the rendered ticket lost the banner that stops it being treated as the specification");
+  check(text.includes("In Review"), "the status is missing");
+  check(/Acceptance criteria are present/.test(text),
+    "a ticket WITH criteria was not recognised as such");
+  check(/ready to verify/.test(text), "a deliverable status was not recognised");
+
+  // A ticket that is only prose must be told so, and an undelivered one too.
+  fs.writeFileSync(path.join(tdir, "SHOP-2.md"),
+    "# Make the button nicer\nStatus: In Progress\n\nplease fix the orders page\n");
+  const g2 = spawnSync("python3", [".ai-qa/scripts/tracker.py", "get", "SHOP-2"],
+    { cwd: md, encoding: "utf8", timeout: 60_000 });
+  check(/No acceptance criteria found/.test(g2.stdout),
+    "prose with no criteria was not flagged in the rendered ticket");
+  check(/BLOCKED \(not delivered\)/.test(g2.stdout),
+    "an In Progress ticket was not flagged as undelivered");
+
+  // A ticket that does not exist is exit 1 (not found), never exit 2 (blocked).
+  const g3 = spawnSync("python3", [".ai-qa/scripts/tracker.py", "get", "SHOP-404"],
+    { cwd: md, encoding: "utf8", timeout: 60_000 });
+  check(g3.status === 1, `a missing ticket should exit 1, got ${g3.status}: ${g3.stdout}`);
+  check(/NOT FOUND/.test(g3.stdout), "a missing ticket did not say NOT FOUND");
 }
 
 // ---- report --------------------------------------------------------------------
