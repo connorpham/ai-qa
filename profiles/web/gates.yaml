@@ -1,0 +1,32 @@
+# Web surface — what must be true before a browser verdict means anything.
+#
+# `ai-qa doctor` runs every `selftest`. The `preflight` entries are what /qa
+# runs at bring-up; they are listed here so a failure prints the same unblock
+# path every time instead of being improvised.
+surface: web
+
+preflight:
+  - id: app
+    proves: 'the application is actually answering'
+    run: 'bash .ai-qa/scripts/app_check.sh --wait 60'
+    blocking: true
+    unblock: 'start it with app.start, or correct app.url in aiqa.config.yaml'
+  - id: browser
+    proves: 'a real browser window can be opened — a run someone could watch'
+    run: 'node .ai-qa/scripts/browser.mjs check'
+    blocking: true
+    unblock: 'npm install --no-save playwright && npx playwright install chromium'
+
+selftest:
+  - id: evidence-gate
+    proves: 'the evidence gate can go red'
+    run: 'python3 .ai-qa/scripts/evd_check.py --selftest'
+  - id: annotate
+    proves: 'boxes and captions are really drawn into the image'
+    run: 'python3 .ai-qa/scripts/annotate.py --selftest'
+
+rules:
+  # Enforced by evd_check.py; repeated here so the reason travels with the rule.
+  entry_must_be_click_path: 'a typed address hides a missing menu item, a wrong permission and an unreachable row at once'
+  after_must_include_reload: 'a save that dies on refresh is not a save'
+  verdict_step_must_be_boxed: 'an unannotated screenshot makes the reader guess which pixels mattered'

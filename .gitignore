@@ -1,0 +1,19 @@
+node_modules/
+.DS_Store
+*.log
+
+# ai-qa: evidence text commits, binaries don't
+evd/**
+!evd/**/
+!evd/**/*.md
+!evd/**/*.json
+# ai-qa: journey scripts are re-runnable evidence — text, so they commit
+!evd/**/*.mjs
+
+# ai-qa: tokens and test-account credentials live in .env — .env never commits
+.env
+
+# ai-qa: machine-local scan snapshot
+.ai-qa/discovery.json
+.ai-qa/doctor.json
+.ai-qa/**/__pycache__/

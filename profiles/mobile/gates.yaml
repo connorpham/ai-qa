@@ -1,0 +1,27 @@
+# Mobile surface — evidence comes off a real device or emulator.
+#
+# Honest scope note: this profile gates the environment and the evidence. It
+# does not ship a driver — the project's own Appium or Maestro setup does the
+# driving, and `app.start` should bring it up. A screenshot of a mock is not
+# evidence of anything.
+surface: mobile
+
+preflight:
+  - id: device
+    proves: 'a device or emulator is attached and booted'
+    run: 'bash .ai-qa/scripts/device_check.sh'
+    blocking: true
+    unblock: 'start an emulator (android: emulator -list-avds · ios: xcrun simctl boot <device>), or attach a device with debugging enabled'
+
+selftest:
+  - id: evidence-gate
+    proves: 'the evidence gate can go red'
+    run: 'python3 .ai-qa/scripts/evd_check.py --selftest'
+  - id: annotate
+    proves: 'boxes and captions are really drawn into the image'
+    run: 'python3 .ai-qa/scripts/annotate.py --selftest'
+
+rules:
+  real_device_only: 'screenshots come off the device or emulator under test'
+  state_between_runs: 'app state survives a relaunch on mobile in ways it does not on the web — check the case again after a cold start'
+  permissions_are_a_role: 'camera, location and notification permissions behave like roles: test the denied path, not only the granted one'
