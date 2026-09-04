@@ -19,6 +19,9 @@ selftest:
   - id: evidence-gate
     proves: 'the evidence gate can go red'
     run: 'python3 .ai-qa/scripts/evd_check.py --selftest'
+  - id: xlsx-export
+    proves: 'the spreadsheet says NOT DECLARED instead of guessing, and never outlives its evidence'
+    run: 'python3 .ai-qa/scripts/xlsx_export.py --selftest'
 
 rules:
   read_only: 'the lane never writes through the database — not to set up, not to clean up'

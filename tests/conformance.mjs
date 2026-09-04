@@ -191,11 +191,14 @@ for (const s of ["web", "api", "mobile", "database"]) {
   check(/^surface:\s*\S/m.test(text), `${s}: gates.yaml has no surface:`);
   check(text.includes("selftest:"), `${s}: gates.yaml declares no selftest — nothing would be proven`);
   check(/evd_check\.py --selftest/.test(text), `${s}: the evidence gate selftest is not wired in`);
+  check(/xlsx_export\.py --selftest/.test(text),
+    `${s}: the spreadsheet export selftest is not wired in — doctor would never prove it`);
 }
 
 // ---- the gates really do prove themselves ------------------------------------
 for (const [label, cmd, args] of [
   ["evidence gate", "python3", [path.join(pkgRoot, "core/scripts/evd_check.py"), "--selftest"]],
+  ["spreadsheet export", "python3", [path.join(pkgRoot, "core/scripts/xlsx_export.py"), "--selftest"]],
   ["database write guard", "python3", [path.join(pkgRoot, "core/scripts/db_verify.py"), "--selftest"]],
   ["api recorder", "node", [path.join(pkgRoot, "core/scripts/api_check.mjs"), "--selftest"]],
   ["readiness grader", "node", [path.join(pkgRoot, "src/cli/scan.mjs"), "--selftest"]],
@@ -398,6 +401,68 @@ for (const [label, cmd, args] of [
       `python parser disagrees on ${key}: ${JSON.stringify(r.stdout.trim())}`);
   }
   fs.rmSync(tmp2, { recursive: true, force: true });
+}
+
+// ---- the evidence-pack vocabulary has exactly one definition ----------------
+// evd_check.py ENFORCES the vocabulary and evdpack.py (behind xlsx_export.py)
+// PRINTS it. When these drift, the gate accepts a value the report renders as
+// unrecognised — or worse, the other way round, and a real severity silently
+// becomes NOT DECLARED in front of a manager.
+{
+  const readPy = (rel) => fs.readFileSync(path.join(pkgRoot, "core/scripts", rel), "utf8");
+  const gate = readPy("evd_check.py");
+  const pack = readPy("lib/evdpack.py");
+  const tuple = (text, name) => {
+    const m = new RegExp(`^${name}\\s*=\\s*\\(([\\s\\S]*?)\\)`, "m").exec(text);
+    return m ? [...m[1].matchAll(/"([^"]*)"/g)].map((x) => x[1]) : null;
+  };
+
+  for (const name of ["VERDICTS", "CASE_RESULTS", "KINDS", "REQUIRED_FIELDS", "UI_ONLY_FIELDS"]) {
+    const a = tuple(gate, name);
+    const b = tuple(pack, name);
+    check(a && a.length, `evd_check.py: could not parse ${name}`);
+    check(b && b.length, `lib/evdpack.py: could not parse ${name}`);
+    check(a && b && a.join(",") === b.join(","),
+      `${name} has drifted: evd_check.py says [${a}], evdpack.py says [${b}]`);
+  }
+
+  // The severity ladder and the origins live in the doctrine the report cites.
+  // A workbook legend that contradicts docs/qa/method/severity.md is worse than
+  // no legend: the reader checks the definition and finds a different one.
+  const doctrine = fs.readFileSync(path.join(pkgRoot, "core/doctrine/severity.md"), "utf8");
+  const bolded = (from) => [...from.matchAll(/^\|\s*\*\*([A-Za-z]+)\*\*\s*\|/gm)].map((m) => m[1]);
+  const [sevTable, originTable] = doctrine.split(/^##\s+Origin/m);
+  const docSeverities = bolded(sevTable);
+  const docOrigins = bolded(originTable || "");
+  const codeSeverities = tuple(pack, "SEVERITIES");
+  const codeOrigins = tuple(pack, "ORIGINS");
+  check(docSeverities.length === 4, `parsed ${docSeverities.length} severities from severity.md`);
+  check(codeSeverities.join(",") === docSeverities.join(","),
+    `the severity ladder drifted from the doctrine: code [${codeSeverities}], severity.md [${docSeverities}]`);
+  check(docOrigins.length === 2, `parsed ${docOrigins.length} origins from severity.md`);
+  check(codeOrigins.join(",") === docOrigins.join(","),
+    `the origins drifted from the doctrine: code [${codeOrigins}], severity.md [${docOrigins}]`);
+
+  // Every level and origin must carry the meaning the workbook's legend prints.
+  for (const level of codeSeverities) {
+    check(new RegExp(`"${level}":`).test(pack), `SEVERITY_MEANING has no entry for ${level}`);
+  }
+  for (const kind of tuple(pack, "KINDS")) {
+    check(pack.includes(`"${kind}":`), `KIND_MEANING has no entry for ${kind}`);
+  }
+
+  // The /qa workflow asks for these fields by name; the reader reads them by
+  // name. A field documented but never read is a field nobody fills in twice.
+  const qaWorkflow = fs.readFileSync(path.join(pkgRoot, "core/workflows/qa.md"), "utf8");
+  for (const field of ["TITLE", "KIND", "REQUIREMENT", "SEVERITY", "ORIGIN", "FINDING",
+                       "RECOMMENDATION"]) {
+    check(new RegExp(`\\*\\*${field}\\*\\*`).test(qaWorkflow),
+      `the qa workflow never asks for ${field}, but the report is built from it`);
+    check(new RegExp(`get\\("${field}"|"${field}"`).test(pack),
+      `evdpack.py never reads ${field}, but the qa workflow asks for it`);
+  }
+  check(/xlsx_export\.py --evd/.test(qaWorkflow),
+    "the qa workflow never runs the export — the spreadsheet would only exist if someone remembered");
 }
 
 // ---- report -------------------------------------------------------------------

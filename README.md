@@ -167,6 +167,55 @@ prose gets told so — *"the description is prose; prose describes an intention,
 it does not say what to check"* — because that is the moment a verification
 either gets an oracle or quietly invents one.
 
+## The spreadsheet everyone else reads
+
+The markdown pack is the record. But the people a verdict is *for* — a project
+manager, a client, an auditor, whoever signs off — mostly do not open markdown,
+and a report nobody opens has the same value as a verification nobody ran.
+
+```bash
+python3 .ai-qa/scripts/xlsx_export.py --evd evd/SHOP-142            # writes evd/SHOP-142/SHOP-142_testcases.xlsx
+python3 .ai-qa/scripts/xlsx_export.py --evd evd/SHOP-142 --strict   # exit 1 while anything is still undeclared
+python3 .ai-qa/scripts/xlsx_export.py --evd evd/SHOP-142 --lang vi  # headers follow project.language by default
+```
+
+Five sheets, laid out to **ISO/IEC/IEEE 29119-3** with an IEEE-829-style field
+set, so nobody has to be taught how to read it:
+
+| Sheet | The question it answers on sight | Standard |
+|---|---|---|
+| **Summary** | Is this done? **How many defects, and how bad is the worst one?** | §8 test status report |
+| **Test Cases** | What exactly was tested, as whom, against which expected value, and what happened? | §7 test case specification |
+| **Defects** | What is wrong, how much does it hurt, who fixes it? One row per failed case, ranked worst-first. | §9 incident report |
+| **Traceability** | Which requirement does each case actually check — and which cases check nothing? | requirement traceability matrix |
+| **Evidence** | Where is the proof for every row above? Clickable, relative to the workbook. | — |
+
+The severity ladder is not invented for the spreadsheet: **Blocker / Critical /
+Major / Minor** come from `docs/qa/method/severity.md`, the same file the report
+cites, and a conformance test fails if the two ever disagree. Each level prints
+with its definition and its handling rule next to the count, so a reader who has
+never met this team still knows what "Major" obliges anyone to do.
+
+**Three things it refuses to do**, and they are the reason it can be forwarded
+without a covering note:
+
+1. **It never invents a value.** A field the pack does not declare prints
+   `NOT DECLARED` in grey and is listed again under *declared unknowns* on the
+   summary. A failed case with no `SEVERITY:` is counted as ungraded — never
+   quietly coloured Major because Major is the usual answer.
+2. **It adds nothing.** Every cell traces to a line in the pack. No score, no
+   weighting, no opinion of its own. Fix the pack and re-export; never edit the
+   workbook, or the two stop agreeing and only one of them has evidence behind
+   it.
+3. **It says so when the pack contradicts itself** — a verdict asserting a
+   defect with no failed case, a `PASS` over a failed one, an `ORACLE: NONE`
+   that makes every verdict in the file an opinion.
+
+Written with nothing but the Python standard library — no `openpyxl`, no
+`pandas`, nothing to install. Byte-deterministic too: the same pack always
+produces the same file, so a workbook whose bytes changed is telling you the
+evidence changed.
+
 ## Gates that can actually go red
 
 Every gate ships its own `--selftest` that mutates a passing fixture and asserts
@@ -180,6 +229,7 @@ each mutation turns it red. A gate that has never failed does not exist.
 | `annotate.py` | An "annotation" with no box and no caption — that is a copy. |
 | `tracker.py` | A credential reaching an evidence file or an error message; a missing token being reported as a failed verification rather than a blocked one. |
 | `browser.mjs` | Falling back to headless when Playwright is missing. That is a BLOCKED run with an install command. |
+| `xlsx_export.py` | A guessed severity, a citation nobody wrote, a conclusion the pack does not support, a cell of terminal escape codes that would make the workbook unopenable. **14 honesty mutations, each proven to be reported in the file itself.** |
 
 **Every gate uses the same exit codes**: `0` green · `1` a real finding · `2`
 BLOCKED, the run could not start. Conflating 1 and 2 is how a laptop with no
@@ -268,7 +318,7 @@ loud BLOCKED with the install command rather than degrading quietly.
 ## Tests
 
 ```bash
-npm test        # 241 conformance checks + 108 end-to-end checks
+npm test        # 289 conformance checks + 108 end-to-end checks
 ```
 
 The e2e suite installs into a scratch repository and then tries to break each
