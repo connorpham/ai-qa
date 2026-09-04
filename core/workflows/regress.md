@@ -53,6 +53,9 @@ Then read the record of what has actually gone wrong:
   watching that path.**
 - `docs/qa/lessons.md` — entries tagged as gate-shaped were waiting for exactly
   this workflow.
+- The `OBSERVATIONS:` lines in past case manifests
+  (`grep -rh "^OBSERVATIONS:" evd/*/TC_*/manifest.md`). An observation that
+  recurs across tickets is a defect nobody filed, and a candidate for a case.
 
 ## R2 — RANK THE CANDIDATES
 
@@ -63,6 +66,10 @@ Score each candidate on two axes only:
   > cosmetic.
 - **Likelihood it breaks** — how often does this area change, how tangled is it,
   has it broken before?
+
+When two candidates tie, RCRCRC from `docs/qa/method/heuristics.md` breaks it:
+**R**ecent, **C**ore, **R**isky, **C**onfiguration-sensitive, **R**epaired,
+**C**hronic — a flow that is two of those outranks one that is one.
 
 Take the top of that ordering until the time budget is spent. Write the ordering
 down, including what you did **not** take — an explicit "not covered, and here
@@ -90,6 +97,10 @@ Three rules specific to a suite that has to survive:
 - **Independent and re-runnable.** Any order, any number of times, no shared
   mutable fixture. Order-dependence is the most common cause of flake, and the
   hardest to diagnose six months later.
+- **Keep the real-user move.** The journey that found the defect pressed Enter,
+  or double-clicked, or came back after a refresh. Promoting it into a clean
+  scripted click path removes the very step that made it a test. The `PERSONA:`
+  travels with the case.
 
 ## R4 — PROVE EACH CASE CAN FAIL
 
@@ -148,6 +159,7 @@ release. A suite that only runs on someone's laptop is a personal hobby.
 - [ ] Candidates ranked by consequence × likelihood; what was NOT taken is written down
 - [ ] Each case self-provisions its data and cleans up; no shared mutable fixture
 - [ ] Each case asserts meaning, not markup, and enters through a click path
+- [ ] Each promoted case keeps the real-user move that made it find something
 - [ ] **Every case proved able to fail**, with the break and the failure message recorded
 - [ ] Suite run three times; anything not identically green quarantined with a deadline
 - [ ] Runtime inside budget, or cases explicitly retired to get there

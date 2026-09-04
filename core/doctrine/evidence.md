@@ -34,6 +34,8 @@ EXPECTED:     total recalculates to 450,000 (spec §3.2)
 ACTUAL:       total shows 450,000; "Saved" message appears
 AFTER:        list row shows 3 · value survives a reload
 BACK:         Back returns to Orders with the Pending filter intact
+PERSONA:      the daily operator — keyboard, Enter to save, 200th time today
+OBSERVATIONS: the Pending badge in the sidebar still read 12 after the save until a manual refresh
 ```
 
 Every field is there because a verification went wrong without it:
@@ -48,6 +50,21 @@ Every field is there because a verification went wrong without it:
 - **BACK** — Cancel that does not cancel, filters that reset. Cheap to check,
   frequently broken.
 
+Three more are optional in the gate and expected by the reader:
+
+- **PERSONA** — which of the four people in `user-mindset.md` you were being,
+  so the reader knows why the journey pressed Enter instead of Save, or left
+  and came back. A journey with no persona is a route.
+- **HEURISTIC** — on an exploratory case, the one heuristic from
+  `heuristics.md` you were applying, and its timebox. A heuristic you ran but
+  did not name was a hunch.
+- **OBSERVATIONS** — what you saw that is *not* the verdict: the badge that
+  did not update, the pause, the label two panels away that now names the
+  wrong thing. No severity, no RESULT change. One click to see if it repeats,
+  one line here, and it reappears in the report's Observations section. The
+  thing you noticed and did not write down is the ticket somebody files next
+  week.
+
 ## The report
 
 Different audience, different rules. `REPORT.md` is read by people who do not
@@ -61,6 +78,11 @@ work in the code: a product owner, a manager, sometimes a customer.
 - **Uncertainty stated, not hidden.** "I could not verify the refund path
   because no test account has refund permission" is a useful sentence. Omitting
   it to make the report look complete is a lie of structure.
+- **Observations kept apart from findings.** A section of its own, after the
+  conclusion, for what was seen but not judged. A reader who wants only the
+  verdict stops before it; a reader planning next week's work starts there. Fold
+  them into the findings and the severity table lies; drop them and the report
+  pretends it saw nothing but what it was asked.
 
 ## Evidence and git
 

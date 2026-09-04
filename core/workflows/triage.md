@@ -46,11 +46,19 @@ Restate the report in three separate blocks, and ask the reporter for anything
 missing before you spend time reproducing:
 
 ```
+GOAL        <what they were trying to get done — the job, not the click>
 OBSERVED    <what they saw, in their words — the screen, the value, the message>
 EXPECTED    <what they expected, and — crucially — WHY they expected it>
 CONCLUDED   <their theory, quarantined here so it does not steer the search>
-CONTEXT     <account/role · device/browser · when · environment · how often>
+CONTEXT     <account/role · device/browser · when · environment · how often ·
+             what they had just done before — the interruption, the second tab,
+             the paste>
 ```
+
+`GOAL` is the line most reports lack and most developers need. "The total was
+wrong" is a symptom; "I was trying to apply a coupon after changing the
+address" is the path that reproduces it. People report the click; ask for the
+job.
 
 `EXPECTED` with no "why" is the most common gap. "It should be 500,000" —
 according to what? A spec, a previous release, or an assumption? The answer
@@ -61,7 +69,11 @@ question to find out now.
 
 Bring the environment up. Sign in **as the role in the report**, not as an admin
 — a defect that only appears for one role disappears the moment you test as a
-superuser.
+superuser. And reproduce **as the person**, not only as the role: same haste,
+same habits, same device class. A defect that only appears when you double-click,
+or paste, or come back after ten minutes, disappears for a tester who types the
+perfect value once and waits. Borrow the persona from
+`docs/qa/method/user-mindset.md` that fits the CONTEXT.
 
 Walk the reported path exactly, from a click entry. Screenshot each step under
 `evd/<TICKET>/repro/`.
@@ -71,9 +83,13 @@ Three possible outcomes, all legitimate:
 - **REPRODUCED** — you saw it. Box the evidence, note the exact conditions.
 - **NOT REPRODUCED** — write down precisely what you tried: account, data,
   environment, build. Then vary **one** thing at a time from the report's
-  context — a different role, different data, a different browser. Many "cannot
-  reproduce" reports are environment-shaped, and finding which variable matters
-  is the whole finding.
+  context — a different role, different data, a different browser. Vary with
+  intent, not at random: the interruptions and data shapes in
+  `docs/qa/method/heuristics.md`, the values in `docs/qa/method/hostile-inputs.md`
+  for the field involved, the real-user moves in `user-mindset.md`. Many "cannot
+  reproduce" reports are environment-shaped or habit-shaped, and finding which
+  variable matters is the whole finding. "Cannot reproduce" after one attempt
+  with the perfect value is not a result.
 - **DIFFERENT DEFECT FOUND** — you saw something else wrong on the way. File it
   separately; do not let it absorb this report.
 
@@ -89,6 +105,9 @@ Then bracket it:
   a specific release is half-diagnosed.
 - **How wide is it?** Same defect on an adjacent screen, an adjacent role, an
   adjacent record? Defects cluster — one found means you look around the hole.
+  `docs/qa/method/checklists.md` for the shape of the screen says where the
+  neighbours are: the export, the email, the badge, the other list that shows
+  the same number.
 - **Is it data or behaviour?** A wrong value can be a bad calculation or a bad
   row. A read-only query settles it, and the answer sends the report to a
   completely different place.
@@ -125,9 +144,19 @@ developer wastes everyone's day.
 
 ## T6 — FILE IT
 
-Dedup first. Then file or update, with every section filled:
+Dedup first. Then file or update, with every section filled.
+
+**One defect, one report, one title that says where, what, and under what
+condition.** A report holding two defects gets one fixed and the other closed
+with it. The title is what everyone reads and most people stop at, so it has to
+carry the finding: `[Where] What goes wrong — under what condition`. For example
+`[Checkout] Total ignores the coupon — when the address is changed after
+applying it`. Not "checkout bug", not "total wrong", and never the reporter's
+theory. Anything else you saw on the way goes under `[Observations]` or into its
+own report — it does not ride along.
 
 ```
+[Title]         [Where] What goes wrong — under what condition
 [Environment]   <url · branch/build · role and account · device/browser>
 [Steps]         1. … 2. … 3.   (the MINIMAL set from T3)
 [Expected]      <value> — per <spec citation>, or "UNSPECIFIED: decision needed"
@@ -137,6 +166,7 @@ Dedup first. Then file or update, with every section filled:
 [Severity]      <level> · [Origin] DEV | SPEC
 [Evidence]      evd/<TICKET>/repro/… (boxed image; db_verify.md if a write is involved)
 [Suspect area]  <where to look first — labelled a HINT, never a diagnosis>
+[Observations]  <seen on the way, not part of this defect — filed separately if it matters>
 ```
 
 `[Suspect area]` is a courtesy, and it must be labelled as one. QA pointing at a
@@ -151,14 +181,18 @@ or an accepted deviation rather than a defect to fix.
 
 - [ ] Observation, expectation and theory recorded separately; the reporter's
       "why" for the expectation captured or explicitly asked for
-- [ ] Reproduction attempted first-hand, as the reported role, with evidence —
-      or NOT-REPRODUCED recorded with exactly what was tried and varied
+- [ ] The reporter's GOAL captured — the job, not the click
+- [ ] Reproduction attempted first-hand, as the reported role **and as the
+      person** — their haste, their habits, their device — with evidence; or
+      NOT-REPRODUCED recorded with exactly what was tried and varied, using the
+      heuristics and hostile inputs rather than one perfect attempt
 - [ ] Minimal reproduction found; conditions that do not matter removed
 - [ ] Blast radius checked: adjacent screens, roles and records
 - [ ] Classified against the oracle — spec gaps routed to the requirement owner,
       not to a developer
 - [ ] Deduped against known-issues before filing
 - [ ] Severity by consequence; Origin recorded
+- [ ] One defect per report; the title names where, what, and under what condition
 - [ ] Report filed with every section, including the minimal steps and evidence
 - [ ] Suspect area labelled as a hint
 - [ ] No product code changed

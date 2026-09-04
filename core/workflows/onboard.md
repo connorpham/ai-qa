@@ -84,7 +84,12 @@ trustworthy:
 1. **`aiqa.config.yaml`** — the coordinates someone already declared. Empty
    fields are declared unknowns; treat them as such, not as defaults.
 2. **The product's own words** — README, docs/, any PRD, spec, or RFC. What is
-   this for? Who uses it? What is the money/consequence path?
+   this for? Who uses it? What is the money/consequence path? And who the
+   *people* are, not only the roles: how often they do this, on what device, in
+   what hurry, what they complain about. Support tickets, app-store reviews and
+   the changelog say more about this than the README does. Read every spec you
+   find against `docs/qa/method/requirement-smells.md` as you go — a spec made
+   of "should" and "appropriate" is an oracle in name only, and §4 must say so.
 3. **The contract** — OpenAPI/GraphQL/proto, and the schema (Prisma, migrations,
    models). These are the least likely to lie, because code depends on them.
 4. **The surface** — routes, pages, screens, controllers, jobs. Enumerate them.
@@ -155,6 +160,8 @@ Ask these unless the repo already answered them:
 ```
 Product        · What does a user come here to do, and what is the worst thing
                  that can go wrong for them?
+People         · Who actually uses this, day to day? How often, on what device,
+                 in what hurry — and what do they complain about most?
 Environment    · Which URL should I test against, and who else uses it? Is it safe
                  for me to create and delete records there?
 Access         · One test account per role, please — and where do I get them?
@@ -198,7 +205,11 @@ Everything above is claims. This phase converts claims into facts.
 3. **Walk one real journey per role** — the single most important thing that role
    does. Entry through the menu the way a person arrives, not by typing a URL:
    a typed address hides a missing menu item, a wrong permission, and an
-   unreachable row all at once.
+   unreachable row all at once. Walk it as the *person*, not the role — at their
+   pace, with their habits: the daily operator presses Enter, the first-timer
+   takes the wrong menu first, the interrupted one comes back to the tab later.
+   `docs/qa/method/user-mindset.md` has the four to borrow; the one that fits
+   what §1 says about the people goes into the journey's `PERSONA:`.
 
    ```bash
    node .ai-qa/scripts/browser.mjs check     # preflight, once
@@ -246,11 +257,16 @@ CHARTER <n> — <what we are trying to find out>
   LOOKING FOR <the class of defect: wrong money, lost state, a role seeing
               what it must not, a save that does not survive a reload>
   ORACLE      <where "correct" is written — or "NONE: ask <who> first">
+  HEURISTIC   <optional: the tour or heuristic from method/heuristics.md that shapes the session>
   TIMEBOX     <e.g. 45 minutes>
 ```
 
 Pick them by the risk map, not by what is easy to reach. A charter whose ORACLE
-is NONE is still worth writing — it makes the missing spec visible as a cost.
+is NONE is still worth writing — it makes the missing spec visible as a cost,
+and a tour from `docs/qa/method/heuristics.md` — the money tour, the
+garbage-collector tour, the bad-neighbourhood tour — gives a session on an
+unspecified screen a shape, and its consistency oracles give it something honest
+to compare against.
 
 ## O7 — READINESS VERDICT
 
@@ -280,7 +296,9 @@ Then:
 
 - [ ] Every dossier line is tagged `[OBSERVED]` (with citation), `[INFERRED]`
       (with reasoning), `[TOLD BY <who>, <date>]`, or `[UNKNOWN]` — no untagged claims
-- [ ] §4 states plainly whether a written oracle exists, per area
+- [ ] §1 says who the people are — frequency, device, hurry, complaints — not only the roles
+- [ ] §4 states plainly whether a written oracle exists, per area — and names
+      the specs that are oracles in name only
 - [ ] Interview happened in ≤3 batched rounds, in plain language, no credentials requested in chat
 - [ ] The app was actually brought up, or §2 records BLOCKED with the real error
 - [ ] One journey walked per claimed role, from a click path — evidence saved under `evd/onboarding/`
