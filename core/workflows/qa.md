@@ -216,7 +216,16 @@ Then walk the journey you wrote — from ENTRY, clicking what a user clicks.
 `.ai-qa/scripts/browser.mjs`, walking exactly the V2 journey and calling
 `shot(page, dir, n, "<what_it_shows>")` at each meaningful step — the helper
 enforces `NN_<what>.png` naming by construction. `node TC_<n>/journey.mjs` opens
-a real browser window the owner can watch. **The script stays in the folder**:
+a real browser window the owner can watch, moving at a human pace.
+
+Use `click(page, sel, "<why>")` and `typeIn(page, sel, value)` rather than
+`page.click`/`page.fill` for anything a user does by hand: the helpers hover
+before pressing and type key by key, which is both watchable and a **truer
+input** — `fill()` sets the value with one `input` event and no key events at
+all, so input masks, digit-only filters, character counters and
+Enter-to-submit never run. A value `fill()` accepts can be one no human could
+have typed. `beat(page, "<what the user is reading>")` marks a pause where a person
+would stop and look. **The script stays in the folder**:
 it is evidence, and the next round re-runs the same journey against a new build
 instead of re-improvising it.
 
@@ -277,23 +286,41 @@ images and no verification file is not verification.
 
 ```
 evd/<TICKET>/
-├── manifest.md          # plain language: the requirement, the case list, each verdict
+├── manifest.md          # plain language: the requirement, each verdict — and the
+│                        # generated index block (see below)
 ├── verifysheet.md       # V1/V2: expected values with citations, the journeys
 ├── debate.md            # V6: your card, the challenger's card, the resolution
 ├── REPORT.md            # V5b: what a non-programmer reads
 ├── <TICKET>_testcases.xlsx  # V7: the same record as a spreadsheet (generated, never edited)
 ├── data_prep/           # V3 runs, if any
-└── TC_<n>/
+└── TC_<n>_<what_it_proves>/
     ├── journey.mjs      # the run itself — re-runnable evidence
     ├── manifest.md      # TITLE / KIND / RESULT / AS / PRECONDITION / ENTRY /
     │                    # STEPS / EXPECTED / REQUIREMENT / ACTUAL / AFTER /
     │                    # BACK — plus SEVERITY / ORIGIN / FINDING when it FAILED
-    ├── 01_*.png …       # named for what they show, + *_boxed.png on the verdict step
+    ├── TC<n>_01_*.png … # case number + step + what it shows, + *_boxed.png
     ├── request.http     # API cases: the real request
     ├── response.json    # API cases: the real response
     └── db_verify.md     # write cases: the read-only SELECT and the rows after
 
 ```
+
+**The folder names are the report's table of contents.** `TC_2/` makes the
+reader open a file to learn what case 2 even was; `TC_2_expired_code_is_refused/`
+does not. `shot()` stamps the case number into every filename for the same
+reason — a screenshot leaves its folder almost immediately, and out there
+`03_total.png` belongs to nothing. Both are gated.
+
+Write the index, then gate. The index is generated from the case manifests, so
+it cannot describe a folder that is no longer there:
+
+```bash
+python3 .ai-qa/scripts/evd_index.py --evd evd/<TICKET>
+```
+
+It rewrites one marked block inside `evd/<TICKET>/manifest.md` — a table of
+case, what it proves, kind, result, and which file to open — and leaves your
+prose alone. `evd_check.py` reds a stale one.
 
 Gate before moving on — pass the number of cases you PLANNED, so "planned 5,
 ran 1" can go red:

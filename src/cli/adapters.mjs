@@ -66,7 +66,10 @@ function envBlock(cfg) {
   if (surfaces.includes("web")) {
     out.push(
       "> - **Web = a real browser window someone could watch.** Drive journeys with",
-      ">   `launch`/`shot` from `.ai-qa/scripts/browser.mjs` (Playwright, headed Chrome).",
+      ">   `launch`/`shot`/`click`/`typeIn` from `.ai-qa/scripts/browser.mjs`",
+      ">   (Playwright, headed Chrome). It runs at `app.pace` — a beat between actions,",
+      ">   key-by-key typing, and a settle before each shutter — so the run is one a",
+      ">   human could actually follow. `AIQA_PACE=demo` slows it further for an audience.",
       ">   Preflight once: `node .ai-qa/scripts/browser.mjs check` — a missing Playwright",
       ">   is a loud BLOCKED with the install command, never a silent headless run.",
     );

@@ -974,6 +974,10 @@ is wrong for any basket that comes to exactly 500,000 VND. Severity Major.
 """
 
 
+# A case folder names what it proves; the sheet still cites the number.
+C3 = "TC_3_the_neighbours_still_behave"
+
+
 def _fixture(root):
     import shutil
     if os.path.exists(root):
@@ -985,7 +989,8 @@ def _fixture(root):
                        ("ticket.md", "# SHOP-142 — Apply the gold-tier loyalty discount\n")):
         with open(os.path.join(root, name), "w", encoding="utf-8") as fh:
             fh.write(text)
-    for case, manifest in (("TC_1", _CASE), ("TC_2", _FAIL_CASE), ("TC_3", _SCREEN_CASE)):
+    for case, manifest in (("TC_1", _CASE), ("TC_2", _FAIL_CASE),
+                           (C3, _SCREEN_CASE)):
         d = os.path.join(root, case)
         os.makedirs(d)
         with open(os.path.join(d, "manifest.md"), "w", encoding="utf-8") as fh:
@@ -1240,7 +1245,7 @@ def selftest():
         # labelled, because advice written about the ticket is not advice about
         # a particular defect.
         ("a second failed case sharing one ticket-level recommendation",
-         lambda d: _rewrite(d, "TC_3/manifest.md",
+         lambda d: _rewrite(d, C3 + "/manifest.md",
                             lambda t: t.replace("RESULT: PASS", "RESULT: FAIL\nSEVERITY: Minor\n"
                                                 "ORIGIN: DEV")),
          lambda pack, text: (len(pack.defects) == 2
@@ -1248,10 +1253,20 @@ def selftest():
                              and text[2].count("as a whole") == 2
                              and "Minor" in text[0] and "worst: Major" in text[0])),
         ("a BLOCKED case with no way out",
-         lambda d: _rewrite(d, "TC_3/manifest.md",
+         lambda d: _rewrite(d, C3 + "/manifest.md",
                             lambda t: t.replace("RESULT: PASS", "RESULT: BLOCKED")),
          lambda pack, text: (any("UNBLOCK" in w for _w, w in pack.gaps)
                              and "BLOCKED" in text[1])),
+        # Neither the case record nor the table names it — but the folder does,
+        # and a folder called TC_3_the_neighbours_still_behave is a declaration.
+        ("a case named only by its folder",
+         lambda d: (_rewrite(d, C3 + "/manifest.md",
+                             lambda t: re.sub(r"(?m)^TITLE:.*\n", "", t)),
+                    _rewrite(d, "manifest.md",
+                             lambda t: re.sub(r"(?m)^\| TC_3 .*\n", "", t))),
+         lambda pack, text: (pack.cases[2].name == "TC_3"
+                             and pack.cases[2].title == "the neighbours still behave"
+                             and pack.cases[2].title_source == "the case folder name")),
     ]
     for i, (label, mutate, assert_fn) in enumerate(mutations):
         p, o = build("mut{}".format(i), mutate)

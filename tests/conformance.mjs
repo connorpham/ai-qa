@@ -169,6 +169,7 @@ check(get(parseConfig("a:\n  b: keep # dropped\n"), "a.b") === "keep", "node par
     ["autonomy.level", "assisted"],
     ["evidence.max_test_cases", "5"],
     ["evidence.require_boundary", "True"],
+    ["app.pace", "human"],
   ]) {
     check(py(key) === expected,
       `python parser disagrees on ${key}: got ${JSON.stringify(py(key))}, expected ${JSON.stringify(expected)}`);
@@ -242,7 +243,10 @@ for (const [label, cmd, args] of [
       "EXPECTED: discount 50,000 (spec 3.2 R1)",
       "ACTUAL: discount 50,000", "",
     ].join("\n");
-    for (const [dir, kind] of [["TC_1", "acceptance"], ["TC_2", "boundary"], ["TC_3", "whole-screen"]]) {
+    const TC1 = "TC_1_a_gold_order_is_priced_with_the_discount";
+    const TC2 = "TC_2_an_order_below_the_threshold_is_not_discounted";
+    const TC3 = "TC_3_the_priced_order_reads_back_whole";
+    for (const [dir, kind] of [[TC1, "acceptance"], [TC2, "boundary"], [TC3, "whole-screen"]]) {
       const caseDir = path.join(evd, dir);
       fs.mkdirSync(caseDir, { recursive: true });
       fs.writeFileSync(path.join(caseDir, "manifest.md"), CASE(kind));
@@ -253,6 +257,9 @@ for (const [label, cmd, args] of [
       check(r2.status === 0, `api_check failed while building the pack: ${r2.out}`);
     }
     fs.writeFileSync(path.join(evd, "manifest.md"), "# SHOP-1\nWhat was checked, in plain language.\n");
+    // The index describes the folder, so it is rewritten whenever the folder
+    // changes — exactly what the gate insists on downstream.
+    const reindex = () => run("python3", [path.join(pkgRoot, "core/scripts/evd_index.py"), "--evd", evd]);
     fs.writeFileSync(path.join(evd, "verifysheet.md"), "EXPECTED per spec 3.2 R1\n");
     fs.writeFileSync(path.join(evd, "debate.md"), "my card\nchallenger card\nresolution\n");
     fs.writeFileSync(path.join(evd, "REPORT.md"), [
@@ -261,6 +268,7 @@ for (const [label, cmd, args] of [
     ].join("\n"));
 
     const gateCmd = [path.join(pkgRoot, "core/scripts/evd_check.py"), "--evd", evd, "--expect-tcs", "3"];
+    await reindex();
     const gate = await run("python3", gateCmd);
     check(gate.status === 0,
       "the evidence gate rejects a pack built only from what api_check.mjs writes — " +
@@ -271,21 +279,23 @@ for (const [label, cmd, args] of [
     // evidenced by its request and its response, whoever wrote them. Without
     // this line the check above would pass on api_check.mjs's new file alone
     // and prove nothing about the gate.
-    fs.rmSync(path.join(evd, "TC_2", "cmd_verify.md"));
+    fs.rmSync(path.join(evd, TC2, "cmd_verify.md"));
+    await reindex();
     const pairOnly = await run("python3", gateCmd);
     check(pairOnly.status === 0,
       "a NON-UI case evidenced by request.http + response.json alone was rejected — " +
       `the gate is asking for a file no recorder has to produce:\n${pairOnly.out}`);
 
     // …and the rule must still be able to go red: half a pair is not a pair.
-    fs.rmSync(path.join(evd, "TC_2", "response.json"));
+    fs.rmSync(path.join(evd, TC2, "response.json"));
+    await reindex();
     const halfPair = await run("python3", gateCmd);
     check(halfPair.status !== 0,
       "a request with no recorded response was accepted as a verification");
     for (const f of ["request.http", "response.json", "cmd_verify.md"]) {
-      check(fs.existsSync(path.join(evd, "TC_1", f)), `api_check.mjs did not write ${f}`);
+      check(fs.existsSync(path.join(evd, TC1, f)), `api_check.mjs did not write ${f}`);
     }
-    const rec = fs.readFileSync(path.join(evd, "TC_1", "cmd_verify.md"), "utf8");
+    const rec = fs.readFileSync(path.join(evd, TC1, "cmd_verify.md"), "utf8");
     check(rec.includes("api_check.mjs POST /orders"),
       "the command record does not name the command that produced the evidence");
   } finally {
@@ -463,6 +473,41 @@ for (const [label, cmd, args] of [
   }
   check(/xlsx_export\.py --evd/.test(qaWorkflow),
     "the qa workflow never runs the export — the spreadsheet would only exist if someone remembered");
+}
+
+// ---- the evidence folder has to introduce itself ------------------------------
+{
+  const qa = fs.readFileSync(path.join(wfDir, "qa.md"), "utf8");
+  check(qa.includes("TC_<n>_<what_it_proves>"),
+    "qa.md still tells the verifier to make bare TC_<n> folders — the reader would have to open a file to learn what case 2 was");
+  check(qa.indexOf("evd_index.py") > 0 && qa.indexOf("evd_index.py") < qa.indexOf("evd_check.py --evd"),
+    "qa.md must generate the index BEFORE running the gate, or the gate reds on a folder the verifier just finished");
+  const gate = fs.readFileSync(path.join(pkgRoot, "core/scripts/evd_check.py"), "utf8");
+  check(/CASE_DIR = re\.compile/.test(gate) && /TC\(\\d\+\)_/.test(gate),
+    "the evidence gate no longer knows about case-numbered filenames");
+}
+
+// ---- pace: a headed run has to be one a human can follow ----------------------
+// The bug this catches is silent by construction: the run still passes, the
+// screenshots still land, and the only thing lost is the reason headed exists.
+{
+  const { resolvePace } = await import(path.join(pkgRoot, "core", "scripts", "browser.mjs"));
+  // "" rather than undefined: it means "nothing was asked for" without letting
+  // an installed aiqa.config.yaml on this machine decide the test's answer.
+  const dflt = resolvePace("", true);
+  check(dflt.name === "human", `default pace is ${dflt.name}, expected human`);
+  check(dflt.step >= 300,
+    `default pace is ${dflt.step}ms per action — too fast for a watcher to follow the click`);
+  check(dflt.key > 0 && dflt.settle > 0, "the human pace must also slow typing and let the screen settle");
+  check(resolvePace("demo", true).step > resolvePace("brisk", true).step,
+    "demo must be slower than brisk, or the names mean nothing");
+  check(resolvePace("demo", false).step === 0 && resolvePace("2000", false).step === 0,
+    "a headless run must never pay the pace cost — nobody is watching it");
+  const num = resolvePace("1200", true);
+  check(num.step === 1200, `a numeric pace was not honoured: ${JSON.stringify(num)}`);
+  check(num.key <= 120, `keystroke delay ${num.key}ms derived from a big step is unusably slow`);
+  check(resolvePace("nonsense", true).name === "human",
+    "an unknown pace name must fall back to human, not to full speed");
 }
 
 // ---- report -------------------------------------------------------------------

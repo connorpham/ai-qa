@@ -223,13 +223,14 @@ each mutation turns it red. A gate that has never failed does not exist.
 
 | Gate | Refuses |
 |---|---|
-| `evd_check.py` | Missing actor, precondition, entry path, reload check, boundary case, annotation, severity, or challenger card. Catches "planned 5 cases, ran 1". A case with no screen is evidenced by a read-only query, a command record, or a recorded request/response pair — the artefacts this toolchain actually writes — here or in one folder per call. **20 mutations, each proven to go red.** |
+| `evd_check.py` | Missing actor, precondition, entry path, reload check, boundary case, annotation, severity, or challenger card. A case folder called `TC_2` and nothing else, a screenshot carrying another case's number, an index that no longer matches the folders. Catches "planned 5 cases, ran 1". A case with no screen is evidenced by a read-only query, a command record, or a recorded request/response pair — the artefacts this toolchain actually writes — here or in one folder per call. **23 mutations, each proven to go red.** |
+| `evd_index.py` | Writes the case table into `evd/<TICKET>/manifest.md` from the case manifests, so `what was tested here` is answered by the folder itself — and cannot drift from it. `xlsx_export.py` reads that table for each case's one-line title. |
 | `db_verify.py` | Any write — including one hidden inside a CTE, behind a comment, or batched after a `SELECT`. **7 reads allowed, 18 writes refused.** |
 | `api_check.mjs` | Silent assertion failures; a token reaching an evidence file; an unreachable host being reported as a failure rather than as BLOCKED. Writes the command it ran and what it asserted into `cmd_verify.md`, so the case can be re-run without anyone retyping it. |
 | `annotate.py` | An "annotation" with no box and no caption — that is a copy. |
 | `tracker.py` | A credential reaching an evidence file or an error message; a missing token being reported as a failed verification rather than a blocked one. |
 | `browser.mjs` | Falling back to headless when Playwright is missing. That is a BLOCKED run with an install command. |
-| `xlsx_export.py` | A guessed severity, a citation nobody wrote, a conclusion the pack does not support, a cell of terminal escape codes that would make the workbook unopenable. **14 honesty mutations, each proven to be reported in the file itself.** |
+| `xlsx_export.py` | A guessed severity, a citation nobody wrote, a conclusion the pack does not support, a cell of terminal escape codes that would make the workbook unopenable. **15 honesty mutations, each proven to be reported in the file itself.** |
 
 **Every gate uses the same exit codes**: `0` green · `1` a real finding · `2`
 BLOCKED, the run could not start. Conflating 1 and 2 is how a laptop with no
@@ -271,7 +272,9 @@ gate that catches it.
 Chosen at init; each activates its own gates and its own branch of the workflows,
 and an unchosen surface is not installed.
 
-- **web** — headed browser, journey scripts kept as re-runnable evidence, boxed screenshots
+- **web** — headed browser at a human pace (`app.pace`: a beat between actions,
+  key-by-key typing, a settle before each shutter), journey scripts kept as
+  re-runnable evidence, boxed screenshots
 - **api** — request and response recorded as files; the body is checked, not just the status
 - **database** — read-only verification, migrations proven on a clean database, tests proven able to red. The connection string comes from the env var named by `database.url_env`; `postgres://`, `mysql://` and sqlite are supported, and a sqlite path may be relative (`sqlite://data/shop.db`) or absolute (`sqlite:///var/db/shop.db`, `sqlite:////var/db/shop.db`, or a bare `/var/db/shop.db`)
 - **mobile** — device/emulator gating and evidence rules. *Honest scope: it gates the environment and the evidence; your project's Appium or Maestro setup does the driving.*
@@ -318,7 +321,7 @@ loud BLOCKED with the install command rather than degrading quietly.
 ## Tests
 
 ```bash
-npm test        # 289 conformance checks + 108 end-to-end checks
+npm test        # 301 conformance checks + 109 end-to-end checks
 ```
 
 The e2e suite installs into a scratch repository and then tries to break each

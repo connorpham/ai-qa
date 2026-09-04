@@ -23,11 +23,17 @@ import sys
 import shutil
 import tempfile
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib"))
+_HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.join(_HERE, "lib"))
+sys.path.insert(0, _HERE)
 try:
     import ctx  # type: ignore
 except Exception:  # pragma: no cover - the gate must run without a config
     ctx = None
+try:
+    import evd_index  # type: ignore
+except Exception:  # pragma: no cover - an older install may not have it
+    evd_index = None
 
 VERDICTS = ("PASS", "FAIL", "PARTIAL", "NEW-BUG", "BLOCKED", "UNCLEAR")
 CASE_RESULTS = ("PASS", "FAIL", "BLOCKED")
@@ -38,8 +44,14 @@ KINDS = ("acceptance", "boundary", "whole-screen", "write-readback", "explorator
 REQUIRED_FIELDS = ("RESULT", "AS", "PRECONDITION", "ENTRY", "STEPS", "EXPECTED", "ACTUAL")
 UI_ONLY_FIELDS = ("AFTER", "BACK")
 
-STEP_IMAGE = re.compile(r"^\d{2}_.+\.(png|jpg|jpeg)$", re.I)
+# A step image may carry its case number: TC3_02_total_after_save.png. The
+# prefix is what keeps a file legible after someone drags it out of the folder
+# and into a ticket, a chat or a slide, which is where evidence actually goes.
+STEP_IMAGE = re.compile(r"^(?:TC(\d+)_)?(\d{2})_.+\.(png|jpg|jpeg)$", re.I)
 BOXED_IMAGE = re.compile(r"_boxed\.(png|jpg|jpeg)$", re.I)
+# TC_<n>_<what_it_proves>. The number orders the case; the words are what make
+# `ls evd/SHOP-142` a test plan instead of a row of drawer handles.
+CASE_DIR = re.compile(r"^TC_(\d+)(?:_([A-Za-z0-9][A-Za-z0-9_-]*))?$")
 
 
 def _dirs_of(case_dir):
@@ -146,6 +158,12 @@ def cfg_get(dotted, default):
 
 def check_case(case_dir, res, opts):
     name = os.path.basename(case_dir)
+    m = CASE_DIR.match(name)
+    case_no = m.group(1) if m else ""
+    if m and not m.group(2):
+        res.err(name, "the folder is called {} and nothing else — name it TC_{}_<what_it_proves> "
+                      "so the reader knows what was tested without opening a file"
+                      .format(name, case_no))
     man_path = os.path.join(case_dir, "manifest.md")
     if not os.path.exists(man_path):
         res.err(name, "no manifest.md — a folder of images is not a verification")
@@ -192,6 +210,21 @@ def check_case(case_dir, res, opts):
     images = sorted(os.listdir(case_dir)) if os.path.isdir(case_dir) else []
     step_shots = [i for i in images if STEP_IMAGE.match(i)]
     boxed = [i for i in images if BOXED_IMAGE.search(i)]
+
+    # An image whose prefix names a DIFFERENT case is the copy-paste that turns
+    # a report into fiction: the picture proves something, just not this.
+    unlabelled = 0
+    for i in step_shots:
+        got = STEP_IMAGE.match(i).group(1)
+        if got is None:
+            unlabelled += 1
+        elif case_no and got.lstrip("0") != case_no.lstrip("0"):
+            res.err(name, "{} carries the case number TC{} but sits in {} — evidence from "
+                          "another case, or a filename nobody updated".format(i, got, name))
+    if unlabelled and case_no:
+        res.warn(name, "{} image(s) named NN_<what>.png with no TC{} prefix — pulled into a "
+                       "ticket they no longer say which case they came from"
+                       .format(unlabelled, case_no))
 
     if non_ui:
         if not verification_files(case_dir):
@@ -272,11 +305,20 @@ def run(evd, expect_tcs, opts):
     if not os.path.exists(os.path.join(evd, "manifest.md")):
         res.err("manifest.md", "missing at the evidence root — the plain-language index of what was checked")
 
-    cases = sorted(d for d in os.listdir(evd)
-                   if re.match(r"^TC_\d+$", d) and os.path.isdir(os.path.join(evd, d)))
+    cases = sorted((d for d in os.listdir(evd)
+                    if CASE_DIR.match(d) and os.path.isdir(os.path.join(evd, d))),
+                   key=lambda d: int(CASE_DIR.match(d).group(1)))
     if not cases:
-        res.err(evd, "no TC_<n> folders — nothing was verified")
+        res.err(evd, "no TC_<n>_<what_it_proves> folders — nothing was verified")
         return res
+
+    seen = {}
+    for d in cases:
+        no = CASE_DIR.match(d).group(1).lstrip("0") or "0"
+        if no in seen:
+            res.err(evd, "two folders claim case {}: {} and {} — the report cites 'TC_{}' and the "
+                         "reader cannot tell which one it means".format(no, seen[no], d, no))
+        seen[no] = d
 
     if expect_tcs is not None and len(cases) != expect_tcs:
         res.err(evd, "planned {} test cases, found {} — 'planned 5, ran 1' is exactly what this "
@@ -304,6 +346,13 @@ def run(evd, expect_tcs, opts):
         if opts["require_whole_screen"] and "whole-screen" not in kinds:
             res.err(evd, "no case with KIND: whole-screen — fixes break neighbours, and the "
                          "neighbour is what users notice")
+
+    # The index is only worth having if it cannot be out of date.
+    if evd_index is not None and os.path.exists(os.path.join(evd, "manifest.md")):
+        why = evd_index.stale(evd)
+        if why:
+            res.err("manifest.md", "{} — the folder cannot introduce itself. Run: "
+                                   "python3 .ai-qa/scripts/evd_index.py --evd {}".format(why, evd))
 
     check_report(evd, res)
 
@@ -357,14 +406,22 @@ The requirement is met.
 """
 
 
+# The fixture names its cases the way the gate now insists real ones are named,
+# so the selftest is also the worked example.
+C1 = "TC_1_quantity_change_recalculates_the_total"
+C2 = "TC_2_quantity_zero_is_refused"
+C3 = "TC_3_the_orders_screen_is_intact"
+
+
 def _mkcase(root, name, manifest, images=True):
     d = os.path.join(root, name)
     os.makedirs(d, exist_ok=True)
     with open(os.path.join(d, "manifest.md"), "w", encoding="utf-8") as fh:
         fh.write(manifest)
     if images:
+        pre = "TC{}_".format(CASE_DIR.match(name).group(1)) if CASE_DIR.match(name) else ""
         for fn in ("01_orders_list.png", "03_total_after_save.png", "03_total_after_save_boxed.png"):
-            with open(os.path.join(d, fn), "wb") as fh:
+            with open(os.path.join(d, pre + fn), "wb") as fh:
                 fh.write(b"\x89PNG\r\n\x1a\n")
     return d
 
@@ -377,9 +434,11 @@ def _green_fixture(root):
                  ("debate.md", "verifier card\nchallenger card\nresolution\n")):
         with open(os.path.join(root, n), "w", encoding="utf-8") as fh:
             fh.write(t)
-    _mkcase(root, "TC_1", GREEN_CASE)
-    _mkcase(root, "TC_2", BOUNDARY_CASE)
-    _mkcase(root, "TC_3", SCREEN_CASE)
+    _mkcase(root, C1, GREEN_CASE)
+    _mkcase(root, C2, BOUNDARY_CASE)
+    _mkcase(root, C3, SCREEN_CASE)
+    if evd_index is not None:
+        evd_index.write(root)
     return root
 
 
@@ -417,50 +476,72 @@ def selftest():
         ("no COMMIT line", lambda d: _rewrite(d, "REPORT.md", lambda t: t.replace("COMMIT: abc1234\n", ""))),
         ("no ORACLE line", lambda d: _rewrite(d, "REPORT.md", lambda t: t.replace("ORACLE: docs/specs/orders.md 3.2\n", ""))),
         ("FAIL without severity", lambda d: _rewrite(d, "REPORT.md", lambda t: t.replace("— PASS", "— FAIL"))),
-        ("no boundary case", lambda d: _rewrite(d, "TC_2/manifest.md", lambda t: t.replace("KIND: boundary", "KIND: acceptance"))),
-        ("no whole-screen case", lambda d: _rewrite(d, "TC_3/manifest.md", lambda t: t.replace("KIND: whole-screen", "KIND: acceptance"))),
-        ("case missing AS", lambda d: _rewrite(d, "TC_1/manifest.md", lambda t: re.sub(r"(?m)^AS:.*\n", "", t))),
-        ("case missing EXPECTED", lambda d: _rewrite(d, "TC_1/manifest.md", lambda t: re.sub(r"(?m)^EXPECTED:.*\n", "", t))),
-        ("case missing BACK", lambda d: _rewrite(d, "TC_1/manifest.md", lambda t: re.sub(r"(?m)^BACK:.*\n", "", t))),
-        ("ENTRY is only a URL", lambda d: _rewrite(d, "TC_1/manifest.md",
+        ("no boundary case", lambda d: _rewrite(d, C2 + "/manifest.md", lambda t: t.replace("KIND: boundary", "KIND: acceptance"))),
+        ("no whole-screen case", lambda d: _rewrite(d, C3 + "/manifest.md", lambda t: t.replace("KIND: whole-screen", "KIND: acceptance"))),
+        ("case missing AS", lambda d: _rewrite(d, C1 + "/manifest.md", lambda t: re.sub(r"(?m)^AS:.*\n", "", t))),
+        ("case missing EXPECTED", lambda d: _rewrite(d, C1 + "/manifest.md", lambda t: re.sub(r"(?m)^EXPECTED:.*\n", "", t))),
+        ("case missing BACK", lambda d: _rewrite(d, C1 + "/manifest.md", lambda t: re.sub(r"(?m)^BACK:.*\n", "", t))),
+        ("ENTRY is only a URL", lambda d: _rewrite(d, C1 + "/manifest.md",
             lambda t: re.sub(r"(?m)^ENTRY:.*$", "ENTRY: http://localhost:3000/orders/4102/edit", t))),
-        ("AFTER never reloads", lambda d: _rewrite(d, "TC_1/manifest.md",
+        ("AFTER never reloads", lambda d: _rewrite(d, C1 + "/manifest.md",
             lambda t: re.sub(r"(?m)^AFTER:.*$", "AFTER: the list row shows 3", t))),
-        ("no boxed image", lambda d: os.remove(os.path.join(d, "TC_1", "03_total_after_save_boxed.png"))),
-        ("no step screenshots", lambda d: [os.remove(os.path.join(d, "TC_1", f))
-                                           for f in os.listdir(os.path.join(d, "TC_1")) if f.endswith(".png")]),
-        ("bad RESULT value", lambda d: _rewrite(d, "TC_1/manifest.md", lambda t: t.replace("RESULT: PASS", "RESULT: OK"))),
-        ("BLOCKED with no way out", lambda d: _rewrite(d, "TC_1/manifest.md", lambda t: t.replace("RESULT: PASS", "RESULT: BLOCKED"))),
-        ("write-readback with no db_verify", lambda d: _rewrite(d, "TC_1/manifest.md",
+        ("no boxed image", lambda d: os.remove(os.path.join(d, C1, "TC1_03_total_after_save_boxed.png"))),
+        ("no step screenshots", lambda d: [os.remove(os.path.join(d, C1, f))
+                                           for f in os.listdir(os.path.join(d, C1)) if f.endswith(".png")]),
+        ("bad RESULT value", lambda d: _rewrite(d, C1 + "/manifest.md", lambda t: t.replace("RESULT: PASS", "RESULT: OK"))),
+        ("BLOCKED with no way out", lambda d: _rewrite(d, C1 + "/manifest.md", lambda t: t.replace("RESULT: PASS", "RESULT: BLOCKED"))),
+        ("write-readback with no db_verify", lambda d: _rewrite(d, C1 + "/manifest.md",
             lambda t: t.replace("KIND: acceptance", "KIND: write-readback"))),
-        ("non-UI with no verification file", lambda d: _rewrite(d, "TC_1/manifest.md",
+        ("non-UI with no verification file", lambda d: _rewrite(d, C1 + "/manifest.md",
             lambda t: t.replace("KIND: acceptance", "KIND: acceptance\nTYPE: NON-UI"))),
-        ("only one case", lambda d: [shutil.rmtree(os.path.join(d, "TC_2")), shutil.rmtree(os.path.join(d, "TC_3"))]),
+        ("only one case", lambda d: [shutil.rmtree(os.path.join(d, C2)), shutil.rmtree(os.path.join(d, C3))]),
+        ("case folder with no name", lambda d: os.rename(os.path.join(d, C2), os.path.join(d, "TC_2"))),
+        ("two folders claiming case 2", lambda d: shutil.copytree(os.path.join(d, C2),
+            os.path.join(d, "TC_2_quantity_zero_is_rejected"))),
+        ("an image from another case", lambda d: shutil.copyfile(
+            os.path.join(d, C1, "TC1_01_orders_list.png"),
+            os.path.join(d, C1, "TC9_01_orders_list.png"))),
     ]
     for i, (label, mutate) in enumerate(mutations):
         d = fresh("mut{}".format(i))
         mutate(d)
+        # Re-index first, so every mutation is caught by its OWN rule rather
+        # than by the staleness check standing downstream of all of them.
+        if evd_index is not None and os.path.exists(os.path.join(d, "manifest.md")):
+            evd_index.write(d)
         expect(not run(d, None, DEFAULT_OPTS).ok, "mutation did NOT go red: {}".format(label))
+
+    # 2b. the index itself: a case the manifest never mentions
+    if evd_index is not None:
+        d = fresh("stale")
+        _mkcase(d, "TC_4_a_refund_returns_the_stock", GREEN_CASE)   # added, never re-indexed
+        expect(not run(d, None, DEFAULT_OPTS).ok, "a case missing from the index did not go red")
+        evd_index.write(d)
+        expect(run(d, None, DEFAULT_OPTS).ok, "re-running the index generator did not clear the red")
 
     # 3. a legitimately blocked case, fully declared, must still pass
     d = fresh("blocked")
-    _rewrite(d, "TC_1/manifest.md", lambda t: t.replace("RESULT: PASS", "RESULT: BLOCKED")
+    _rewrite(d, C1 + "/manifest.md", lambda t: t.replace("RESULT: PASS", "RESULT: BLOCKED")
              + "REASON: no account has refund permission\nUNBLOCK: ops to grant refund role to qa@demo\n")
+    if evd_index is not None:
+        evd_index.write(d)
     expect(run(d, None, DEFAULT_OPTS).ok, "a fully-declared BLOCKED case should not red the gate")
 
     # 4. a non-UI case WITH its verification file must pass
     d = fresh("nonui")
-    _rewrite(d, "TC_1/manifest.md", lambda t: t.replace("KIND: acceptance", "KIND: acceptance\nTYPE: NON-UI"))
-    with open(os.path.join(d, "TC_1", "db_verify.md"), "w", encoding="utf-8") as fh:
+    _rewrite(d, C1 + "/manifest.md", lambda t: t.replace("KIND: acceptance", "KIND: acceptance\nTYPE: NON-UI"))
+    with open(os.path.join(d, C1, "db_verify.md"), "w", encoding="utf-8") as fh:
         fh.write("SELECT total FROM orders WHERE id=4102;\n-> 450000\n")
+    if evd_index is not None:
+        evd_index.write(d)
     expect(run(d, None, DEFAULT_OPTS).ok, "a non-UI case with db_verify.md should pass")
 
     # 5. the pair api_check.mjs writes IS a recorded verification — at the case
     #    root and one folder down, which is how a case with several calls keeps
     #    them. This gate used to demand a file the toolchain never produced.
     def _api_case(root, where):
-        case = os.path.join(root, "TC_1")
-        _rewrite(root, "TC_1/manifest.md",
+        case = os.path.join(root, C1)
+        _rewrite(root, C1 + "/manifest.md",
                  lambda t: t.replace("KIND: acceptance", "KIND: acceptance\nTYPE: NON-UI"))
         for f in os.listdir(case):
             if f.lower().endswith(".png"):
@@ -476,6 +557,8 @@ def selftest():
     for where in ("root", "subfolder"):
         d = fresh("api_{}".format(where))
         _api_case(d, where)
+        if evd_index is not None:
+            evd_index.write(d)
         expect(run(d, None, DEFAULT_OPTS).ok,
                "a non-UI case whose evidence is request.http + response.json in the {} "
                "should pass".format(where))
@@ -484,6 +567,8 @@ def selftest():
     d = fresh("api_half")
     target = _api_case(d, "root")
     os.remove(os.path.join(target, "response.json"))
+    if evd_index is not None:
+        evd_index.write(d)
     expect(not run(d, None, DEFAULT_OPTS).ok,
            "a request with no recorded response was accepted as verification")
 
@@ -491,7 +576,9 @@ def selftest():
     # product is the claim being checked, not the check.
     d = fresh("api_readback")
     _api_case(d, "root")
-    _rewrite(d, "TC_1/manifest.md", lambda t: t.replace("KIND: acceptance", "KIND: write-readback"))
+    _rewrite(d, C1 + "/manifest.md", lambda t: t.replace("KIND: acceptance", "KIND: write-readback"))
+    if evd_index is not None:
+        evd_index.write(d)
     expect(not run(d, None, DEFAULT_OPTS).ok,
            "a write-readback case was satisfied by a request/response pair instead of a read-back")
 
