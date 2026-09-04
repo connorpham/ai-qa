@@ -357,6 +357,44 @@ for (const [label, cmd, args] of [
   check(/NOT FOUND/.test(g3.stdout), "a missing ticket did not say NOT FOUND");
 }
 
+
+// ---- 15. the probe reports a real status, and doctor probes once ---------------
+// Both bugs here came from the first install into a real repo, which is where
+// they were always going to come from: a monorepo declaring web AND api ran the
+// same 60-second app probe twice, and reported the result as "HTTP 000000".
+{
+  const probed = path.join(tmp, "probed");
+  fs.mkdirSync(probed, { recursive: true });
+  fs.writeFileSync(path.join(probed, "README.md"), "# probed\n");
+  spawnSync("git", ["init"], { cwd: probed, encoding: "utf8" });
+  check(run(probed, ["init", "--yes", "--key", "P", "--surfaces", "web,api",
+    "--start", "npm run dev", "--url", "http://127.0.0.1:1"]).status === 0,
+    "init for the probe test failed");
+
+  // A host that refuses the connection: curl prints 000, and the script must not
+  // concatenate its own fallback onto it.
+  const dead = spawnSync("bash", [".ai-qa/scripts/app_check.sh", "--url", "http://127.0.0.1:1"],
+    { cwd: probed, encoding: "utf8", timeout: 60_000 });
+  check(/APP: DOWN/.test(dead.stdout), `an unreachable app should be DOWN: ${dead.stdout.trim()}`);
+  check(!/000000/.test(dead.stdout), `malformed status code in: ${dead.stdout.trim()}`);
+  check(/no answer|HTTP 000\b/.test(dead.stdout), `the status should read as 000: ${dead.stdout.trim()}`);
+  check(/unblock:/.test(dead.stdout), "a DOWN probe must print an unblock path");
+
+  // --wait is for a lane waiting on a boot. A health check caps it, or every
+  // doctor run on a laptop with the app off costs a minute per surface.
+  const t0 = Date.now();
+  spawnSync("bash", [".ai-qa/scripts/app_check.sh", "--url", "http://127.0.0.1:1", "--wait", "60"],
+    { cwd: probed, encoding: "utf8", timeout: 90_000, env: { ...process.env, AIQA_PROBE_ONLY: "1" } });
+  const capped = Date.now() - t0;
+  check(capped < 25_000, `AIQA_PROBE_ONLY did not cap a --wait 60 probe (took ${Math.round(capped / 1000)}s)`);
+
+  // web and api both declare the app probe; doctor must run it once.
+  const doc = run(probed, ["doctor"]);
+  const appLines = (doc.stdout.match(/^\s*[·✓]\s+app\s/gm) || []).length;
+  check(appLines === 1, `doctor ran the app preflight ${appLines} times; it should dedupe to 1`);
+  check(/doctor: (GREEN|AMBER)/.test(doc.stdout), `doctor verdict missing:\n${doc.stdout.slice(-400)}`);
+}
+
 // ---- report --------------------------------------------------------------------
 fs.rmSync(tmp, { recursive: true, force: true });
 if (fails.length) {
