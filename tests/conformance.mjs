@@ -510,6 +510,136 @@ for (const [label, cmd, args] of [
     "an unknown pace name must fall back to human, not to full speed");
 }
 
+// ---- the tester's mind is wired in, not just shipped --------------------------
+// A doctrine file no workflow opens is a file nobody reads. Each of these exists
+// to change what the verifier DOES at a named phase, so the workflow has to name
+// it, the playbook (the one file /qa always reads first) has to index it, and
+// the order has to be right — a question about the ticket asked after the cases
+// are designed arrives as an argument, not as a question.
+{
+  const doctrineDir = path.join(pkgRoot, "core", "doctrine");
+  const readDoc = (f) => fs.readFileSync(path.join(doctrineDir, f), "utf8");
+  const wf = (n) => fs.readFileSync(path.join(wfDir, `${n}.md`), "utf8");
+  const qa = wf("qa");
+  const triage = wf("triage");
+  const onboard = wf("onboard");
+  const regress = wf("regress");
+  const playbook = readDoc("roles-qa.md");
+
+  const MIND = ["user-mindset.md", "heuristics.md", "hostile-inputs.md", "requirement-smells.md", "checklists.md"];
+  for (const f of MIND) {
+    const exists = fs.existsSync(path.join(doctrineDir, f));
+    check(exists, `doctrine ${f} is missing`);
+    if (!exists) continue;
+    check(readDoc(f).split("\n").length > 60, `${f} is too thin to change how anyone tests`);
+    check(qa.includes(f), `qa.md never opens ${f} — a doctrine no workflow reads is a file nobody reads`);
+  }
+  // The playbook is the index: every doctrine file is in its toolbox table.
+  for (const f of fs.readdirSync(doctrineDir).filter((x) => x.endsWith(".md") && x !== "roles-qa.md")) {
+    check(playbook.includes(`\`${f}\``), `roles-qa.md's toolbox does not list ${f}`);
+  }
+
+  // Order inside /qa: smells → sheet → case design.
+  const iSmells = qa.indexOf("requirement-smells.md");
+  const iSheet = qa.indexOf("Write `evd/<TICKET>/verifysheet.md`");
+  const iV2 = qa.indexOf("## V2 — DESIGN THE VERIFICATION");
+  check(iSmells > 0 && iSheet > 0 && iV2 > 0 && iSmells < iSheet && iSheet < iV2,
+    "qa.md must read the ticket for smells BEFORE writing the sheet and BEFORE designing cases");
+  // …and the ask happens before V2, in so many words.
+  check(/[Aa]sk the requirement\s+owner now[\s\S]{0,80}before V2/.test(qa),
+    "qa.md must tell the verifier to ask the requirement owner BEFORE V2");
+
+  // The exploratory KIND the gate accepts has to be explained, or it is a
+  // vocabulary word nobody uses. Same for the persona and the observations.
+  const gate = fs.readFileSync(path.join(pkgRoot, "core/scripts/evd_check.py"), "utf8");
+  const kinds = [...(/^KINDS\s*=\s*\(([\s\S]*?)\)/m.exec(gate) || [, ""])[1].matchAll(/"([^"]*)"/g)].map((m) => m[1]);
+  check(kinds.includes("exploratory"), "the gate no longer accepts an exploratory case");
+  check(readDoc("test-design.md").includes("KIND: exploratory") && qa.includes("KIND: exploratory"),
+    "the exploratory KIND is accepted by the gate but never explained — nobody will write one");
+  for (const k of ["PERSONA", "HEURISTIC", "OBSERVATIONS"]) {
+    check(/^[A-Z][A-Z_-]{1,20}$/.test(k), `${k} would not parse as a manifest field`);
+    check(qa.includes(`**${k}**`), `qa.md never asks for ${k}`);
+    check(readDoc("evidence.md").includes(k), `evidence.md does not document ${k}`);
+  }
+  // A real-user move is demanded of EVERY case, not delegated to a case of its own.
+  check(/At least one step is a thing a real user does/.test(qa),
+    "qa.md no longer requires a real-user move in every case's STEPS");
+
+  // HICCUPPS is the answer to "no spec, so I can say nothing" — all eight, and
+  // without softening the oracle rule.
+  const heur = readDoc("heuristics.md");
+  for (const o of ["History", "Image", "Comparable products", "Claims", "User expectations", "Product", "Purpose", "Statutes"]) {
+    check(new RegExp(`\\*\\*${o}\\b`).test(heur), `heuristics.md lost the "${o}" consistency oracle`);
+  }
+  check(/never tells you what\s+the correct answer is/.test(heur), "heuristics.md softened the oracle rule");
+  check(/oracle rule still applies/.test(readDoc("hostile-inputs.md")), "hostile-inputs.md softened the oracle rule");
+  check(/does not cross|line you do not cross/i.test(readDoc("user-mindset.md")) && /never tells you what\s+the value should be/.test(readDoc("user-mindset.md")),
+    "user-mindset.md must say a persona never decides what is correct");
+
+  // Biases have a table; triage has a title and one-defect-one-report; onboard
+  // asks who the people are; regress ranks with RCRCRC and harvests observations.
+  const flags = readDoc("red-flags.md");
+  check(flags.includes("## The traps in your own head") && flags.includes("Confirmation bias"),
+    "red-flags.md has no bias table");
+  check(triage.includes("[Title]") && triage.includes("One defect, one report"),
+    "triage.md lost the title craft or the one-defect-one-report rule");
+  check(triage.includes("user-mindset.md") && triage.includes("hostile-inputs.md"),
+    "triage.md does not reproduce as the person, with the hostile inputs");
+  check(/^People\s+·/m.test(onboard), "onboard.md's interview never asks who the people are");
+  check(fs.readFileSync(path.join(pkgRoot, "core/templates/docs/onboarding.md"), "utf8").includes("Who the people are"),
+    "the dossier template has nowhere to record who the people are");
+  check(fs.readFileSync(path.join(pkgRoot, "core/templates/docs/charters.md"), "utf8").includes("HEURISTIC"),
+    "the charter template has no HEURISTIC line");
+  check(regress.includes("RCRCRC") && regress.includes("OBSERVATIONS"),
+    "regress.md neither ranks with RCRCRC nor harvests observations");
+
+  // The report template has an Observations section AFTER the conclusion — and
+  // the export, which reads the Conclusion, must not swallow it.
+  const iConc = qa.indexOf("## 4. Conclusion");
+  const iObs = qa.search(/^## 6\. Observations/m);
+  const iApp = qa.indexOf("## Appendix");
+  check(iConc > 0 && iObs > iConc && iApp > iObs,
+    "the report template needs an Observations section between the Conclusion and the Appendix");
+
+  // Now prove it against the real gate and the real export: a green pack whose
+  // manifests carry PERSONA / HEURISTIC / OBSERVATIONS and whose report carries
+  // the Observations section still passes, and the Observations stay out of the
+  // Conclusion the spreadsheet prints.
+  const evd = fs.mkdtempSync(path.join(process.env.TMPDIR || "/tmp", "aiqa-conf-mind-"));
+  try {
+    const built = spawnSync("python3", ["-c",
+      `import sys; sys.path.insert(0, ${JSON.stringify(path.join(pkgRoot, "core/scripts"))}); ` +
+      `import evd_check; evd_check._green_fixture(${JSON.stringify(evd)})`], { encoding: "utf8" });
+    check(built.status === 0, `could not build the gate's own green fixture: ${built.stderr}`);
+    for (const d of fs.readdirSync(evd).filter((x) => /^TC_\d+/.test(x))) {
+      const mf = path.join(evd, d, "manifest.md");
+      fs.appendFileSync(mf, [
+        "PERSONA: the interrupted one — leaves after step 1, returns after the session expired",
+        "HEURISTIC: interruptions — refresh between Save and the confirmation",
+        "OBSERVATIONS: the Pending badge kept the old count until a manual refresh",
+        "",
+      ].join("\n"));
+    }
+    const reportPath = path.join(evd, "REPORT.md");
+    fs.appendFileSync(reportPath, "\n## 6. Observations — seen, not judged\nThe Pending badge kept the old count until a manual refresh.\n");
+    spawnSync("python3", [path.join(pkgRoot, "core/scripts/evd_index.py"), "--evd", evd], { encoding: "utf8" });
+    const g = spawnSync("python3", [path.join(pkgRoot, "core/scripts/evd_check.py"), "--evd", evd, "--expect-tcs", "3"],
+      { encoding: "utf8" });
+    check(g.status === 0, `a pack carrying PERSONA/HEURISTIC/OBSERVATIONS and an Observations section is rejected by the gate:\n${g.stdout}${g.stderr}`);
+    const x = spawnSync("python3", [path.join(pkgRoot, "core/scripts/xlsx_export.py"), "--evd", evd], { encoding: "utf8" });
+    check(x.status === 0, `the export choked on the Observations section:\n${x.stdout}${x.stderr}`);
+    const conc = spawnSync("python3", ["-c",
+      `import sys; sys.path.insert(0, ${JSON.stringify(path.join(pkgRoot, "core/scripts/lib"))}); ` +
+      `import evdpack; print(evdpack._report_section(open(${JSON.stringify(reportPath)}, encoding='utf-8').read(), 'Conclusion'))`],
+      { encoding: "utf8" });
+    check(conc.status === 0 && conc.stdout.trim().length > 0, "the export could not read the Conclusion");
+    check(!/Pending badge/.test(conc.stdout),
+      "the Observations leaked into the Conclusion the spreadsheet prints — an observation would be read as a verdict");
+  } finally {
+    fs.rmSync(evd, { recursive: true, force: true });
+  }
+}
+
 // ---- report -------------------------------------------------------------------
 if (fails.length) {
   console.error(`conformance: ${fails.length} FAILED of ${checks} checks\n`);

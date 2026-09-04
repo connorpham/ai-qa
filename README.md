@@ -102,7 +102,7 @@ method), and whatever each chosen agent tool natively discovers.
 | | What it does |
 |---|---|
 | **`/onboard`** | Arrive knowing nothing. Read everything that exists, draft the dossier, batch the unknowns into a short interview, then **prove the answers** by bringing the app up and walking one journey per role. Publishes `docs/qa/onboarding.md`, a risk map, three runnable charters, and a readiness verdict naming what is still missing and who owes it. |
-| **`/qa`** | Verify one ticket against the spec. Derive expected values **with citations**, design 2–5 cases chosen by risk, run them for real, capture named and annotated evidence, cross-check every claim, pass the machine gate, get falsified by a fresh challenger, publish a report a non-programmer can read. |
+| **`/qa`** | Verify one ticket against the spec. **Read the ticket for ambiguity first** and ask before testing. Derive expected values **with citations**, design 2–5 cases chosen by risk, **walk each one as a named persona with a move a real user makes** — the double-click, the Back after Save, the paste with a trailing space — run them for real, capture named and annotated evidence, record what was noticed but not asked about, cross-check every claim, pass the machine gate, get falsified by a fresh challenger, publish a report a non-programmer can read. |
 | **`/triage`** | Turn "it's broken" into something a developer can fix today: reproduce first-hand, narrow to the minimal conditions, separate observation from theory, dedup, assign severity by consequence, file with numbered steps and evidence. |
 | **`/regress`** | Build a suite people still run in six months. Promote the journeys past verifications left behind, rank by consequence × likelihood, **prove every case can fail**, quarantine flakes with a deadline, and report coverage as what is protected — never as a percentage. |
 
@@ -253,6 +253,44 @@ gate script whose hash has drifted from what we shipped is reported
 **UNPROVEN** rather than green — amber, not red, because editing an installed
 gate is allowed; it just stops being evidence.
 
+## The mind of the tester
+
+Gates catch what can be checked by a machine. What they cannot catch is a
+verification that satisfied every rule and still tested a route instead of a
+product: typed the perfect value once, never pressed anything twice, never came
+back after lunch, never read the ticket for the word "should". That is the
+difference between a tester and a script, and it is written down in
+`docs/qa/method/` so the lane reads it at the moment it matters:
+
+| File | Opened when | What it changes |
+|---|---|---|
+| `requirement-smells.md` | Before a single expected value is written | The words in a ticket that hide a decision — "should", "quickly", "the user", "like the other screen", "no change to existing behaviour" — and the questions to ask the requirement owner **before** testing. A ticket that is smells all the way down gets `BLOCKED (not testable as written)`, honestly. |
+| `user-mindset.md` | Before cases are designed | Four people to borrow — the first-timer, the daily operator, the interrupted one, the one on a bad connection — the moves real people make that scripts never do, and the four questions after every action: *did it work, where am I, can I undo it, did I lose anything?* Every case names its `PERSONA:` and carries one real-user move. |
+| `hostile-inputs.md` | While writing the boundary case | The values ordinary people produce every week, by field type: the pasted trailing space, `1.000`, `O'Brien`, 29 February, 31 Jan + 1 month, a currency with no decimals, someone else's id. Pick two; never sweep. |
+| `heuristics.md` | For the exploratory case, and whenever the spec is silent | HICCUPPS consistency oracles — what the product is *inconsistent with* when nothing is written: its own other screen, its last release, its own tooltip, the law. SFDIPOT coverage, Zero-One-Many, interruptions, follow-the-data, the tours, RCRCRC. One heuristic per pack, named as `HEURISTIC:`, different each time. |
+| `checklists.md` | For the whole-screen case | The reflex checks a seasoned tester does without thinking, by feature shape — forms, lists, search, roles, money, lifecycles, dates, notifications, exports, delete, small screens. "Still behaves" becomes a list of specific looks. |
+| `red-flags.md` | When you hear yourself think "obviously…" | The excuses, and now the biases behind them — confirmation, anchoring, automation, sunk cost, the pesticide paradox, expert blindness — each paired with the part of the lane built to give it less room. |
+
+Three things this adds to the record, none of them a new gate:
+
+- **`OBSERVATIONS:`** on a case, and an *Observations* section in the report —
+  what was seen but not judged: the badge that did not update, the two-second
+  pause, the label two panels away that now names the wrong thing. No severity,
+  no change to the verdict. The thing a tester noticed and did not write down is
+  the ticket somebody files next week; `/regress` harvests the ones that recur.
+- **A consistency finding** where there is no spec — *"inconsistent with its own
+  detail screen; decision requested from the product owner"* — with
+  `ORIGIN: SPEC`. Still not a defect against a spec, still labelled as such, but
+  no longer "I can say nothing".
+- **The exploratory slot** — when the budget allows a fifth case, one of them
+  looks where nobody thought to look, and records what it tried even when it
+  found nothing. Four confirming cases and no exploring one has spent the whole
+  budget on what someone already thought of.
+
+None of it softens the oracle rule. A persona says *how* to arrive and *what to
+look at*; a heuristic says *where* to look. What is correct is still written
+down somewhere, or it is still unknown — and the report still says which.
+
 ## Rules the lane will not bend
 
 - **The spec is the oracle** — not the ticket prose, not the code. Spec silent →
@@ -309,7 +347,9 @@ bin/ai-qa.mjs        scan · init · doctor · update
 src/cli/             the CLI; scan.mjs holds the readiness rubric
 src/ui/server.mjs    the browser wizard (local, single-use, no dependencies)
 core/workflows/      onboard · qa · triage · regress   (tool-neutral)
-core/doctrine/       the QA method: roles, severity, evidence, test design, red flags
+core/doctrine/       the QA method: roles (the index), severity, evidence, test design,
+                     red flags — and the tester's mind: user-mindset, heuristics,
+                     hostile-inputs, requirement-smells, checklists
 core/scripts/        the gates, each with a --selftest
 core/templates/      the dossier and registries a human owns after install
 adapters/            one thin renderer per agent tool
@@ -325,7 +365,7 @@ loud BLOCKED with the install command rather than degrading quietly.
 ## Tests
 
 ```bash
-npm test        # 301 conformance checks + 109 end-to-end checks
+npm test        # 363 conformance checks + 114 end-to-end checks
 ```
 
 The e2e suite installs into a scratch repository and then tries to break each

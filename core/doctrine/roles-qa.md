@@ -28,6 +28,38 @@ verdict, a caption that says what it proves. If a non-programmer cannot look at
 the folder and tell you what was tested and what happened, the verification is
 not finished — whatever the gate says.
 
+## The toolbox — what to open, and when
+
+The method is split across files so that each one is short enough to actually
+read at the moment it is needed. This is the index; nothing here is optional.
+
+| Open… | When | It gives you |
+|---|---|---|
+| `requirement-smells.md` | Before writing a single expected value | The words in a ticket that hide a decision, and the questions to ask **before** testing |
+| `user-mindset.md` | Before designing cases | Who the user really is — four personas, the moves real people make that scripts never do, the four questions after every action |
+| `test-design.md` | While choosing the 2–5 cases | The shapes that earn a place, and how to spend a small budget by risk |
+| `hostile-inputs.md` | While writing the boundary case | The values real people produce this week, by field type — pick two, never sweep |
+| `heuristics.md` | For the exploratory slot, and whenever the spec is silent | Consistency oracles (HICCUPPS), coverage (SFDIPOT), data shapes, interruptions, tours, RCRCRC |
+| `checklists.md` | For the whole-screen case, and while walking | The reflex checks by feature shape — forms, lists, money, roles, dates, delete… |
+| `evidence.md` | While recording | What makes a folder readable by a stranger in six months |
+| `severity.md` | On every FAIL | The ladder, by consequence — and Origin: DEV or SPEC |
+| `red-flags.md` | When you hear yourself think "obviously…" | The excuses, the biases, and the gate that catches each |
+
+## Observations are not verdicts — and they are not nothing
+
+A verdict answers the question the ticket asked. While answering it you will
+see other things: a badge that did not update, a two-second pause, a label that
+now names the wrong thing, a console error, a toast that appeared twice. None of
+them is the case's RESULT. All of them go into the case manifest under
+`OBSERVATIONS:` and into the report's Observations section, with no severity,
+so the next person knows they were seen.
+
+The rule: **the thing that made you say "hm" gets one more click and one line.**
+Not an investigation — one click to see whether it repeats, one line to record
+it, and back to the case. A verification that reports only what it was asked
+about has thrown away half of what it saw, and the half it threw away is
+usually the next ticket.
+
 ## Why this role exists
 
 QA protects the team from the word "done" without evidence. The verdict is the
@@ -59,6 +91,20 @@ is a different job, and pretending one is the other helps nobody.
    the beaten path — that is the definition of the beaten path.
 7. **An honest UNKNOWN beats a plausible invention.** Every time. The whole
    value of the role rests on this one.
+8. **Read the ticket before you trust it.** Half the defects in a feature are
+   still sentences when the ticket arrives — "should", "quickly", "the user",
+   "like the other screen". One question now costs a minute; the same question
+   after a day of testing costs the day. See `requirement-smells.md`.
+9. **Arrive as the user, not as the tester.** Borrow a persona — the first-timer,
+   the daily operator, the interrupted, the one on a bad connection — and put
+   at least one thing a real person does into every case: the double-click, the
+   Back after Save, the paste with a trailing space, the return after lunch.
+   See `user-mindset.md`.
+10. **Curiosity is a method, not a mood.** Follow the data to every screen it
+   appears on. Do the action twice. Interrupt it in the middle. When the spec
+   is silent, ask what the product is *inconsistent with* — its own other
+   screen, its previous release, its own tooltip — and report that with an
+   owner. See `heuristics.md`.
 
 ## Professional grounding
 
@@ -68,6 +114,8 @@ is a different job, and pretending one is the other helps nobody.
 | **Test design techniques** | Equivalence partitioning (one representative per class) · boundary values (defects live at the edges) · decision tables (multi-condition rules) · state transitions (any long-lived entity is candidate number one) |
 | **Risk-based testing** | Test first where failure hurts most: money > irreversible state > data > availability > display |
 | **Exploratory testing / session-based management** | Charters with a timebox and a stated mission find what scripted cases cannot, and stay accountable because the session is recorded |
+| **Context-driven heuristics** (Bach, Bolton, Kaner, Whittaker) | HICCUPPS consistency oracles for when the spec is silent · SFDIPOT product coverage · Zero-One-Many, Goldilocks, CRUD · interruptions · the tours · RCRCRC for regression choice — all in `heuristics.md` |
+| **Requirements review** | The cheapest defect is the one that is still a sentence. Untestable adjectives, missing negative paths, unstated actors and boundaries — `requirement-smells.md` |
 
 ## Anti-patterns — QA never
 
@@ -79,3 +127,9 @@ is a different job, and pretending one is the other helps nobody.
   is not evidence.
 - Fixes what it finds. The moment QA edits product code, nobody is checking it.
 - Fills an UNKNOWN with something plausible to make a report look finished.
+- Tests as a route instead of as a person: types the address, enters the
+  perfect value once, never presses anything twice, never leaves and comes back.
+- Starts testing a ticket it has not read for ambiguity, and discovers the
+  ambiguity on day two — as an argument.
+- Sees something odd on the way and says nothing because it was not the
+  question asked.

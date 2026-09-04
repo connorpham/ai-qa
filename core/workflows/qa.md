@@ -1,6 +1,6 @@
 ---
 name: qa
-description: "Verify one ticket a developer has claimed done, against the spec, with evidence — and change no product code. Reads the ticket, the spec and the schema to derive what SHOULD happen (citing each source), designs 2-5 test cases chosen by risk (exact acceptance path, a boundary that must behave the other way, whole-screen sanity, and a read-back check for anything that writes), creates any missing data the way a user would through the real UI under a write gate, runs every case for real on the active surfaces, captures named and annotated evidence, cross-checks every claim in the ticket against a file that proves it, passes the machine evidence gate, gets falsified by a fresh challenger, and publishes a report a non-programmer can read in two minutes. It reports defects; it never fixes them."
+description: "Verify one ticket a developer has claimed done, against the spec, with evidence — and change no product code. Reads the ticket for ambiguity first and asks the requirement owner before testing; reads the spec and the schema to derive what SHOULD happen (citing each source); designs 2-5 test cases chosen by risk (the exact acceptance path, a boundary that must behave the other way using a value a real user would produce, whole-screen sanity from the reflex checklist for that feature shape, a read-back check for anything that writes, and an exploratory case driven by one named heuristic when the budget allows); walks every case as a real person would — a named persona, a double-click, a Back after Save, a return after the session expired; creates any missing data the way a user would through the real UI under a write gate, runs every case for real on the active surfaces, captures named and annotated evidence, records what it noticed but was not asked about, cross-checks every claim in the ticket against a file that proves it, passes the machine evidence gate, gets falsified by a fresh challenger, and publishes a report a non-programmer can read in two minutes. It reports defects; it never fixes them."
 argument-hint: "<TICKET: {project.key}-nnn | tracker URL> [base=<url overriding app.url for this run>]"
 ---
 
@@ -58,7 +58,8 @@ report says.
 
 7. **A fresh challenger tries to break your verdict.** Before it is final,
    someone with empty context gets the ticket, your sheet and your evidence, and
-   is told to falsify it. Both cards go in `debate.md`.
+   is told to falsify it — including whether you tested as a person or as a route.
+Both cards go in `debate.md`.
 
 8. **Say what you are doing.** One plain `▶` line at each phase. The report and
    the summary pass one bar: a non-programmer reads two minutes and understands
@@ -103,15 +104,33 @@ report says.
 
 ## V1 — DERIVE WHAT *SHOULD* HAPPEN
 
-Read `docs/qa/method/roles-qa.md` first, then:
+Read `docs/qa/method/roles-qa.md` first — it is the index to the method — then
+`docs/qa/method/user-mindset.md`, so the person you design cases for is the one
+who will actually use this. Then:
 
 - **The dossier** (`docs/qa/onboarding.md`) — especially §4, the oracle map. If
   this ticket touches an area §4 marks as having no written spec, you already
-  know your verdict is limited, and you say so from the start.
+  know your verdict is limited, and you say so from the start. And §1 — who the
+  people are, how often they do this, on what device, in what hurry — because
+  that decides which persona each case borrows.
 - **Known issues** (`docs/qa/known-issues.md`) — scan the headings now, so a
   divergence you find later is deduped before you call it a bug.
 - **Lessons** (`docs/qa/lessons.md`) — read the index, open only tag-matching
   entries, and answer them in your sheet.
+
+**Then read the ticket like a QA, before you trust it.** Open
+`docs/qa/method/requirement-smells.md` and walk the ticket and its acceptance
+criteria against it. For each criterion, try to write the three things a case
+will need: a concrete EXPECTED with a source, the boundary that must behave the
+other way, and the role that acts. A criterion that cannot produce all three is
+not testable as written. Every "should", "quickly", "the user", "like the other
+screen", "no change to existing behaviour" is a decision nobody has made yet —
+write each as one plain question with what it blocks. **Ask the requirement
+owner now, in one batched message, before V2.** Not the developer, who did not
+write the ticket; not after a day of testing, when the same question arrives as
+an argument. A ticket that is smells all the way down gets the honest verdict
+`BLOCKED (not testable as written)` with the question list — that is the
+verification's first finding, not its failure.
 
 Write `evd/<TICKET>/verifysheet.md`:
 
@@ -125,7 +144,10 @@ Write `evd/<TICKET>/verifysheet.md`:
   Design contradicts the spec on wording or validation → the spec wins, and the
   deviation is recorded.
 - **Accounts and data** needed, per criterion.
-- **Ambiguities** — ask before spending effort, not after.
+- **Ambiguities** — the questions from the smells pass, each with what it
+  blocks, who was asked, and when. An ambiguity that decides a case makes that
+  case `BLOCKED (decision needed)` with the question quoted; one that does not
+  is noted, and you proceed.
 
 ## V2 — DESIGN THE VERIFICATION
 
@@ -139,17 +161,35 @@ Required shapes:
 - **① The exact acceptance path** — the criterion as specified.
 - **② A boundary that must behave the OTHER way** — the empty value, the
   duplicate, the insufficient balance, the cancelled record, the day before the
-  cutoff. A change that overshoots its scope is a defect too.
+  cutoff. A change that overshoots its scope is a defect too. Take the value
+  from `docs/qa/method/hostile-inputs.md` for the field type in front of you:
+  one the spec explicitly refuses, one a real user will produce this week — a
+  pasted trailing space, `1.000`, 29 February, someone else's id. A boundary
+  chosen because it was convenient is a happy path with a different number.
 - **③ Whole-screen sanity** (`evidence.require_whole_screen`) — the rest of the
-  screen or flow still behaves. Fixes break neighbours.
+  screen or flow still behaves. Fixes break neighbours. "Still behaves" is a
+  list of specific looks, not a glance: open `docs/qa/method/checklists.md`,
+  find the shape the screen is — a form, a list, a money screen, a lifecycle, a
+  delete — and walk that list. Record what you looked at even when it was fine.
 - **④ Write → read-back** (`evidence.require_db_verify`) — anything that writes
   gets verified by reading the row back after the action, plus the rollback path
   if one is specified.
+- **⑤ The exploratory slot** — when the budget allows a fifth case, or when the
+  ticket touches an area the dossier marks as having no oracle: one case with
+  `KIND: exploratory`, driven by **one** heuristic from
+  `docs/qa/method/heuristics.md` — an interruption at the worst moment, a tour,
+  follow-the-data, a consistency oracle — named as `HEURISTIC:` with a timebox.
+  Record what you tried even when you found nothing. Four confirming cases and
+  no exploring one has spent the whole budget on what someone already thought of.
 
 **Per case, write the JOURNEY — you are a person using a product, not a script
 hitting a route.** The gate requires these by name:
 
 - **AS** — which account, which role. A verdict with no actor is untraceable.
+- **PERSONA** — which of the four people in `user-mindset.md` this case
+  borrows: the first-timer, the daily operator, the interrupted one, the one in
+  hostile conditions. It decides which real-user move the STEPS carry and what
+  AFTER looks at. Optional in the gate; a journey without one is a route.
 - **PRECONDITION** — what must already be true, resolved read-only right now.
   Never trust an id from the ticket to still exist.
 - **ENTRY** — where the user starts and what they click to arrive. Sign in →
@@ -158,12 +198,25 @@ hitting a route.** The gate requires these by name:
   unreachable row simultaneously. Keep the deep link as a *second* path if
   useful, never the only one.
 - **STEPS** — numbered, in the order a person does them, each screenshotted.
+  **At least one step is a thing a real user does that a script would not** —
+  from `user-mindset.md`: Enter instead of Save, a double-click on the button,
+  Back afterwards, a refresh right after, a paste instead of typing, the same
+  record open in a second tab first, a return after the session would have
+  expired. A journey with none of these has tested the route, not the product.
 - **EXPECTED** — spec-cited, and the region you will box.
 - **AFTER** — what changed: the message, the row in the list behind, and the
   value **still there after a reload** (`evidence.require_reload_check` — a save
-  that dies on refresh is not a save).
+  that dies on refresh is not a save). Write it as the answers to the four
+  questions a person asks after every click: *did it work? where am I? can I
+  undo it? did I lose anything?*
 - **BACK** — Back, Cancel, browser-back. Does the filter survive? Does Cancel
   actually cancel? This is where "it works" usually stops working.
+- **OBSERVATIONS** — what you saw that is *not* the verdict: the badge that did
+  not update, the two-second pause, the label two panels away that now names the
+  wrong thing, a console error. No severity, no change to RESULT. One click to
+  see whether it repeats, one line here. It resurfaces in the report's
+  Observations section — the thing you noticed and did not write down is the
+  ticket somebody files next week.
 
 **Then the fields the report is built from.** The journey is what you did; these
 are what turn a folder of prose into a row somebody can sort, count and act on:
@@ -171,6 +224,9 @@ are what turn a folder of prose into a row somebody can sort, count and act on:
 - **TITLE** — one line naming what this case checks.
 - **KIND** — `acceptance` / `boundary` / `whole-screen` / `write-readback` /
   `exploratory`, so the suite can prove the boundary case was designed at all.
+- **HEURISTIC** — on an `exploratory` case, the one heuristic from
+  `heuristics.md` being applied, and its timebox. A heuristic you ran but did
+  not name was a hunch.
 - **REQUIREMENT** — the spec ids this case checks (`3.2 R1; 3.3`). Without it
   the traceability matrix has to guess them out of your EXPECTED prose, and a
   citation a tool guessed at is worth exactly as much as no citation.
@@ -209,6 +265,15 @@ fake it, never reach into the database.
 
 Announce each case in one line: which case, which account, what it proves.
 Then walk the journey you wrote — from ENTRY, clicking what a user clicks.
+
+Walk it **as the persona**: at their pace, with their habits. The real-user move
+in the STEPS is executed, not narrated — the double-click is two clicks, the
+return after expiry is a real wait or a real expiry. And at each step take your
+eyes off the assertion for a second: the toast, the badge, the row behind, the
+button state, the console. Anything that made you pause gets one more click and
+one line under `OBSERVATIONS:` — not a verdict, not an investigation. The four
+questions — did it work, where am I, can I undo it, did I lose anything — are
+what AFTER and BACK record.
 
 <!-- surface:web -->
 **Web.** One journey script per case, kept as evidence:
@@ -372,6 +437,11 @@ SPEC: the specification itself is wrong or missing).
 ## 5. If BLOCKED — why, and what is needed
 Could not verify <what> because <reason> · Tried: <what> · To unblock: <who/what>.
 
+## 6. Observations — seen, not judged
+Things noticed on the way that are not part of this verdict: a badge that did
+not update, a slow step, a label that now names the wrong thing. No severity.
+One line each, or "none".
+
 ## Appendix
 Verify sheet · spec citations · debate.md · remaining evidence files.
 ```
@@ -385,8 +455,12 @@ Verify sheet · spec citations · debate.md · remaining evidence files.
    sheet, the evidence paths, the report, and this brief: *"Falsify this
    verification. Wrong role or account? A difference that is really about data,
    not behaviour? A boundary never tested? Evidence that is stale or does not
-   show what its caption claims? Any sentence in the report a non-technical
-   reader could not follow? Return your own card."*
+   show what its caption claims? Was this walked as a person or as a route —
+   which real-user move is missing: the double-click, the Back after Save, the
+   refresh, the second tab? Which line of `checklists.md` for this screen's
+   shape was never looked at? Which consistency oracle would have turned a
+   'difference' into a finding with an owner? Any sentence in the report a
+   non-technical reader could not follow? Return your own card."*
 3. Challenger finds a hole → **run the decisive experiment**. Never argue in
    prose. Append the resolution and a `Remaining dissent:` line.
 4. Agreement reached without any run that actually executed = UNCLEAR, not PASS.
@@ -462,7 +536,18 @@ Verify sheet · spec citations · debate.md · remaining evidence files.
       is labelled an opinion, not a fact
 - [ ] Every case ran for real this session; bring-up proven by the quoted
       `APP: UP` line; blocked cases carry reason and unblock path
-- [ ] Boundary case and whole-screen case both ran — not only the happy path
+- [ ] Ticket read for requirement smells before V2; every question asked of the
+      requirement owner with what it blocked — or the ticket honestly
+      `BLOCKED (not testable as written)`
+- [ ] Boundary case and whole-screen case both ran — not only the happy path;
+      the boundary value came from `hostile-inputs.md`, the whole-screen case
+      walked the `checklists.md` shape for that screen
+- [ ] Every case names a `PERSONA:` and carries at least one real-user move in
+      its STEPS — none tested only the route
+- [ ] Exploratory slot used with a named `HEURISTIC:` when the budget allowed —
+      or the report says why not
+- [ ] `OBSERVATIONS:` recorded per case and surfaced in the report's
+      Observations section, or "none" stated
 - [ ] Web cases walked from ENTRY as a click path; AFTER checked including
       survives-a-reload; BACK/Cancel checked
 - [ ] Writes verified by reading the row back; all test data created through the

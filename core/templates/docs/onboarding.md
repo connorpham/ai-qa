@@ -28,6 +28,9 @@ _What is this, who uses it, and what happens when it breaks?_
 
 - **What it does:** _[UNKNOWN]_
 - **Who uses it, and in what roles:** _[UNKNOWN]_
+- **Who the people are** — how often they do this, on what device and network,
+  in what hurry, what they complain about most. This decides which persona a
+  test case borrows (`method/user-mindset.md`): _[UNKNOWN]_
 - **The money or consequence path** — where does value move, where is state
   irreversible, what would be genuinely bad: _[UNKNOWN]_
 - **What it is NOT for** — scope boundaries that stop you filing "defects"

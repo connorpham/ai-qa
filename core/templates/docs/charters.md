@@ -17,6 +17,8 @@ the dossier.
 - **LOOKING FOR:** <the class of defect — wrong money, lost state, a role seeing
   what it must not, a save that does not survive a reload>
 - **ORACLE:** <where "correct" is written — or "NONE: ask <who> first">
+- **HEURISTIC:** <optional — the tour or heuristic from `method/heuristics.md`
+  that shapes the session: the money tour, an interruption, follow-the-data>
 - **TIMEBOX:** <e.g. 45 minutes>
 
 ### Session notes

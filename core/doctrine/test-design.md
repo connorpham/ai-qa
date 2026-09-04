@@ -32,12 +32,43 @@ adjacent input that must be refused, or handled differently:
 A change that works for the happy case and *also* accepts what it should refuse
 is a defect. This case catches overshoot, which no happy-path test can.
 
+Choose the boundary value from `hostile-inputs.md`, by the field type the ticket
+touches: one value the spec explicitly refuses, one a real user will produce
+this week. A boundary chosen because it was convenient is a happy-path case
+with a different number.
+
 **③ Whole-screen sanity.** The rest of the screen still behaves. Fixes break
-neighbours, and the neighbour is what real users notice.
+neighbours, and the neighbour is what real users notice. "Still behaves" is not
+"still renders": open `checklists.md`, find the shape the screen is — a form, a
+list, a money screen, a lifecycle — and walk that list. Record what you looked
+at even when it was fine.
 
 **④ Write → read back.** Anything that writes gets verified by reading the row
 after the action, plus the rollback path if one is specified. The interface
 saying "Saved" is a claim about the interface, not about the data.
+
+**⑤ The exploratory slot** — when the budget allows a fifth case, or when the
+ticket touches an area the dossier marks as having no oracle, one case is
+`KIND: exploratory`. Pick **one** heuristic from `heuristics.md` — an
+interruption at the worst moment, a tour, a consistency oracle, follow-the-data
+— name it as `HEURISTIC:`, give it a timebox, and record what you tried even
+when nothing was found. This is the only case whose purpose is to look where
+nobody thought to look; the other four confirm what someone already thought of.
+A pack with five cases and no exploratory one has spent its whole budget on
+confirmation.
+
+## The real-user move — in every case, not in a case of its own
+
+Cases ① to ④ are shapes; a person still has to walk them. Every case's STEPS
+carries at least one thing a real user does that a script would not — from
+`user-mindset.md`: press Enter instead of Save, double-click the button, press
+Back afterwards, refresh right after, paste the value instead of typing it,
+open the record in a second tab first, leave and return after the session
+would have expired. Name the persona you are borrowing as `PERSONA:` so the
+reader knows why the journey took the turn it did.
+
+This is not a fifth shape. It is the difference between a case that proves the
+route works and a case that proves the product works for someone.
 
 ## Equivalence classes — pick one, not all
 
@@ -71,3 +102,11 @@ report that the verdict compares against nothing written.
 
 That is an honest, useful outcome. Quietly adopting whatever the code does as
 the expected value is not, and it converts a missing spec into a permanent one.
+
+You are not, however, limited to "different". A product can be **inconsistent
+with something it should be consistent with** even when no spec exists — its
+own other screen, its previous release, its own tooltip, the law, what every
+comparable product does. Those are the consistency oracles in `heuristics.md`,
+and a finding written as "inconsistent with <which>, decision requested from
+<owner>" is a legitimate result with an owner, not an opinion. It still is not a
+defect against a spec, and the report still says so.
