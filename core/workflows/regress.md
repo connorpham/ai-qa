@@ -37,7 +37,7 @@ added because they were easy to write rather than because something broke.
 You are not starting from nothing. Every `/qa` run left a runnable journey.
 
 ```bash
-ls evd/*/TC_*/journey.mjs
+ls -d evd/*/TC_*/          # the folder names say what each journey covers
 ```
 
 For each: is the behaviour it walks still worth protecting? A journey written

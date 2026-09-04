@@ -312,7 +312,8 @@ def _classify(name):
 
 class Case(object):
     def __init__(self, name, path):
-        self.name = name
+        self.name = name          # TC_<n> — what the report and the sheet cite
+        self.dirname = name       # the folder on disk: TC_<n>_<what_it_proves>
         self.path = path
         self.f = {}
         self.result = ""
@@ -472,9 +473,14 @@ def _walk_case_files(case_dir, depth=2):
     return out
 
 
-def _read_case(pack, name, titles):
-    case_dir = os.path.join(pack.dir, name)
+def _read_case(pack, dirname, titles):
+    # The folder says what the case proves; the report cites the number. Keep
+    # both: TC_1 is what a reader writes down, TC_1_<what> is what they open.
+    m = re.match(r"^TC_(\d+)", dirname)
+    name = "TC_{}".format(int(m.group(1))) if m else dirname
+    case_dir = os.path.join(pack.dir, dirname)
     case = Case(name, case_dir)
+    case.dirname = dirname
     man = os.path.join(case_dir, "manifest.md")
     text = read(man)
     if not text:
@@ -501,6 +507,9 @@ def _read_case(pack, name, titles):
         case.title, case.title_source = case.get("TITLE"), "declared in the case record"
     elif titles.get(name):
         case.title, case.title_source = titles[name], "from the pack manifest's case table"
+    elif dirname != name:
+        case.title = re.sub(r"[_-]+", " ", dirname[len(name) + 1:]).strip()
+        case.title_source = "the case folder name"
     elif case.get("EXPECTED"):
         first = re.split(r"\s+—\s+|\s+·\s+|\.\s", case.get("EXPECTED"))[0].strip()
         case.title = (first[:150] + "…") if len(first) > 150 else first
@@ -553,7 +562,7 @@ def _read_case(pack, name, titles):
             size = os.path.getsize(abspath)
         except OSError:
             size = 0
-        case.evidence.append(Evidence("{}/{}".format(name, rel), abspath, name,
+        case.evidence.append(Evidence("{}/{}".format(dirname, rel), abspath, name,
                                       note, size, _classify(leaf)))
     return case
 
@@ -672,10 +681,10 @@ def read_pack(evd, project=None):
         pack.verdict = next((v for v in VERDICTS if pack.verdict_note.upper().startswith(v)), "")
 
     names = sorted((d for d in os.listdir(pack.dir)
-                    if re.match(r"^TC_\d+$", d) and os.path.isdir(os.path.join(pack.dir, d))),
+                    if re.match(r"^TC_\d+(?:_.+)?$", d) and os.path.isdir(os.path.join(pack.dir, d))),
                    key=lambda n: int(n.split("_")[1]))
     if not names:
-        pack.gap(pack.key, "no TC_<n> folders — nothing was verified")
+        pack.gap(pack.key, "no TC_<n>_<what_it_proves> folders — nothing was verified")
     for name in names:
         pack.cases.append(_read_case(pack, name, titles))
 

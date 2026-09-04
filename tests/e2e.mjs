@@ -98,6 +98,7 @@ for (const rel of [
   "aiqa.config.yaml",
   ".ai-qa/manifest.json",
   ".ai-qa/scripts/evd_check.py",
+  ".ai-qa/scripts/evd_index.py",
   ".ai-qa/scripts/db_verify.py",
   ".ai-qa/scripts/browser.mjs",
   ".ai-qa/scripts/lib/ctx.py",

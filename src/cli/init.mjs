@@ -104,6 +104,12 @@ app:
   # auto: a real browser window you can watch · never: unattended shifts
   # (drops the visibility, NEVER a screenshot)
   headed: auto
+  # How fast a headed run moves. Headed is not the same as watchable: at full
+  # speed the click and its result land in the same frame, and nobody can tell
+  # what was clicked. human: follow it live · brisk: you have seen this journey
+  # before · demo: someone is watching over your shoulder · or a number of ms.
+  # Ignored when headless. One-off: AIQA_PACE=demo node journey.mjs
+  pace: human
 
 api:
   base_url: ${yamlStr(a.apiBase, "api base url")}
