@@ -239,6 +239,80 @@ for (const [label, cmd, args] of [
   check(html.includes("prefers-color-scheme"), "the wizard ignores the user's colour scheme");
 }
 
+
+// ---- tracker: the two copies of the env-var names must agree ------------------
+// init.mjs names the variables in the wizard; trackers.py enforces them at
+// runtime. A drift here sends the user hunting for a variable spelled
+// differently in the gate that rejects them.
+{
+  const { TRACKER_ENV, TRACKERS: TRACKER_LIST } = await import("../src/cli/init.mjs");
+  const py = fs.readFileSync(path.join(pkgRoot, "core/scripts/lib/trackers.py"), "utf8");
+
+  const fromPython = {};
+  for (const chunk of py.split(/^class\s+\w+\(Tracker\):/m).slice(1)) {
+    const idm = /^\s+id\s*=\s*"([a-z]+)"/m.exec(chunk);
+    if (!idm) continue;
+    const envBlock = /ENV(?::[^=]*)?\s*=\s*\[([\s\S]*?)\]/m.exec(chunk);
+    const vars = envBlock ? [...envBlock[1].matchAll(/\(\s*"([A-Z0-9_]+)"/g)].map((m) => m[1]) : [];
+    fromPython[idm[1]] = vars;
+  }
+
+  check(Object.keys(fromPython).length === 4,
+    `expected 4 tracker providers in trackers.py, parsed ${Object.keys(fromPython).length}`);
+  for (const provider of TRACKER_LIST) {
+    check(provider in fromPython, `init.mjs offers tracker ${provider} with no provider in trackers.py`);
+    const js = (TRACKER_ENV[provider] || []).join(",");
+    const python = (fromPython[provider] || []).join(",");
+    check(js === python,
+      `tracker ${provider}: init.mjs says [${js}], trackers.py says [${python}] — these must match`);
+  }
+  for (const provider of Object.keys(fromPython)) {
+    check(TRACKER_LIST.includes(provider), `trackers.py implements ${provider} but init.mjs never offers it`);
+  }
+
+  // Every credential variable must look like a credential, so the wizard never
+  // asks someone to put a URL in a slot the gate treats as a secret.
+  for (const [provider, vars] of Object.entries(TRACKER_ENV)) {
+    for (const v of vars) {
+      check(/TOKEN|KEY|SECRET|PASSWORD|EMAIL/.test(v),
+        `${provider}: ${v} does not read as a credential name`);
+    }
+  }
+}
+
+// ---- tracker gate proves itself ----------------------------------------------
+{
+  const r = spawnSync("python3", [path.join(pkgRoot, "core/scripts/tracker.py"), "--selftest"],
+    { encoding: "utf8", timeout: 120_000 });
+  check(r.status === 0, `tracker selftest failed:\n${(r.stdout || "") + (r.stderr || "")}`);
+}
+
+// ---- a config with tracker coordinates round-trips through both parsers -------
+{
+  const yamlB = renderConfig({
+    ...answers, tracker: "backlog", trackerEnv: ["BACKLOG_API_KEY"],
+    trackerBaseUrl: "https://acme.backlog.com", trackerProject: "SHOP",
+  });
+  const p2 = parseConfig(yamlB);
+  check(get(p2, "tracker.provider") === "backlog", "tracker.provider did not round-trip");
+  check(get(p2, "tracker.base_url") === "https://acme.backlog.com",
+    `tracker.base_url did not round-trip: ${get(p2, "tracker.base_url")}`);
+  check(get(p2, "tracker.project") === "SHOP", "tracker.project did not round-trip");
+  check(!/BACKLOG_API_KEY=/.test(yamlB), "the config must never contain a credential assignment");
+
+  const tmp2 = fs.mkdtempSync(path.join(process.env.TMPDIR || "/tmp", "aiqa-conf-tr-"));
+  fs.writeFileSync(path.join(tmp2, "aiqa.config.yaml"), yamlB);
+  const ctxPy = path.join(pkgRoot, "core", "scripts", "lib", "ctx.py");
+  for (const [key, expected] of [["tracker.provider", "backlog"],
+                                 ["tracker.base_url", "https://acme.backlog.com"],
+                                 ["tracker.project", "SHOP"]]) {
+    const r = spawnSync("python3", [ctxPy, key], { cwd: tmp2, encoding: "utf8" });
+    check(r.stdout.trim() === expected,
+      `python parser disagrees on ${key}: ${JSON.stringify(r.stdout.trim())}`);
+  }
+  fs.rmSync(tmp2, { recursive: true, force: true });
+}
+
 // ---- report -------------------------------------------------------------------
 if (fails.length) {
   console.error(`conformance: ${fails.length} FAILED of ${checks} checks\n`);

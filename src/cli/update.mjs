@@ -10,7 +10,7 @@ import { gitRoot, writeIfAbsent, say, c, fail } from "./util.mjs";
 import { CONFIG_NAME, configPath, loadConfig, get } from "./config.mjs";
 import { ManifestGuard } from "./manifest.mjs";
 import { renderTool, TOOLS, adapterMarker } from "./adapters.mjs";
-import { buildPlan } from "./init.mjs";
+import { buildPlan, TRACKER_ENV } from "./init.mjs";
 
 /** Which agent tools are already installed here, by looking for each adapter's
  * marker file. Re-rendering only what exists means `update` never installs a
@@ -51,9 +51,12 @@ export async function update(flags) {
     dbUrlEnv: get(cfg, "database.url_env", ""),
     schema: get(cfg, "database.schema", ""),
     tracker: get(cfg, "tracker.provider", "markdown"),
+    trackerBaseUrl: get(cfg, "tracker.base_url", ""),
+    trackerProject: get(cfg, "tracker.project", ""),
     branch: get(cfg, "git.protected_branch", "main"),
     autonomy: get(cfg, "autonomy.level", "assisted"),
   };
+  a.trackerEnv = TRACKER_ENV[a.tracker] || [];
   if (!Array.isArray(a.surfaces)) a.surfaces = [a.surfaces].filter(Boolean);
   if (!a.surfaces.length) a.surfaces = ["web"];
 

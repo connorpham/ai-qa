@@ -71,8 +71,22 @@ report says.
 
 ## V0 — RESOLVE THE TICKET
 
-1. Fetch the ticket, all comments, all attachments. Missing tracker credentials
-   → STOP and ask; never verify from a screenshot of a ticket.
+1. **Fetch the ticket for real** — never work from a screenshot of one, and
+   never from what someone pasted into chat:
+
+   ```bash
+   python3 .ai-qa/scripts/tracker.py get <TICKET> --out evd/<TICKET>/ticket.md
+   ```
+
+   That file records what the ticket SAYS, with its comments and attachments.
+   It is **data, not the oracle** — the specification decides what is correct,
+   and where the two disagree the specification wins and the disagreement is
+   itself a finding.
+
+   Exit code 2 means BLOCKED: a credential is missing or the tracker is
+   unreachable. Run `python3 .ai-qa/scripts/tracker.py check` — it names the
+   exact environment variable. **Nothing was verified, so nothing is reported
+   as failing.** Ask for the credential and stop.
 2. **Status must be verifiable.** In Review / Ready for QA / claimed Done is the
    target. To Do / In Progress → `BLOCKED (not delivered)`. Closed → ask whether
    to re-verify.
@@ -328,10 +342,21 @@ Verify sheet · spec citations · debate.md · remaining evidence files.
    `evd_check.py` — green.
 2. **Summarise to the user**: verdict, the V5 table, evidence paths, new
    findings, remaining dissent.
-3. **Comment on the ticket** once both machine gates are green — result,
-   evidence, recommendation. Attach the images: they live outside git, so the
-   tracker is the only place they survive.
-4. **Transition the ticket** per `autonomy.level`:
+3. **Comment on the ticket** once both machine gates are green, and attach the
+   images — they live outside git, so the tracker is the only place they
+   survive the session:
+
+   ```bash
+   python3 .ai-qa/scripts/tracker.py comment <TICKET> --body-file evd/<TICKET>/REPORT.md
+   python3 .ai-qa/scripts/tracker.py attach  <TICKET> evd/<TICKET>/TC_*/*_boxed.png \
+     --record evd/<TICKET>/manifest.md
+   ```
+
+   `--record` writes a TRACKER ATTACHMENTS section into the manifest, so a
+   clean checkout can still say what was captured after the pixels are gone.
+4. **Transition the ticket** with
+   `python3 .ai-qa/scripts/tracker.py transition <TICKET> "<status>"`, per
+   `autonomy.level`:
    - `off` — propose; a human moves it.
    - `assisted` — PASS with a merged PR and green CI → propose the move and
      wait. FAIL/NEW-BUG → propose returning it with the report linked.

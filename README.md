@@ -102,6 +102,50 @@ method), and whatever each chosen agent tool natively discovers.
 | **`/triage`** | Turn "it's broken" into something a developer can fix today: reproduce first-hand, narrow to the minimal conditions, separate observation from theory, dedup, assign severity by consequence, file with numbered steps and evidence. |
 | **`/regress`** | Build a suite people still run in six months. Promote the journeys past verifications left behind, rank by consequence × likelihood, **prove every case can fail**, quarantine flakes with a deadline, and report coverage as what is protected — never as a percentage. |
 
+## Reading tickets — Jira, Backlog, GitHub, or files
+
+The lane fetches the ticket itself instead of working from what someone pasted
+into chat:
+
+```bash
+python3 .ai-qa/scripts/tracker.py check
+python3 .ai-qa/scripts/tracker.py get SHOP-142 --out evd/SHOP-142/ticket.md
+python3 .ai-qa/scripts/tracker.py comment SHOP-142 --body-file evd/SHOP-142/REPORT.md
+python3 .ai-qa/scripts/tracker.py attach SHOP-142 evd/SHOP-142/TC_*/*_boxed.png --record evd/SHOP-142/manifest.md
+python3 .ai-qa/scripts/tracker.py transition SHOP-142 "Done"
+```
+
+| Provider | Config (`tracker.base_url` / `tracker.project`) | Environment |
+|---|---|---|
+| `markdown` | — | none; tickets are files in `docs/qa/tickets/` |
+| `jira` | `https://acme.atlassian.net` · `SHOP` | `JIRA_EMAIL`, `JIRA_API_TOKEN` |
+| `backlog` | `https://acme.backlog.com` · `SHOP` | `BACKLOG_API_KEY` |
+| `github` | — · `owner/repo` | `GITHUB_TOKEN` |
+
+**The split is deliberate.** Base URL and project key are coordinates, not
+secrets, so they live in the committed config where a reviewer can see them.
+Credentials only ever come from the environment; `init` adds their **names** to
+`.env.example`, and `.env` itself is in `.gitignore`.
+
+Three properties the selftest proves against a live local server, not a mock:
+
+- **A secret never reaches disk or a log.** Backlog authenticates with
+  `?apiKey=` in the query string, so every URL that could be printed goes
+  through a redactor — including error messages this module did not raise.
+- **Missing credentials are BLOCKED (exit 2), never FAILED (exit 1).** A
+  verification that could not start is a different outcome from one that ran and
+  found a defect, and conflating them turns a broken laptop into a false bug
+  report.
+- **Jira's ADF descriptions are flattened to text.** A verify sheet quoting
+  `{'type': 'doc', ...}` is a verification working from garbage.
+
+The fetched ticket is written with a banner saying it is **data, not the
+oracle**, plus an honest readiness note: whether it carries acceptance criteria
+at all, and whether its status actually means "delivered". A ticket that is only
+prose gets told so — *"the description is prose; prose describes an intention,
+it does not say what to check"* — because that is the moment a verification
+either gets an oracle or quietly invents one.
+
 ## Gates that can actually go red
 
 Every gate ships its own `--selftest` that mutates a passing fixture and asserts
@@ -113,6 +157,7 @@ each mutation turns it red. A gate that has never failed does not exist.
 | `db_verify.py` | Any write — including one hidden inside a CTE, behind a comment, or batched after a `SELECT`. **7 reads allowed, 18 writes refused.** |
 | `api_check.mjs` | Silent assertion failures; a token reaching an evidence file; an unreachable host being reported as a failure rather than as BLOCKED. |
 | `annotate.py` | An "annotation" with no box and no caption — that is a copy. |
+| `tracker.py` | A credential reaching an evidence file or an error message; a missing token being reported as a failed verification rather than a blocked one. |
 | `browser.mjs` | Falling back to headless when Playwright is missing. That is a BLOCKED run with an install command. |
 
 `ai-qa doctor` runs all of them, checks file integrity against the manifest, and
@@ -189,7 +234,7 @@ loud BLOCKED with the install command rather than degrading quietly.
 ## Tests
 
 ```bash
-npm test        # 186 conformance checks + 70 end-to-end checks
+npm test        # 231 conformance checks + 96 end-to-end checks
 ```
 
 The e2e suite installs into a scratch repository and then tries to break each

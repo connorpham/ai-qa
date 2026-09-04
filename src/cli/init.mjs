@@ -25,10 +25,34 @@ import {
 } from "./defaults.mjs";
 
 export const SURFACES = ["web", "api", "mobile", "database"];
-export const TRACKERS = ["markdown", "github", "jira"];
+export const TRACKERS = ["markdown", "github", "jira", "backlog"];
+
+/** Which environment variables each tracker needs, mirroring the ENV lists in
+ * core/scripts/lib/trackers.py. Duplicated in two languages on purpose — the
+ * wizard must name them without shelling out to Python — and conformance
+ * asserts the two copies still agree, because a drifted name here sends the
+ * user hunting for a variable that is spelled differently in the gate. */
+export const TRACKER_ENV = {
+  markdown: [],
+  jira: ["JIRA_EMAIL", "JIRA_API_TOKEN"],
+  backlog: ["BACKLOG_API_KEY"],
+  github: ["GITHUB_TOKEN"],
+};
+
+/** What tracker.base_url / tracker.project mean for each provider — they are
+ * different enough that one generic prompt would get both wrong. */
+export const TRACKER_COORDS = {
+  jira: { base: "Jira site URL", baseEg: "https://acme.atlassian.net",
+          proj: "Project key", projEg: "SHOP" },
+  backlog: { base: "Backlog space URL", baseEg: "https://acme.backlog.com",
+             proj: "Project key", projEg: "SHOP" },
+  github: { base: "", baseEg: "",
+            proj: "Repository (owner/repo)", projEg: "acme/shop" },
+};
 export const AUTONOMY = ["off", "assisted", "full"];
 export const LANGUAGES = ["en", "vi"];
-const VALUE_FLAGS = ["name", "key", "language", "surfaces", "tracker", "tools", "autonomy", "url", "start"];
+const VALUE_FLAGS = ["name", "key", "language", "surfaces", "tracker", "tools", "autonomy",
+  "url", "start", "tracker-url", "tracker-project"];
 
 // ---- value validation ---------------------------------------------------------
 /** A user string as a YAML scalar that round-trips through BOTH parsers
@@ -114,6 +138,13 @@ accounts:
 
 tracker:
   provider: ${a.tracker}
+  # Non-secret coordinates live here. CREDENTIALS DO NOT: they come from the
+  # environment (${(a.trackerEnv || []).join(", ") || "none needed"}),
+  # so this file stays safe to commit. tracker.py check names any that are missing.
+  base_url: ${yamlStr(a.trackerBaseUrl, "tracker base url")}
+  project: ${yamlStr(a.trackerProject, "tracker project")}
+  # Statuses this project treats as delivered/closed. /qa reads them to tell
+  # "not delivered yet" from "claimed done" — a difference that changes the verdict.
   done_statuses: [Done, Closed, Resolved]
   review_status: 'In Review'
 
@@ -214,6 +245,20 @@ export async function gather(root, scanRes, flags) {
   // ── 4. workflow ──────────────────────────────────────────────────────────────
   if (interactive) say.step(4, total, "How work reaches you");
   a.tracker = await getChoice("tracker", "Where tickets live", TRACKERS, "markdown");
+  a.trackerEnv = TRACKER_ENV[a.tracker] || [];
+  const coords = TRACKER_COORDS[a.tracker];
+  a.trackerBaseUrl = "";
+  a.trackerProject = "";
+  if (coords) {
+    if (coords.base) {
+      a.trackerBaseUrl = await get("tracker-url", `${coords.base} (e.g. ${coords.baseEg})`, "");
+    }
+    a.trackerProject = await get("tracker-project", `${coords.proj} (e.g. ${coords.projEg})`, a.key);
+    if (interactive && a.trackerEnv.length) {
+      say.info(`credentials come from the environment: ${c.cyan(a.trackerEnv.join(", "))}`);
+      say.info(c.gray("they are never written into the config — ai-qa adds the NAMES to .env.example"));
+    }
+  }
   a.branch = detectBranch(root);
   a.autonomy = await getChoice("autonomy", "Autonomy (evidence rules never relax — this only moves who presses go)", AUTONOMY, "assisted");
 
@@ -250,7 +295,13 @@ function printSummary(a, scanRes, plan) {
   if (a.start) row("start", a.start);
   if (a.url) row("url", a.url);
   if (a.dbUrlEnv) row("database", `read-only via $${a.dbUrlEnv}`);
-  row("tracker", a.tracker);
+  row("tracker", a.tracker + (a.trackerProject ? ` · ${a.trackerProject}` : "") +
+    (a.trackerBaseUrl ? ` · ${a.trackerBaseUrl}` : ""));
+  if ((a.trackerEnv || []).length) {
+    const unset = a.trackerEnv.filter((v) => !process.env[v]);
+    row("credentials", `$${a.trackerEnv.join(", $")}` +
+      (unset.length ? c.yellow(`  (${unset.join(", ")} not set in this shell)`) : c.green("  (set)")));
+  }
   row("autonomy", a.autonomy);
   row("tools", a.tools.join(", "));
   console.log(`\n${c.bold("  Files")}\n`);
@@ -368,7 +419,7 @@ async function install(root, a, scanRes, version, flags) {
     await renderTool(tool, root, cfg, (rel, text) => guard.write(rel, text));
   }
 
-  appendRules(root, guard);
+  appendRules(root, guard, a.trackerEnv || TRACKER_ENV[a.tracker] || []);
   const manifestFile = guard.save(version);
 
   say.head("  Installed");
@@ -383,7 +434,7 @@ async function install(root, a, scanRes, version, flags) {
 }
 
 /** .gitignore and .gitattributes rules — appended, never rewritten. */
-function appendRules(root, guard) {
+function appendRules(root, guard, trackerEnv) {
   const IGNORE = [
     "",
     "# ai-qa: evidence text commits, binaries don't",
@@ -406,6 +457,19 @@ function appendRules(root, guard) {
     "docs/qa/lessons.md merge=union",
     "docs/qa/known-issues.md merge=union",
   ];
+  // Credentials: only the NAMES, only into the example file, only if absent.
+  // .env.example is committed, so a value here would be a leak by design.
+  const envVars = trackerEnv || [];
+  if (envVars.length) {
+    const abs = path.join(root, ".env.example");
+    const cur = readIfExists(abs);
+    const missing = envVars.filter((v) => !new RegExp(`^${v}=`, "m").test(cur));
+    if (missing.length) {
+      writeFile(abs, `${cur.replace(/\s*$/, "")}\n\n# ai-qa: tracker credentials — fill these in .env (never here)\n${missing.map((v) => `${v}=`).join("\n")}\n`);
+      guard.note(".env.example");
+    }
+  }
+
   for (const [file, lines, marker] of [[".gitignore", IGNORE, "# ai-qa:"], [".gitattributes", ATTRS, "# ai-qa:"]]) {
     const abs = path.join(root, file);
     const cur = readIfExists(abs);
