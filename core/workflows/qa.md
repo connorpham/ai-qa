@@ -183,7 +183,10 @@ Required shapes:
   no exploring one has spent the whole budget on what someone already thought of.
 
 **Per case, write the JOURNEY — you are a person using a product, not a script
-hitting a route.** The gate requires these by name:
+hitting a route.** Open `docs/qa/method/case-writing.md` before the first record
+and hold every field to its fifteen-second test: **TITLE, RESULT, EXPECTED and
+ACTUAL alone must tell a stranger what was checked and what happened.** The gate
+requires these by name:
 
 - **AS** — which account, which role. A verdict with no actor is untraceable.
 - **PERSONA** — which of the four people in `user-mindset.md` this case
@@ -197,13 +200,20 @@ hitting a route.** The gate requires these by name:
   not the product**: it hides a missing menu item, a wrong permission and an
   unreachable row simultaneously. Keep the deep link as a *second* path if
   useful, never the only one.
-- **STEPS** — numbered, in the order a person does them, each screenshotted.
-  **At least one step is a thing a real user does that a script would not** —
+- **STEPS** — numbered, **one action per number**, in the order a person does
+  them, each with the exact value typed and the exact label pressed, each
+  screenshotted. No verification verbs — *check*, *verify*, *confirm* belong in
+  EXPECTED. **At least one step is a thing a real user does that a script would not** —
   from `user-mindset.md`: Enter instead of Save, a double-click on the button,
   Back afterwards, a refresh right after, a paste instead of typing, the same
   record open in a second tab first, a return after the session would have
   expired. A journey with none of these has tested the route, not the product.
-- **EXPECTED** — spec-cited, and the region you will box.
+- **EXPECTED** — an **observable fact**: the number, label or state the screen
+  will show, with its citation on the line, and the region you will box. Not
+  "should", not "works" — the gate refuses an EXPECTED or ACTUAL that is only a
+  judgement word, because that is a wish, not a value. **ACTUAL** is written in
+  the same shape so the two lines read side by side; on a FAIL it carries the
+  exact wrong value and what is missing, never "failed".
 - **AFTER** — what changed: the message, the row in the list behind, and the
   value **still there after a reload** (`evidence.require_reload_check` — a save
   that dies on refresh is not a save). Write it as the answers to the four
@@ -221,7 +231,12 @@ hitting a route.** The gate requires these by name:
 **Then the fields the report is built from.** The journey is what you did; these
 are what turn a folder of prose into a row somebody can sort, count and act on:
 
-- **TITLE** — one line naming what this case checks.
+- **TITLE** — a sentence stating what the product does under a condition, from
+  the user's side: *An order of exactly 499,999 gets no discount*. It is the
+  folder name, the spreadsheet row and the report's table label — the most-read
+  line in the pack. A verb, a condition, an outcome; twelve words or fewer; no
+  "test", "check" or "verify"; no "and" (that is two cases). The folder is this
+  title in snake_case, and the two must say the same thing.
 - **KIND** — `acceptance` / `boundary` / `whole-screen` / `write-readback` /
   `exploratory`, so the suite can prove the boundary case was designed at all.
 - **HEURISTIC** — on an `exploratory` case, the one heuristic from
@@ -235,8 +250,9 @@ are what turn a folder of prose into a row somebody can sort, count and act on:
     per `docs/qa/method/severity.md`.
   - **ORIGIN** — `DEV` (the code diverges from a correct spec) or `SPEC` (the
     specification is itself wrong or missing).
-  - **FINDING** — one line describing the *defect*, not the case. The title
-    says what you checked; this says what is wrong.
+  - **FINDING** — one line describing the *defect*, not the case, readable
+    alone by a manager: `[<where>] <what is wrong> — <under what condition>`.
+    The title says what you checked; this says what is wrong.
   - **RECOMMENDATION**, optional — what to do about *this* defect. Leave it out
     and the report falls back to the recommendation you wrote for the ticket,
     labelled as ticket-wide, because advice about the ticket is not advice about
@@ -407,10 +423,16 @@ delivery comment: `claim → case → evidence file → matches spec?`
 
 ## V5b — WRITE THE REPORT
 
-`evd/<TICKET>/REPORT.md`, in `{project.language}`, black-box voice, zero jargon
-in the body — no file paths, no route names, no "oracle" (those go in the
-appendix). Bar: **a non-programmer reads it in two minutes and understands
-everything.**
+Open `docs/qa/method/report-writing.md` first. `evd/<TICKET>/REPORT.md` is
+written in `{project.language}`, in the user's words, with zero technical
+vocabulary in the body — no file paths, no route names, no case numbers in
+prose, no "oracle" (the appendix is where those live). The bar: **a product
+owner reads the first five lines on a phone and knows what to do; a
+non-programmer reads the rest in two minutes and can stop after any section
+with the truth.**
+
+Write the three summary lines **last**, once you know what you found, and write
+them so they can be pasted into a chat without the rest of the report.
 
 ```markdown
 # <TICKET> — <PASS / FAIL / PARTIAL / NEW-BUG / BLOCKED / UNCLEAR>
@@ -418,33 +440,47 @@ COMMIT: <sha the cases ran against>
 VERIFIED-AT: <ISO timestamp>
 ORACLE: <spec files cited — or "NONE: this verdict compares against nothing written">
 
-## 1. What was asked for? (told as a user)
-On <screen>, when <the user does what>, the product must <outcome> — per <source>.
+**Verdict:** <one sentence — what does or does not work, for whom, in the user's words>
+**What it means:** <the consequence for a person or for money, in one sentence>
+**Next step:** <who does what — "back to the developer with defect 1" · "ready to release" · "decision needed from <who> on <what>" · "blocked until <who> <does what>">
+
+## 1. What was asked for
+On <screen>, when <who> <does what>, the product must <outcome> — because <the rule, in plain words>.
 The developer reports it done.
 
-## 2. How I checked
-| # | What I did (account, screen, action, data) | Expected | Actual | Match? |
+## 2. What I checked
+| What I checked (the case title) | As whom | Expected | Actual | Result |
+|---|---|---|---|---|
+| <the case TITLE — never TC_n> | <role> | <the number or label> | <the number or label> | ✅ / ❌ / ⛔ |
 
-## 3. Evidence
-One line per file: path → what that file shows.
+## 3. What I found
+One block per defect, worst first — or "No defects found."
+
+**[<Where>] <what is wrong> — <under what condition>.**
+When <who> <does what>, <what happens>. It should <expected> (<the rule, in plain words>).
+<Who it hurts, and how.>
+Severity: <Blocker / Critical / Major / Minor> · Origin: <the code / the written rule> · Evidence: <case title> — <file>
 
 ## 4. Conclusion
-1-3 sentences. Requirement met or not · new findings or none · recommendation.
-Each finding adds: **Severity** (Blocker/Critical/Major/Minor — definitions in
-docs/qa/method/severity.md) and **Origin** (DEV: code diverges from the spec ·
-SPEC: the specification itself is wrong or missing).
+1–3 sentences: requirement met or not · how sure · what was not covered.
+**Recommendation:** <what to do about this ticket as a whole, one sentence>
 
-## 5. If BLOCKED — why, and what is needed
-Could not verify <what> because <reason> · Tried: <what> · To unblock: <who/what>.
+## 5. What I could not check
+"Nothing" — or: I could not check <what> because <reason>. Tried: <what>. To unblock: <who does what>.
 
 ## 6. Observations — seen, not judged
-Things noticed on the way that are not part of this verdict: a badge that did
-not update, a slow step, a label that now names the wrong thing. No severity.
-One line each, or "none".
+One line each, no severity — or "none".
 
 ## Appendix
-Verify sheet · spec citations · debate.md · remaining evidence files.
+Verify sheet · citations by file and section · debate.md · every evidence file as
+path → what it shows · the technical vocabulary kept out of the body.
 ```
+
+The gate reads the verdict word on the first line, the three `KEY:` lines and —
+on a failing verdict — the words Severity and Origin. The spreadsheet prints
+section 4 on its first sheet and reads the bold **Recommendation:** line, so
+both have to stand without the rest of the report around them. Everything else
+in the template is for the person reading it.
 
 ## V6 — THE CHALLENGER
 
@@ -485,8 +521,10 @@ Verify sheet · spec citations · debate.md · remaining evidence files.
    workbook whose severity column reads NOT DECLARED. It is generated: fix the
    pack, never the spreadsheet, or the two stop agreeing and only one of them
    has the evidence behind it.
-2. **Summarise to the user**: verdict, the V5 table, evidence paths, new
-   findings, remaining dissent.
+2. **Summarise to the user** by pasting the report's first five lines — the
+   verdict word and the three summary lines — then the section-2 table, the
+   findings, the evidence paths and any remaining dissent. If the summary needs
+   a sentence the report does not have, the report is not finished.
 3. **Comment on the ticket** once both machine gates are green, and attach the
    images — they live outside git, so the tracker is the only place they
    survive the session:
@@ -554,7 +592,14 @@ Verify sheet · spec citations · debate.md · remaining evidence files.
       product under the write gate, `ZZTEST`-marked, and cleaned up
 - [ ] Every ticket and developer claim mapped to an evidence file
 - [ ] `evd_check.py --expect-tcs <N>` green against the PLANNED count
-- [ ] Report follows the template, jargon-free body, COMMIT and VERIFIED-AT present
+- [ ] Every case record passes the fifteen-second test: TITLE is a sentence
+      about behaviour and matches the folder name, STEPS carry exact values,
+      EXPECTED and ACTUAL are observable facts in the same shape
+- [ ] Report opens with the three summary lines a product owner could paste into
+      a chat; every table row is labelled by the case title; every finding says
+      who it hurts; the body is free of jargon, file paths and case numbers;
+      "What I could not check" is present even when it says Nothing; COMMIT and
+      VERIFIED-AT present
 - [ ] Every finding carries Severity and Origin — in the failed case's own
       record (`SEVERITY:` / `ORIGIN:`), not only in the report's prose
 - [ ] `xlsx_export.py --evd evd/<TICKET> --strict` green, and the workbook

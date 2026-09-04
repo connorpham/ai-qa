@@ -115,6 +115,8 @@ for (const rel of [
   "docs/qa/method/hostile-inputs.md",
   "docs/qa/method/requirement-smells.md",
   "docs/qa/method/checklists.md",
+  "docs/qa/method/case-writing.md",
+  "docs/qa/method/report-writing.md",
   ".claude/skills/qa/SKILL.md",
   ".claude/skills/onboard/SKILL.md",
   ".cursor/rules/aiqa-qa.mdc",

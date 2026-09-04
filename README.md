@@ -227,14 +227,14 @@ each mutation turns it red. A gate that has never failed does not exist.
 
 | Gate | Refuses |
 |---|---|
-| `evd_check.py` | Missing actor, precondition, entry path, reload check, boundary case, annotation, severity, or challenger card. A case folder called `TC_2` and nothing else, a screenshot carrying another case's number, an index that no longer matches the folders. Catches "planned 5 cases, ran 1". A case with no screen is evidenced by a read-only query, a command record, or a recorded request/response pair — the artefacts this toolchain actually writes — here or in one folder per call. **23 mutations, each proven to go red.** |
+| `evd_check.py` | Missing actor, precondition, entry path, reload check, boundary case, annotation, severity, or challenger card. A case folder called `TC_2` and nothing else, a screenshot carrying another case's number, an index that no longer matches the folders. Catches "planned 5 cases, ran 1". A case with no screen is evidenced by a read-only query, a command record, or a recorded request/response pair — the artefacts this toolchain actually writes — here or in one folder per call. An `EXPECTED` or `ACTUAL` that is only a judgement word — "works as expected", "failed" — because that is a wish, not a value. **25 mutations, each proven to go red.** |
 | `evd_index.py` | Writes the case table into `evd/<TICKET>/manifest.md` from the case manifests, so `what was tested here` is answered by the folder itself — and cannot drift from it. `xlsx_export.py` reads that table for each case's one-line title. |
 | `db_verify.py` | Any write — including one hidden inside a CTE, behind a comment, or batched after a `SELECT`. **7 reads allowed, 18 writes refused.** |
 | `api_check.mjs` | Silent assertion failures; a token reaching an evidence file; an unreachable host being reported as a failure rather than as BLOCKED. Writes the command it ran and what it asserted into `cmd_verify.md`, so the case can be re-run without anyone retyping it. |
 | `annotate.py` | An "annotation" with no box and no caption — that is a copy. |
 | `tracker.py` | A credential reaching an evidence file or an error message; a missing token being reported as a failed verification rather than a blocked one. |
 | `browser.mjs` | Falling back to headless when Playwright is missing. That is a BLOCKED run with an install command. |
-| `xlsx_export.py` | A guessed severity, a citation nobody wrote, a conclusion the pack does not support, a cell of terminal escape codes that would make the workbook unopenable. **15 honesty mutations, each proven to be reported in the file itself.** |
+| `xlsx_export.py` | A guessed severity, a citation nobody wrote, a conclusion the pack does not support, a cell of terminal escape codes that would make the workbook unopenable. **16 honesty mutations, each proven to be reported in the file itself.** |
 
 **Every gate uses the same exit codes**: `0` green · `1` a real finding · `2`
 BLOCKED, the run could not start. Conflating 1 and 2 is how a laptop with no
@@ -270,6 +270,8 @@ difference between a tester and a script, and it is written down in
 | `heuristics.md` | For the exploratory case, and whenever the spec is silent | HICCUPPS consistency oracles — what the product is *inconsistent with* when nothing is written: its own other screen, its last release, its own tooltip, the law. SFDIPOT coverage, Zero-One-Many, interruptions, follow-the-data, the tours, RCRCRC. One heuristic per pack, named as `HEURISTIC:`, different each time. |
 | `checklists.md` | For the whole-screen case | The reflex checks a seasoned tester does without thinking, by feature shape — forms, lists, search, roles, money, lifecycles, dates, notifications, exports, delete, small screens. "Still behaves" becomes a list of specific looks. |
 | `red-flags.md` | When you hear yourself think "obviously…" | The excuses, and now the biases behind them — confirmation, anchoring, automation, sunk cost, the pesticide paradox, expert blindness — each paired with the part of the lane built to give it less room. |
+| `case-writing.md` | While writing each case record | The fifteen-second test: cover everything but TITLE, RESULT, EXPECTED and ACTUAL, and a stranger still knows what happened. A title that is a sentence about behaviour (*An order of exactly 499,999 gets no discount*), one action per step with the exact value typed, expected as an observable fact with its citation, actual in the same shape. Before-and-after tables for every field. |
+| `report-writing.md` | Before the first word of the report | The five lines everyone reads — the verdict word, then **Verdict / What it means / Next step**, under sixty words, pasteable into a chat. Table rows labelled by case title, never by number. Findings as four-sentence stories that say who it hurts. A jargon-to-plain table, a length budget, and the rule that "What I could not check" is present even when it says *Nothing*. |
 
 Three things this adds to the record, none of them a new gate:
 
@@ -290,6 +292,13 @@ Three things this adds to the record, none of them a new gate:
 None of it softens the oracle rule. A persona says *how* to arrive and *what to
 look at*; a heuristic says *where* to look. What is correct is still written
 down somewhere, or it is still unknown — and the report still says which.
+
+One of these is enforced, because it has been the entire content of too many
+real case records: **an `EXPECTED:` or `ACTUAL:` that is only a judgement
+word** — *works as expected*, *correctly*, *failed*, *OK* — is refused by the
+evidence gate and reported by the spreadsheet. Present is not the same as
+written. If the only thing you can put after `EXPECTED:` is "works", you do not
+yet know what the product is supposed to show.
 
 ## Rules the lane will not bend
 
@@ -348,8 +357,9 @@ src/cli/             the CLI; scan.mjs holds the readiness rubric
 src/ui/server.mjs    the browser wizard (local, single-use, no dependencies)
 core/workflows/      onboard · qa · triage · regress   (tool-neutral)
 core/doctrine/       the QA method: roles (the index), severity, evidence, test design,
-                     red flags — and the tester's mind: user-mindset, heuristics,
-                     hostile-inputs, requirement-smells, checklists
+                     red flags — the tester's mind: user-mindset, heuristics,
+                     hostile-inputs, requirement-smells, checklists — and the
+                     tester's pen: case-writing, report-writing
 core/scripts/        the gates, each with a --selftest
 core/templates/      the dossier and registries a human owns after install
 adapters/            one thin renderer per agent tool
@@ -365,7 +375,7 @@ loud BLOCKED with the install command rather than degrading quietly.
 ## Tests
 
 ```bash
-npm test        # 363 conformance checks + 114 end-to-end checks
+npm test        # 430 conformance checks + 116 end-to-end checks
 ```
 
 The e2e suite installs into a scratch repository and then tries to break each

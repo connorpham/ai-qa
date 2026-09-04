@@ -169,6 +169,13 @@ own report — it does not ride along.
 [Observations]  <seen on the way, not part of this defect — filed separately if it matters>
 ```
 
+`[Steps]` and `[Expected]` follow `docs/qa/method/case-writing.md`: one action
+per step with the exact value typed and the exact label pressed; expected as an
+observable fact — a number, a label, a state — never "works" or "should". The
+whole report follows the language rules in `docs/qa/method/report-writing.md`:
+the screen's own labels, no code vocabulary, and who it hurts written out, so
+the person who decides its priority does not have to ask.
+
 `[Suspect area]` is a courtesy, and it must be labelled as one. QA pointing at a
 file is a hint; QA insisting on a cause is QA doing the developer's job badly.
 

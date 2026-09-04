@@ -43,7 +43,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib
 
 import evdpack  # noqa: E402
 from evdpack import (SEVERITIES, SEVERITY_MEANING, ORIGINS, ORIGIN_MEANING, KINDS,  # noqa: E402
-                     KIND_MEANING, CASE_RESULTS, RESULT_MEANING, NOT_DECLARED, VERDICTS)
+                     KIND_MEANING, CASE_RESULTS, RESULT_MEANING, NOT_DECLARED, VERDICTS,
+                     VAGUE_VALUE)
 import xlsx  # noqa: E402
 from xlsx import S, N, B, Workbook, est_height  # noqa: E402
 
@@ -289,6 +290,17 @@ def declared(value, style="cell"):
     reads as "nothing to say here"; this one reads as "nobody said"."""
     text = str(value or "").strip()
     return S(text, style) if text else S(NOT_DECLARED, "muted")
+
+
+def declared_value(value, style="cell"):
+    """EXPECTED and ACTUAL cells. "works as expected" is present and says
+    nothing — the reader cannot tell what the screen was supposed to read — so
+    it prints as NOT DECLARED, exactly like a missing value, and the gap under
+    section 5 says which case wrote it. See docs/qa/method/case-writing.md."""
+    text = str(value or "").strip()
+    if text and VAGUE_VALUE.match(text):
+        return S(NOT_DECLARED, "muted")
+    return declared(text, style)
 
 
 def dash(value, style="cell_center"):
@@ -618,9 +630,9 @@ def build_cases(wb, pack, L, out_dir):
             declared(case.get("PRECONDITION")),
             declared(case.get("ENTRY")),
             declared(numbered(case.steps)),
-            declared(case.get("EXPECTED")),
+            declared_value(case.get("EXPECTED")),
             declared(req),
-            declared(actual),
+            declared_value(actual),
             S(case.result or NOT_DECLARED,
               result_style(case.result) if case.result else "muted"),
             S(case.severity, severity_style(case.severity)) if case.severity
@@ -730,7 +742,7 @@ def build_traceability(wb, pack, L, out_dir):
                 S(case.result or NOT_DECLARED,
                   result_style(case.result) if case.result else "muted"),
                 dash(defect_of.get(case.name), "cell_center"),
-                declared(case.get("EXPECTED")),
+                declared_value(case.get("EXPECTED")),
             ])
     if order:
         sh.autofilter = "{}:{}".format(xlsx.ref(head_row, 1),
@@ -748,7 +760,7 @@ def build_traceability(wb, pack, L, out_dir):
             r = sh.row([S(case.name, "mono"), declared(case.title, "bold"),
                         S(case.result or NOT_DECLARED,
                           result_style(case.result) if case.result else "muted"),
-                        declared(case.get("EXPECTED")), None, None, None],
+                        declared_value(case.get("EXPECTED")), None, None, None],
                        est_height(case.get("EXPECTED"), TR_W[3] + TR_W[4] + TR_W[5] + TR_W[6],
                                   min_pt=17.0))
             sh.merge(r, 2, r, 2)
@@ -1252,6 +1264,13 @@ def selftest():
                              and all(d.recommendation_is_ticket_wide for d in pack.defects)
                              and text[2].count("as a whole") == 2
                              and "Minor" in text[0] and "worst: Major" in text[0])),
+        ("an EXPECTED that is a judgement, not a value",
+         lambda d: _rewrite(d, "TC_1/manifest.md",
+                            lambda t: re.sub(r"(?m)^EXPECTED:.*$", "EXPECTED: works as expected", t)),
+         lambda pack, text: (any("judgement, not a value" in w for _w, w in pack.gaps)
+                             # the cases sheet prints NOT DECLARED where the wish was —
+                             # a reader must not mistake "works" for a value
+                             and NOT_DECLARED in text[1])),
         ("a BLOCKED case with no way out",
          lambda d: _rewrite(d, C3 + "/manifest.md",
                             lambda t: t.replace("RESULT: PASS", "RESULT: BLOCKED")),
