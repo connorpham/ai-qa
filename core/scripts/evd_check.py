@@ -42,6 +42,62 @@ STEP_IMAGE = re.compile(r"^\d{2}_.+\.(png|jpg|jpeg)$", re.I)
 BOXED_IMAGE = re.compile(r"_boxed\.(png|jpg|jpeg)$", re.I)
 
 
+def _dirs_of(case_dir):
+    """The case folder and its immediate subfolders. A case that makes several
+    calls keeps one folder per call, and its evidence is no less real for
+    sitting one level down."""
+    out = [case_dir]
+    try:
+        for d in sorted(os.listdir(case_dir)):
+            full = os.path.join(case_dir, d)
+            if os.path.isdir(full):
+                out.append(full)
+    except OSError:
+        pass
+    return out
+
+
+def _names(d):
+    try:
+        return set(os.listdir(d))
+    except OSError:
+        return set()
+
+
+def verification_files(case_dir):
+    """Recorded verifications this case holds, as paths relative to the case.
+
+    Three shapes count, because these are the three the lane's own tools
+    produce:
+
+      * db_verify.md   — db_verify.py, a read-only query and its real output
+      * cmd_verify.md  — a command and what came back, incl. api_check.mjs's own
+      * request.http + response.json — api_check.mjs's recorded exchange
+
+    The pair used NOT to count, so an API case built entirely out of what
+    api_check.mjs writes still went red until somebody hand-wrote a third file.
+    A gate asking for a file the toolchain does not produce teaches people that
+    the gate is wrong rather than that the evidence is missing.
+    """
+    found = []
+    for d in _dirs_of(case_dir):
+        names = _names(d)
+        for n in ("db_verify.md", "cmd_verify.md"):
+            if n in names:
+                found.append(os.path.relpath(os.path.join(d, n), case_dir))
+        if "request.http" in names and "response.json" in names:
+            found.append(os.path.relpath(os.path.join(d, "request.http"), case_dir))
+    return found
+
+
+def db_verify_files(case_dir):
+    """Read-back evidence specifically — a recorded query against the database.
+    A request/response pair does NOT count here: the interface reporting
+    "saved" is a claim about the interface, not about the data."""
+    return [os.path.relpath(os.path.join(d, "db_verify.md"), case_dir)
+            for d in _dirs_of(case_dir) if "db_verify.md" in _names(d)]
+
+
 class Result:
     def __init__(self):
         self.errors = []
@@ -138,11 +194,10 @@ def check_case(case_dir, res, opts):
     boxed = [i for i in images if BOXED_IMAGE.search(i)]
 
     if non_ui:
-        has_verify = any(os.path.exists(os.path.join(case_dir, n))
-                         for n in ("db_verify.md", "cmd_verify.md"))
-        if not has_verify:
-            res.err(name, "TYPE: NON-UI needs db_verify.md or cmd_verify.md — no images and no "
-                          "verification file is not verification")
+        if not verification_files(case_dir):
+            res.err(name, "TYPE: NON-UI needs a recorded verification — db_verify.md, cmd_verify.md, "
+                          "or a request.http + response.json pair — here or in one of this case's "
+                          "folders. No images and no recorded run is not verification")
     else:
         if not step_shots:
             res.err(name, "no step screenshots named NN_<what>.png — filenames are the first "
@@ -152,7 +207,7 @@ def check_case(case_dir, res, opts):
                           "which pixels carried the verdict")
 
     if opts["require_db_verify"] and kind == "write-readback":
-        if not os.path.exists(os.path.join(case_dir, "db_verify.md")):
+        if not db_verify_files(case_dir):
             res.err(name, "KIND: write-readback with no db_verify.md — the interface saying "
                           "'Saved' is a claim about the interface, not about the data")
     return kind
@@ -399,6 +454,46 @@ def selftest():
     with open(os.path.join(d, "TC_1", "db_verify.md"), "w", encoding="utf-8") as fh:
         fh.write("SELECT total FROM orders WHERE id=4102;\n-> 450000\n")
     expect(run(d, None, DEFAULT_OPTS).ok, "a non-UI case with db_verify.md should pass")
+
+    # 5. the pair api_check.mjs writes IS a recorded verification — at the case
+    #    root and one folder down, which is how a case with several calls keeps
+    #    them. This gate used to demand a file the toolchain never produced.
+    def _api_case(root, where):
+        case = os.path.join(root, "TC_1")
+        _rewrite(root, "TC_1/manifest.md",
+                 lambda t: t.replace("KIND: acceptance", "KIND: acceptance\nTYPE: NON-UI"))
+        for f in os.listdir(case):
+            if f.lower().endswith(".png"):
+                os.remove(os.path.join(case, f))
+        target = case if where == "root" else os.path.join(case, "call_1")
+        os.makedirs(target, exist_ok=True)
+        with open(os.path.join(target, "request.http"), "w", encoding="utf-8") as fh:
+            fh.write("POST http://127.0.0.1:4310/orders\ncontent-type: application/json\n\n{}\n")
+        with open(os.path.join(target, "response.json"), "w", encoding="utf-8") as fh:
+            fh.write('{"status": 201, "body": {"discount": 50000}}\n')
+        return target
+
+    for where in ("root", "subfolder"):
+        d = fresh("api_{}".format(where))
+        _api_case(d, where)
+        expect(run(d, None, DEFAULT_OPTS).ok,
+               "a non-UI case whose evidence is request.http + response.json in the {} "
+               "should pass".format(where))
+
+    # …and the new rule must still be able to go red: half a pair is not a pair.
+    d = fresh("api_half")
+    target = _api_case(d, "root")
+    os.remove(os.path.join(target, "response.json"))
+    expect(not run(d, None, DEFAULT_OPTS).ok,
+           "a request with no recorded response was accepted as verification")
+
+    # A write must still be read back out of the DATABASE. An exchange with the
+    # product is the claim being checked, not the check.
+    d = fresh("api_readback")
+    _api_case(d, "root")
+    _rewrite(d, "TC_1/manifest.md", lambda t: t.replace("KIND: acceptance", "KIND: write-readback"))
+    expect(not run(d, None, DEFAULT_OPTS).ok,
+           "a write-readback case was satisfied by a request/response pair instead of a read-back")
 
     shutil.rmtree(tmp, ignore_errors=True)
     if fails:

@@ -125,12 +125,14 @@ function workflows() {
   });
 }
 
-/** Render every workflow for one tool into the target repo. `write(rel, text)`
- * lets init/update route output through the manifest guard. */
-export async function renderTool(tool, root, cfg, write = (rel, text) => writeFile(path.join(root, rel), text), opts = {}) {
+/** Render every workflow for one tool WITHOUT writing anything, as
+ * `{ rel, text }` entries. Pure by design: init and update fold these into the
+ * same file plan as the gates, so the count they promise is the count they
+ * write, and a `--dry-run` can preview them without touching the disk. */
+export async function planWorkflows(tool, root, cfg) {
   const adapter = await loadAdapter(tool);
   const ctx = { root, cfg, noSubagentNote: NO_SUBAGENT_NOTE };
-  const written = [];
+  const out = [];
   for (const raw of workflows()) {
     const name = raw.meta.name;
     const needsEnv = name === "qa" || name === "regress" || name === "triage";
@@ -141,15 +143,32 @@ export async function renderTool(tool, root, cfg, write = (rel, text) => writeFi
       body: surfaceBlock(cfg) + (needsEnv ? envBlock(cfg) : "") +
             filterSurfaces(render(raw.body, cfg), Array.isArray(cfg?.surfaces) ? cfg.surfaces : ["web"]),
     };
+    const rendered = adapter.render(wf, ctx);
+    out.push({ name, rel: rendered.path, text: rendered.text });
+  }
+  return out;
+}
+
+/** Discovery pointers — they MERGE into files a human also owns (AGENTS.md and
+ * friends), so they are applied separately from the planned files and skipped
+ * entirely on a dry run rather than trusted to behave. */
+export async function applyPointers(tool, root, cfg) {
+  const adapter = await loadAdapter(tool);
+  if (!adapter.pointers) return [];
+  return adapter.pointers(root, cfg) || [];
+}
+
+/** Render every workflow for one tool into the target repo. `write(rel, text)`
+ * lets init/update route output through the manifest guard. */
+export async function renderTool(tool, root, cfg, write = (rel, text) => writeFile(path.join(root, rel), text), opts = {}) {
+  const written = [];
+  // onWorkflow fires immediately before that workflow's write, so a caller can
+  // key the output by workflow name — conformance relies on the interleaving.
+  for (const { name, rel, text } of await planWorkflows(tool, root, cfg)) {
     if (opts.onWorkflow) opts.onWorkflow(name);
-    const out = adapter.render(wf, ctx);
-    write(out.path, out.text);
-    written.push(out.path);
+    write(rel, text);
+    written.push(rel);
   }
-  // Pointers write directly (they merge into a file the user also owns), so a
-  // dry run must skip them entirely rather than trusting them to behave.
-  if (adapter.pointers && !opts.dryRun) {
-    for (const p of adapter.pointers(root, cfg)) written.push(p);
-  }
+  if (!opts.dryRun) written.push(...await applyPointers(tool, root, cfg));
   return written;
 }

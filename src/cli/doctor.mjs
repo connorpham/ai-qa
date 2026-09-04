@@ -107,9 +107,20 @@ export async function doctor(flags) {
     record(man.missing.length ? "red" : "green",
       `installed files intact (${man.total} tracked)`,
       man.missing.length ? `missing:\n${man.missing.slice(0, 5).map((f) => `  ${f}`).join("\n")}\nrun: ai-qa update` : "");
-    if (man.drifted.length) {
-      record("amber", `${man.drifted.length} file(s) edited by you`,
-        `${man.drifted.slice(0, 5).join(", ")}\nupdate will leave these alone — that is deliberate`);
+    // A gate script you edited is a different fact from a document you edited,
+    // and lumping them together is how a gate that can no longer fail gets
+    // reported as a tidy personal preference.
+    const driftedGates = man.drifted.filter((f) => f.startsWith(".ai-qa/scripts/"));
+    const driftedDocs = man.drifted.filter((f) => !f.startsWith(".ai-qa/scripts/"));
+    if (driftedDocs.length) {
+      record("amber", `${driftedDocs.length} file(s) edited by you`,
+        `${driftedDocs.slice(0, 5).join(", ")}\nupdate will leave these alone — that is deliberate`);
+    }
+    if (driftedGates.length) {
+      record("amber", `${driftedGates.length} gate script(s) edited by you`,
+        `${driftedGates.slice(0, 5).join(", ")}\na gate proves itself with its own --selftest, so a gate you have changed\n` +
+        "cannot certify itself: the rows below are marked UNPROVEN, not green.\n" +
+        "to take ours back: delete the file and run ai-qa update");
     }
   }
 
@@ -121,11 +132,37 @@ export async function doctor(flags) {
   record(pil.ok ? "green" : "amber", "Pillow (image annotation)", pil.ok ? "" : "pip install pillow — without it, screenshots cannot be boxed or captioned");
   const pw = runCmd(root, "node .ai-qa/scripts/browser.mjs check");
   const wantsBrowser = Array.isArray(surfaces) && surfaces.includes("web");
-  record(pw.ok ? "green" : wantsBrowser ? "amber" : "green", "Playwright (browser runs)",
+  // Not needed is a fine answer; "✓ Playwright (browser runs)" next to a
+  // machine that has no Playwright is not. The row says which it is.
+  record(pw.ok ? "green" : wantsBrowser ? "amber" : "green",
+    pw.ok ? "Playwright (browser runs)"
+      : "Playwright not installed" + (wantsBrowser ? " — the web surface needs it" : " (not needed: no web surface)"),
     pw.ok ? "" : "npm install --no-save playwright && npx playwright install chromium");
 
   // ---- 4. the gates must be able to fail ------------------------------------
   say.head("  Gates — can each one still go red?");
+  // A gate certifies itself with its own --selftest, which is exactly why an
+  // edited gate cannot: neutering the check also neuters the proof. So a gate
+  // whose script has drifted from what we shipped is reported UNPROVEN rather
+  // than green. Amber, not red: editing an installed gate is a supported thing
+  // to do, and a supported choice should not break anyone's build — it should
+  // just stop being counted as evidence.
+  const driftedNow = new Set(man.drifted || []);
+  const editedScriptsIn = (cmd) => [...String(cmd).matchAll(/\.ai-qa\/scripts\/[A-Za-z0-9_./-]+/g)]
+    .map((m) => m[0]).filter((f) => driftedNow.has(f));
+  const recordGate = (id, proves, r, cmd) => {
+    const edited = editedScriptsIn(cmd);
+    if (!r.ok) {
+      record("red", `${id} — ${proves}`,
+        r.timedOut ? "timed out after 120s" : r.out.split("\n").slice(0, 6).join("\n"));
+    } else if (edited.length) {
+      record("amber", `${id} — UNPROVEN: you have edited ${edited.join(", ")}`,
+        "its selftest passed, but a gate you changed cannot vouch for itself.\n" +
+        "to take ours back: delete the file and re-run ai-qa update");
+    } else {
+      record("green", `${id} — ${proves}`, "");
+    }
+  };
   const seen = new Set();
   const list = Array.isArray(surfaces) ? surfaces : [surfaces].filter(Boolean);
   for (const s of list.length ? list : ["web"]) {
@@ -137,17 +174,16 @@ export async function doctor(flags) {
       if (!g.run || seen.has(g.run)) continue;
       seen.add(g.run);
       const r = runCmd(root, g.run);
-      record(r.ok ? "green" : "red", `${g.id} — ${g.proves || "selftest"}`,
-        r.ok ? "" : (r.timedOut ? "timed out after 120s" : r.out.split("\n").slice(0, 5).join("\n")));
+      recordGate(g.id, g.proves || "selftest", r, g.run);
     }
   }
   // The tracker is not surface-specific — every install reads tickets from
   // somewhere — so it is checked here rather than from a profile.
   {
-    const r = runCmd(root, "python3 .ai-qa/scripts/tracker.py --selftest");
+    const cmd = "python3 .ai-qa/scripts/tracker.py --selftest";
+    const r = runCmd(root, cmd);
     seen.add("tracker");
-    record(r.ok ? "green" : "red", "tracker — reads Jira/Backlog, and never writes a secret",
-      r.ok ? "" : (r.timedOut ? "timed out after 120s" : r.out.split("\n").slice(0, 6).join("\n")));
+    recordGate("tracker", "reads Jira/Backlog, and never writes a secret", r, cmd);
   }
 
   if (!seen.size) record("red", "gate selftests", "no gate ran a selftest — nothing here is proven to work");

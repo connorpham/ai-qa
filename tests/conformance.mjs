@@ -204,6 +204,93 @@ for (const [label, cmd, args] of [
   check(r.status === 0, `${label} selftest failed:\n${(r.stdout || "") + (r.stderr || "")}`);
 }
 
+// ---- the tools and the gate must agree ---------------------------------------
+// `doctor` already checks that the Node and Python config readers agree. This
+// is the same class of failure one step further out: a case built ONLY from
+// what the lane's own recorder writes must satisfy the lane's own evidence
+// gate. It did not — the gate wanted a file api_check.mjs never produced — and
+// nothing in the suite could see it, because each side passed its own selftest.
+{
+  const http = await import("node:http");
+  const { spawn } = await import("node:child_process");
+  // spawnSync would deadlock here: it blocks THIS process's event loop, so the
+  // fixture server below could never answer the request the child makes.
+  const run = (cmd, args) => new Promise((resolve) => {
+    const p = spawn(cmd, args, { encoding: "utf8" });
+    let out = "";
+    p.stdout.on("data", (d) => { out += d; });
+    p.stderr.on("data", (d) => { out += d; });
+    p.on("close", (status) => resolve({ status, out }));
+  });
+  const server = http.createServer((req, res) => {
+    res.writeHead(201, { "content-type": "application/json" });
+    res.end(JSON.stringify({ id: 7, subtotal: 500000, discount: 50000, total: 450000 }));
+  });
+  await new Promise((r) => server.listen(0, "127.0.0.1", r));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const evd = fs.mkdtempSync(path.join(process.env.TMPDIR || "/tmp", "aiqa-conf-evd-"));
+  try {
+    const CASE = (kind) => [
+      "RESULT: PASS", `KIND: ${kind}`, "TYPE: NON-UI",
+      "AS: customer 1 (tier gold)",
+      "PRECONDITION: customer 1 exists, resolved read-only before the call",
+      "ENTRY: the ordering call a customer's checkout makes",
+      "STEPS: 1. place an order of 500,000  2. read the priced order back",
+      "EXPECTED: discount 50,000 (spec 3.2 R1)",
+      "ACTUAL: discount 50,000", "",
+    ].join("\n");
+    for (const [dir, kind] of [["TC_1", "acceptance"], ["TC_2", "boundary"], ["TC_3", "whole-screen"]]) {
+      const caseDir = path.join(evd, dir);
+      fs.mkdirSync(caseDir, { recursive: true });
+      fs.writeFileSync(path.join(caseDir, "manifest.md"), CASE(kind));
+      // The ONLY evidence in this case is whatever api_check.mjs decides to write.
+      const r2 = await run("node", [path.join(pkgRoot, "core/scripts/api_check.mjs"),
+        "POST", "/orders", "--base", base, "--out", caseDir,
+        "--expect-status", "201", "--expect", "discount=50000"]);
+      check(r2.status === 0, `api_check failed while building the pack: ${r2.out}`);
+    }
+    fs.writeFileSync(path.join(evd, "manifest.md"), "# SHOP-1\nWhat was checked, in plain language.\n");
+    fs.writeFileSync(path.join(evd, "verifysheet.md"), "EXPECTED per spec 3.2 R1\n");
+    fs.writeFileSync(path.join(evd, "debate.md"), "my card\nchallenger card\nresolution\n");
+    fs.writeFileSync(path.join(evd, "REPORT.md"), [
+      "# SHOP-1 — PASS", "COMMIT: abc1234", "VERIFIED-AT: 2026-09-04T00:00:00Z",
+      "ORACLE: docs/spec/discounts.md 3.2", "", "## 4. Conclusion", "The requirement is met.", "",
+    ].join("\n"));
+
+    const gateCmd = [path.join(pkgRoot, "core/scripts/evd_check.py"), "--evd", evd, "--expect-tcs", "3"];
+    const gate = await run("python3", gateCmd);
+    check(gate.status === 0,
+      "the evidence gate rejects a pack built only from what api_check.mjs writes — " +
+      `the recorder and the gate disagree:\n${gate.out}`);
+
+    // Now take away the command record and leave ONLY the recorded exchange.
+    // This is the half of the contract that belongs to the gate: an API case is
+    // evidenced by its request and its response, whoever wrote them. Without
+    // this line the check above would pass on api_check.mjs's new file alone
+    // and prove nothing about the gate.
+    fs.rmSync(path.join(evd, "TC_2", "cmd_verify.md"));
+    const pairOnly = await run("python3", gateCmd);
+    check(pairOnly.status === 0,
+      "a NON-UI case evidenced by request.http + response.json alone was rejected — " +
+      `the gate is asking for a file no recorder has to produce:\n${pairOnly.out}`);
+
+    // …and the rule must still be able to go red: half a pair is not a pair.
+    fs.rmSync(path.join(evd, "TC_2", "response.json"));
+    const halfPair = await run("python3", gateCmd);
+    check(halfPair.status !== 0,
+      "a request with no recorded response was accepted as a verification");
+    for (const f of ["request.http", "response.json", "cmd_verify.md"]) {
+      check(fs.existsSync(path.join(evd, "TC_1", f)), `api_check.mjs did not write ${f}`);
+    }
+    const rec = fs.readFileSync(path.join(evd, "TC_1", "cmd_verify.md"), "utf8");
+    check(rec.includes("api_check.mjs POST /orders"),
+      "the command record does not name the command that produced the evidence");
+  } finally {
+    server.close();
+    fs.rmSync(evd, { recursive: true, force: true });
+  }
+}
+
 
 // ---- the browser wizard renders without a browser ----------------------------
 // The page is a string builder, so it can be checked here rather than only by

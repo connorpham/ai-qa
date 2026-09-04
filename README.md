@@ -127,7 +127,24 @@ secrets, so they live in the committed config where a reviewer can see them.
 Credentials only ever come from the environment; `init` adds their **names** to
 `.env.example`, and `.env` itself is in `.gitignore`.
 
-Three properties the selftest proves against a live local server, not a mock:
+A `markdown` ticket is a file with the title on the first line and a block of
+`Key: value` lines under it — `Status`, `Assignee`, `Reporter`, `Type`,
+`Labels`. Blank lines inside that block are fine; the block ends at the first
+line of prose, and a `Status:` further down the file is prose, not a field. If
+one is found there, the readiness note says so rather than reporting the ticket
+as having no status:
+
+```markdown
+# Apply the gold-tier loyalty discount at checkout
+
+Status: Ready for QA
+Assignee: dev-nguyen
+
+## Acceptance criteria
+…
+```
+
+Four properties the selftest proves against a live local server, not a mock:
 
 - **A secret never reaches disk or a log.** Backlog authenticates with
   `?apiKey=` in the query string, so every URL that could be printed goes
@@ -138,6 +155,10 @@ Three properties the selftest proves against a live local server, not a mock:
   report.
 - **Jira's ADF descriptions are flattened to text.** A verify sheet quoting
   `{'type': 'doc', ...}` is a verification working from garbage.
+- **A field the file declares is read.** A blank line under the title used to
+  end the header block, so a ticket marked `Status: Ready for QA` came back with
+  no status — and `/qa` then called it `BLOCKED (not delivered)`. The fixture
+  now includes the blank line, because that is how everyone writes markdown.
 
 The fetched ticket is written with a banner saying it is **data, not the
 oracle**, plus an honest readiness note: whether it carries acceptance criteria
@@ -153,16 +174,29 @@ each mutation turns it red. A gate that has never failed does not exist.
 
 | Gate | Refuses |
 |---|---|
-| `evd_check.py` | Missing actor, precondition, entry path, reload check, boundary case, annotation, severity, or challenger card. Catches "planned 5 cases, ran 1". **20 mutations, each proven to go red.** |
+| `evd_check.py` | Missing actor, precondition, entry path, reload check, boundary case, annotation, severity, or challenger card. Catches "planned 5 cases, ran 1". A case with no screen is evidenced by a read-only query, a command record, or a recorded request/response pair — the artefacts this toolchain actually writes — here or in one folder per call. **20 mutations, each proven to go red.** |
 | `db_verify.py` | Any write — including one hidden inside a CTE, behind a comment, or batched after a `SELECT`. **7 reads allowed, 18 writes refused.** |
-| `api_check.mjs` | Silent assertion failures; a token reaching an evidence file; an unreachable host being reported as a failure rather than as BLOCKED. |
+| `api_check.mjs` | Silent assertion failures; a token reaching an evidence file; an unreachable host being reported as a failure rather than as BLOCKED. Writes the command it ran and what it asserted into `cmd_verify.md`, so the case can be re-run without anyone retyping it. |
 | `annotate.py` | An "annotation" with no box and no caption — that is a copy. |
 | `tracker.py` | A credential reaching an evidence file or an error message; a missing token being reported as a failed verification rather than a blocked one. |
 | `browser.mjs` | Falling back to headless when Playwright is missing. That is a BLOCKED run with an install command. |
 
+**Every gate uses the same exit codes**: `0` green · `1` a real finding · `2`
+BLOCKED, the run could not start. Conflating 1 and 2 is how a laptop with no
+browser installed gets reported as a broken product, so conformance checks that
+the tools agree on it.
+
 `ai-qa doctor` runs all of them, checks file integrity against the manifest, and
 verifies that the Node and Python config readers agree — because if they drift,
 the gates read a different config than the CLI wrote.
+
+Two things doctor will not do: call a runtime present when it is absent (a
+missing Playwright on a repo with no web surface reads *"Playwright not
+installed (not needed: no web surface)"*, not a green tick), and count an
+edited gate as proof. A gate certifies itself with its own `--selftest`, so a
+gate script whose hash has drifted from what we shipped is reported
+**UNPROVEN** rather than green — amber, not red, because editing an installed
+gate is allowed; it just stops being evidence.
 
 ## Rules the lane will not bend
 
@@ -189,7 +223,7 @@ and an unchosen surface is not installed.
 
 - **web** — headed browser, journey scripts kept as re-runnable evidence, boxed screenshots
 - **api** — request and response recorded as files; the body is checked, not just the status
-- **database** — read-only verification, migrations proven on a clean database, tests proven able to red
+- **database** — read-only verification, migrations proven on a clean database, tests proven able to red. The connection string comes from the env var named by `database.url_env`; `postgres://`, `mysql://` and sqlite are supported, and a sqlite path may be relative (`sqlite://data/shop.db`) or absolute (`sqlite:///var/db/shop.db`, `sqlite:////var/db/shop.db`, or a bare `/var/db/shop.db`)
 - **mobile** — device/emulator gating and evidence rules. *Honest scope: it gates the environment and the evidence; your project's Appium or Maestro setup does the driving.*
 
 ## Agent tools
@@ -234,13 +268,20 @@ loud BLOCKED with the install command rather than degrading quietly.
 ## Tests
 
 ```bash
-npm test        # 231 conformance checks + 96 end-to-end checks
+npm test        # 241 conformance checks + 108 end-to-end checks
 ```
 
 The e2e suite installs into a scratch repository and then tries to break each
 promise: that `--dry-run` writes nothing, that `update` protects a file you
-edited, that `doctor` goes red when a gate goes missing, and that a repo with
+edited, that `doctor` goes red when a gate goes missing, that the file count
+`init` prints matches what the repository actually gained, and that a repo with
 nothing detectable records empty values instead of guessing.
+
+Conformance covers the contracts *between* the pieces, which is where the
+quiet failures live: the Node and Python config parsers agreeing, every
+adapter's workflow being discoverable by its tool — and an evidence pack built
+only from what the lane's own recorder writes being accepted by the lane's own
+gate. That last one was broken while both sides passed their own selftest.
 
 ## Licence
 

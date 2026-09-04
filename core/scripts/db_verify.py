@@ -23,6 +23,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib"))
@@ -117,6 +118,31 @@ def connection_url():
     return var, url
 
 
+def sqlite_path(url):
+    """The filesystem path inside a sqlite connection string.
+
+    The scheme carries the path in several shapes, and only the first is
+    relative:
+
+        sqlite://data/shop.db    -> data/shop.db     (relative to the cwd)
+        sqlite:///abs/shop.db    -> /abs/shop.db     (absolute, three slashes)
+        sqlite:////abs/shop.db   -> /abs/shop.db     (absolute, four slashes)
+        /abs/shop.db             -> /abs/shop.db     (a bare path, no scheme)
+
+    Stripping every leading slash turned all three absolute forms into relative
+    ones, so a connection string naming a real file could not open it — and
+    sqlite's answer ("unable to open database file") reads like a permissions
+    problem rather than a parsing one. Exporting an absolute path is the normal
+    way to write one, so this was every scheduled run's first surprise.
+    """
+    if not url.startswith("sqlite://"):
+        return url                       # a bare filesystem path
+    rest = url[len("sqlite://"):]
+    if rest.startswith("//"):            # sqlite:////abs/x -> //abs/x -> /abs/x
+        return rest[1:]
+    return rest or url
+
+
 def client_for(url):
     """Pick a command-line client from the URL scheme. Using the standard client
     keeps the recorded command reproducible by a human — they can paste it."""
@@ -125,7 +151,7 @@ def client_for(url):
     if url.startswith(("mysql://", "mariadb://")):
         return ("mysql", lambda stmt: ["mysql", "--table", "-e", stmt, url])
     if url.startswith("sqlite://") or url.endswith((".db", ".sqlite", ".sqlite3")):
-        pathpart = url.replace("sqlite://", "").lstrip("/") or url
+        pathpart = sqlite_path(url)
         return ("sqlite3", lambda stmt: ["sqlite3", "-header", "-column", pathpart, stmt])
     return (None, None)
 
@@ -222,12 +248,40 @@ def selftest():
         except Rejected:
             pass
 
+    # A connection string that names a real file must be able to open it. Every
+    # absolute form used to be mangled into a relative path, which turned a
+    # correct setup into a BLOCKED database surface.
+    for url, want in (
+        ("sqlite://data/shop.db", "data/shop.db"),
+        ("sqlite:///var/tmp/shop.db", "/var/tmp/shop.db"),
+        ("sqlite:////var/tmp/shop.db", "/var/tmp/shop.db"),
+        ("/var/tmp/shop.db", "/var/tmp/shop.db"),
+    ):
+        got = sqlite_path(url)
+        if got != want:
+            fails.append("sqlite path: {!r} became {!r}, expected {!r}".format(url, got, want))
+
+    # …and prove it against a real file, not only against the parser.
+    if shutil.which("sqlite3"):
+        tmp = tempfile.mkdtemp(prefix="aiqa-db-")
+        try:
+            abs_db = os.path.join(tmp, "probe.db")
+            subprocess.run(["sqlite3", abs_db, "CREATE TABLE t (n INTEGER); INSERT INTO t VALUES (7);"],
+                           capture_output=True, text=True)
+            for url in ("sqlite://" + abs_db, abs_db):
+                out, err = run_query("SELECT n FROM t", url)
+                if err or not out or "7" not in out:
+                    fails.append("absolute sqlite path {!r} could not be read: {}".format(url, err or out))
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
     if fails:
         print("db_verify --selftest FAILED")
         for f in fails:
             print("  x {}".format(f))
         return 1
-    print("db_verify --selftest passed  ({} reads allowed, {} writes refused)".format(len(GREEN), len(RED)))
+    print("db_verify --selftest passed  ({} reads allowed, {} writes refused, "
+          "absolute and relative sqlite paths both open)".format(len(GREEN), len(RED)))
     return 0
 
 

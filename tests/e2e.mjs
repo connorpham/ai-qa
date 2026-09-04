@@ -75,6 +75,24 @@ const initRes = run(repo, ["init", "--yes", "--key", "SHOP", "--language", "en",
   "--surfaces", "web,database", "--tools", "claude-code,cursor", "--tracker", "github"]);
 check(initRes.status === 0, `init exited ${initRes.status}:\n${initRes.stdout}\n${initRes.stderr}`);
 
+// The two numbers init prints must agree with each other AND with the repo.
+// They used to disagree three ways: the summary counted the plan and the seeds
+// but not the rendered workflows, the result counted the plan and the workflows
+// but not the seeds, and neither counted the ignore rules or the manifest — so
+// "23 files" then "22 files written" described an install that created 30.
+{
+  const planned = /^\s+(\d+) files —/m.exec(initRes.stdout);
+  const written = /(\d+) files written/.exec(initRes.stdout);
+  check(!!planned, "the install summary did not say how many files it would write");
+  check(!!written, "init did not report how many files it wrote");
+  const st = spawnSync("git", ["status", "--porcelain", "-uall"], { cwd: repo, encoding: "utf8" });
+  const touched = st.stdout.split("\n").filter((l) => l.trim()).length;
+  check(!!written && Number(written[1]) === touched,
+    `init reported ${written && written[1]} files written; the repo shows ${touched} created or modified`);
+  check(!!planned && !!written && planned[1] === written[1],
+    `the summary promised ${planned && planned[1]} files and the install reported ${written && written[1]}`);
+}
+
 const exists = (rel) => fs.existsSync(path.join(repo, rel));
 for (const rel of [
   "aiqa.config.yaml",

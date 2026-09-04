@@ -9,8 +9,8 @@ import path from "node:path";
 import { gitRoot, writeIfAbsent, say, c, fail } from "./util.mjs";
 import { CONFIG_NAME, configPath, loadConfig, get } from "./config.mjs";
 import { ManifestGuard } from "./manifest.mjs";
-import { renderTool, TOOLS, adapterMarker } from "./adapters.mjs";
-import { buildPlan, TRACKER_ENV } from "./init.mjs";
+import { applyPointers, TOOLS, adapterMarker } from "./adapters.mjs";
+import { buildPlan, renderCfg, TRACKER_ENV } from "./init.mjs";
 
 /** Which agent tools are already installed here, by looking for each adapter's
  * marker file. Re-rendering only what exists means `update` never installs a
@@ -62,7 +62,8 @@ export async function update(flags) {
 
   const dry = !!flags["dry-run"];
   const tools = await installedTools(root);
-  const { plan, seeds } = await buildPlan(root, a, pkg.version);
+  // The workflows are part of the plan, rendered for the tools already here.
+  const { plan, seeds } = await buildPlan(root, a, pkg.version, tools);
   const guard = new ManifestGuard(root, "update", { dryRun: dry });
 
   // The config is in the plan (init writes it); drop it so an update never
@@ -79,14 +80,8 @@ export async function update(flags) {
     guard.written.push(rel);
   }
 
-  const cfgForRender = {
-    project: { name: a.name, key: a.key, language: a.language },
-    app: { url: a.url, start: a.start }, surfaces: a.surfaces,
-    tracker: { provider: a.tracker }, autonomy: { level: a.autonomy },
-  };
-  for (const tool of tools) {
-    await renderTool(tool, root, cfgForRender, (rel, text) => guard.write(rel, text), { dryRun: dry });
-  }
+  // Pointers merge into files a human owns, so they are never part of a dry run.
+  if (!dry) for (const tool of tools) await applyPointers(tool, root, renderCfg(a));
 
   if (dry) {
     say.head("  Dry run — nothing was written");

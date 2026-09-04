@@ -119,7 +119,12 @@ def render(ticket, cfg):
                      "specification, since a ticket can state a criterion the spec contradicts.")
 
     status = (t["status"] or "").strip()
-    if not status:
+    if not status and "Status" in (t.get("stray_fields") or []):
+        notes.append("**No status in the header.** This file does have a `Status:` line, but it sits "
+                     "below the ticket's first paragraph, where it is prose rather than a field — "
+                     "move it up under the title (blank lines above it are fine) and re-read the "
+                     "ticket. Until then, confirm by hand that the work is actually delivered.")
+    elif not status:
         notes.append("**No status.** Confirm the work is actually delivered before verifying it.")
     elif status.lower() in [d.lower() for d in done]:
         notes.append("Status is **{}** — already closed. Confirm whether a re-verification is wanted.".format(status))
@@ -473,6 +478,29 @@ def selftest():
             fails.append("markdown: a missing file did not raise NotFound")
         except NotFound:
             pass
+
+        # The same ticket with a blank line under the title — which is how
+        # everybody writes markdown. The header block must survive it, or a
+        # ticket marked "Ready for QA" reads as never delivered.
+        with open(os.path.join(tdir, "SHOP-2.md"), "w", encoding="utf-8") as fh:
+            fh.write("# Add a discount field\n\nStatus: In Review\nAssignee: Mai\n\n"
+                     "Acceptance criteria\n- AC1 the discount applies\n")
+        t2 = m.get("SHOP-2")
+        expect(t2["status"] == "In Review",
+               "markdown: a blank line under the title dropped the Status header")
+        expect(t2["title"] == "Add a discount field", "markdown: title lost after a blank line")
+        expect("Status:" not in t2["description"], "markdown: header lines leaked into the body")
+
+        # A header-shaped line further down is NOT a field — but the reader is
+        # told it is there, instead of being told there is no status at all.
+        with open(os.path.join(tdir, "SHOP-3.md"), "w", encoding="utf-8") as fh:
+            fh.write("# Something\n\nThe orders page is wrong.\n\nStatus: In Review\n")
+        t3 = m.get("SHOP-3")
+        expect(t3["status"] == "", "markdown: a Status line inside the body was adopted as a field")
+        expect("Status" in t3["stray_fields"], "markdown: a stray Status line was not reported")
+        stray_note = render(t3, {"tracker": {"review_status": "In Review", "done_statuses": ["Done"]}})
+        expect("below the ticket's first paragraph" in stray_note,
+               "the readiness note did not explain WHY the status was not read")
 
         # ---- the readiness note must be able to say NO ------------------------
         bare = dict(tm)
