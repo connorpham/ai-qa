@@ -37,7 +37,24 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
-import { repoRoot, readIfExists, c, parseArgs } from "./util.mjs";
+import { pkgRoot, repoRoot, readIfExists, c, parseArgs } from "./util.mjs";
+
+/** How to invoke the CLI for a follow-up step, from where the reader is now.
+ *
+ * Installed as a devDependency → the bin is called `ai-qa` and the scope drops
+ * off. Arrived via `npx <scope>/ai-qa` with nothing installed → the bare name
+ * must NOT be suggested: npm reserves `ai-qa` (too close to an unrelated
+ * `aiqa`), so `npx ai-qa init` would send the reader to a package the registry
+ * refuses to serve. The scope is read from our own manifest so this string
+ * cannot drift from the name we publish under. */
+const INVOCATION = (() => {
+  if (fs.existsSync(path.join(process.cwd(), "node_modules", ".bin", "ai-qa"))) return "ai-qa";
+  try {
+    return `npx ${JSON.parse(fs.readFileSync(path.join(pkgRoot, "package.json"), "utf8")).name}`;
+  } catch {
+    return "ai-qa";
+  }
+})();
 
 const SKIP_DIRS = new Set([
   ".git", "node_modules", "dist", "build", "out", "vendor", ".venv", "venv",
@@ -437,7 +454,10 @@ export function report(res, { verbose = false } = {}) {
     console.log(`\n  ${c.yellow("⚠")} the file walk stopped at its cap — this is a large repo; point ${c.cyan("--path")} at a package.`);
   }
 
-  console.log(`\n  ${c.gray("Next:")} ${c.cyan("npx ai-qa init")} ${c.gray("installs the QA lane · a scan is read-only and changes nothing")}\n`);
+  // Print the command that will actually resolve. A reader who reached this
+  // line through `npx @scope/ai-qa scan` has nothing installed yet, so a bare
+  // `npx ai-qa init` would send them to a name npm refuses to serve.
+  console.log(`\n  ${c.gray("Next:")} ${c.cyan(`${INVOCATION} init`)} ${c.gray("installs the QA lane · a scan is read-only and changes nothing")}\n`);
 }
 
 // ---- command ------------------------------------------------------------------

@@ -63,7 +63,10 @@ Announce yourself before doing anything:
 Run the scan and read it as your own to-do list:
 
 ```bash
-npx ai-qa scan --json .ai-qa/discovery.json --verbose
+# installed here already (the usual case), so the local command is enough:
+ai-qa scan --json .ai-qa/discovery.json --verbose
+# not installed? fetch it by its published, scoped name:
+npx @connorpham6499/ai-qa scan --json .ai-qa/discovery.json --verbose
 ```
 
 The score is not the point; **the gap list is**. Every gap is a question you

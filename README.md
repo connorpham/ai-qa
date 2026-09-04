@@ -9,10 +9,14 @@ with evidence a non-programmer can read in two minutes.
 It reports defects. It never fixes them, and it never invents an expected value.
 
 ```bash
-npx ai-qa scan     # grade this repo: could a QA test it, and would their verdicts mean anything?
-npx ai-qa init     # install the QA lane (terminal wizard, or --ui for the browser)
-npx ai-qa doctor   # prove every gate still works — green doctor is the definition of installed
+npx @connorpham6499/ai-qa scan     # grade this repo: could a QA test it, and would their verdicts mean anything?
+npx @connorpham6499/ai-qa init     # install the QA lane (terminal wizard, or --ui for the browser)
+npx @connorpham6499/ai-qa doctor   # prove every gate still works — green doctor is the definition of installed
 ```
+
+The command it installs is `ai-qa`, so once it is a devDependency the scope
+drops off: `npx ai-qa scan`. The published name is scoped because npm reserves
+the bare `ai-qa` — it is too close to an unrelated `aiqa` package.
 
 Then, inside your agent: `/onboard` · `/qa` · `/triage` · `/regress`.
 
