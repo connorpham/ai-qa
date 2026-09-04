@@ -512,6 +512,8 @@ function appendRules(root, guard, trackerEnv) {
     "!evd/**/*.json",
     "# ai-qa: journey scripts are re-runnable evidence — text, so they commit",
     "!evd/**/*.mjs",
+    "# ai-qa: the .xlsx is generated from the text above in a second, and a",
+    "# spreadsheet in a diff is a spreadsheet nobody can review",
     "# ai-qa: credentials live in .env — .env never commits",
     ".env",
     "# ai-qa: machine-local snapshots",

@@ -165,6 +165,32 @@ hitting a route.** The gate requires these by name:
 - **BACK** — Back, Cancel, browser-back. Does the filter survive? Does Cancel
   actually cancel? This is where "it works" usually stops working.
 
+**Then the fields the report is built from.** The journey is what you did; these
+are what turn a folder of prose into a row somebody can sort, count and act on:
+
+- **TITLE** — one line naming what this case checks.
+- **KIND** — `acceptance` / `boundary` / `whole-screen` / `write-readback` /
+  `exploratory`, so the suite can prove the boundary case was designed at all.
+- **REQUIREMENT** — the spec ids this case checks (`3.2 R1; 3.3`). Without it
+  the traceability matrix has to guess them out of your EXPECTED prose, and a
+  citation a tool guessed at is worth exactly as much as no citation.
+- **On a case whose RESULT is FAIL, two more, and neither is optional:**
+  - **SEVERITY** — `Blocker` / `Critical` / `Major` / `Minor`, by consequence,
+    per `docs/qa/method/severity.md`.
+  - **ORIGIN** — `DEV` (the code diverges from a correct spec) or `SPEC` (the
+    specification is itself wrong or missing).
+  - **FINDING** — one line describing the *defect*, not the case. The title
+    says what you checked; this says what is wrong.
+  - **RECOMMENDATION**, optional — what to do about *this* defect. Leave it out
+    and the report falls back to the recommendation you wrote for the ticket,
+    labelled as ticket-wide, because advice about the ticket is not advice about
+    one defect among three.
+
+  Severity written only into the report's prose does not count. A sentence
+  cannot be counted, filtered or ranked, and a report naming one severity
+  cannot say which of three failed cases it grades — so that defect stays
+  ungraded, and every report built from the pack says so out loud.
+
 ## V2b — BRING THE ENVIRONMENT UP
 
 Follow the Environment block at the top of this file. Quote the `APP: UP` line
@@ -255,11 +281,13 @@ evd/<TICKET>/
 ├── verifysheet.md       # V1/V2: expected values with citations, the journeys
 ├── debate.md            # V6: your card, the challenger's card, the resolution
 ├── REPORT.md            # V5b: what a non-programmer reads
+├── <TICKET>_testcases.xlsx  # V7: the same record as a spreadsheet (generated, never edited)
 ├── data_prep/           # V3 runs, if any
 └── TC_<n>/
     ├── journey.mjs      # the run itself — re-runnable evidence
-    ├── manifest.md      # RESULT / AS / PRECONDITION / ENTRY / STEPS /
-    │                    # EXPECTED / ACTUAL / AFTER / BACK
+    ├── manifest.md      # TITLE / KIND / RESULT / AS / PRECONDITION / ENTRY /
+    │                    # STEPS / EXPECTED / REQUIREMENT / ACTUAL / AFTER /
+    │                    # BACK — plus SEVERITY / ORIGIN / FINDING when it FAILED
     ├── 01_*.png …       # named for what they show, + *_boxed.png on the verdict step
     ├── request.http     # API cases: the real request
     ├── response.json    # API cases: the real response
@@ -339,7 +367,23 @@ Verify sheet · spec citations · debate.md · remaining evidence files.
 ## V7 — REPORT AND CLOSE
 
 1. Finalise the report with the challenger's readability fixes. Re-run
-   `evd_check.py` — green.
+   `evd_check.py` — green. Then produce the spreadsheet, because most of the
+   people this verdict is for will never open a markdown file:
+
+   ```bash
+   python3 .ai-qa/scripts/xlsx_export.py --evd evd/<TICKET> --strict
+   ```
+
+   It writes `evd/<TICKET>/<TICKET>_testcases.xlsx` — the same record, nothing
+   added, laid out to ISO/IEC/IEEE 29119-3: a summary that answers *how many
+   defects and how bad is the worst one* on the first screen, the cases as a
+   test case specification, the defects as an incident report graded by
+   severity, a requirement traceability matrix, and an index of every evidence
+   file. `--strict` exits 1 while any field the report needs is still
+   undeclared, and names it. Fill those in and re-run — never hand over a
+   workbook whose severity column reads NOT DECLARED. It is generated: fix the
+   pack, never the spreadsheet, or the two stop agreeing and only one of them
+   has the evidence behind it.
 2. **Summarise to the user**: verdict, the V5 table, evidence paths, new
    findings, remaining dissent.
 3. **Comment on the ticket** once both machine gates are green, and attach the
@@ -349,7 +393,7 @@ Verify sheet · spec citations · debate.md · remaining evidence files.
    ```bash
    python3 .ai-qa/scripts/tracker.py comment <TICKET> --body-file evd/<TICKET>/REPORT.md
    python3 .ai-qa/scripts/tracker.py attach  <TICKET> evd/<TICKET>/TC_*/*_boxed.png \
-     --record evd/<TICKET>/manifest.md
+     evd/<TICKET>/<TICKET>_testcases.xlsx --record evd/<TICKET>/manifest.md
    ```
 
    `--record` writes a TRACKER ATTACHMENTS section into the manifest, so a
@@ -364,7 +408,9 @@ Verify sheet · spec citations · debate.md · remaining evidence files.
      label and a comment linking the report. Blocker/Critical findings become
      the next item, before any new ticket.
 5. **Commit the text dossier** — report, manifests, sheet, debate, db_verify.
-   Images stay out of git. A verdict that lives on one machine is not
+   Images and the `.xlsx` stay out of git: one is binary, the other is
+   regenerated from the text in a second, and a spreadsheet in a diff is a
+   spreadsheet nobody can review. A verdict that lives on one machine is not
    reproducible, and an unreproducible verdict is a fabricated one.
 6. **Clean up** the `ZZTEST` data through the product's reverse flow; record any
    residue in the manifest.
@@ -397,7 +443,10 @@ Verify sheet · spec citations · debate.md · remaining evidence files.
 - [ ] Every ticket and developer claim mapped to an evidence file
 - [ ] `evd_check.py --expect-tcs <N>` green against the PLANNED count
 - [ ] Report follows the template, jargon-free body, COMMIT and VERIFIED-AT present
-- [ ] Every finding carries Severity and Origin
+- [ ] Every finding carries Severity and Origin — in the failed case's own
+      record (`SEVERITY:` / `ORIGIN:`), not only in the report's prose
+- [ ] `xlsx_export.py --evd evd/<TICKET> --strict` green, and the workbook
+      attached to the ticket
 - [ ] `debate.md` holds both cards and a resolution; the challenger was genuinely fresh
 - [ ] Text dossier committed; images attached to the tracker
 - [ ] **Not one line of product code changed** — findings reported, never fixed
