@@ -17,8 +17,11 @@ import { gitRoot, repoRoot, readIfExists, c, say } from "./util.mjs";
 import { CONFIG_NAME, loadConfig, get } from "./config.mjs";
 import { verify } from "./manifest.mjs";
 
-function runCmd(root, cmd) {
-  const r = spawnSync(cmd, { cwd: root, shell: true, encoding: "utf8", timeout: 120_000 });
+function runCmd(root, cmd, env = {}) {
+  const r = spawnSync(cmd, {
+    cwd: root, shell: true, encoding: "utf8", timeout: 120_000,
+    env: { ...process.env, ...env },
+  });
   return {
     ok: r.status === 0,
     out: `${r.stdout || ""}${r.stderr || ""}`.trim(),
@@ -152,6 +155,10 @@ export async function doctor(flags) {
   // ---- 5. preflight (informational) -----------------------------------------
   if (!flags.quiet) {
     say.head("  Preflight  " + c.gray("(environment, not installation — never fatal)"));
+    // Surfaces share probes: web and api both want to know the app is up.
+    // Running the same command once per surface doubled the wall clock for a
+    // check whose whole job is to be quick.
+    const ranPreflight = new Set();
     {
       // Credentials are per-machine. Missing ones are worth SAYING, never worth
       // failing an install over: a laptop with no Jira token is not broken.
@@ -169,10 +176,11 @@ export async function doctor(flags) {
       const text = readIfExists(path.join(root, ".ai-qa", "profiles", String(s), "gates.yaml"));
       if (!text) continue;
       for (const g of readGates(text).preflight) {
-        if (!g.run) continue;
-        const r = runCmd(root, g.run);
+        if (!g.run || ranPreflight.has(g.run)) continue;
+        ranPreflight.add(g.run);
+        const r = runCmd(root, g.run, { AIQA_PROBE_ONLY: "1" });
         const first = r.out.split("\n")[0] || "";
-        console.log(`  ${r.ok ? c.green("✓") : c.gray("·")} ${g.id.padEnd(10)} ${c.gray(first.slice(0, 96))}`);
+        console.log(`  ${r.ok ? c.green("✓") : c.gray("·")} ${g.id.padEnd(10)} ${c.gray(first.slice(0, 140))}`);
         if (!r.ok && g.unblock) console.log(`      ${c.gray(`unblock: ${g.unblock}`)}`);
       }
     }

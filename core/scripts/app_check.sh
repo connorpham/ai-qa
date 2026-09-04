@@ -21,6 +21,12 @@ cfg() { python3 "$HERE/lib/ctx.py" "$1" 2>/dev/null || echo ""; }
 
 WAIT=0
 URL=""
+# A health check answers "is it up NOW". Only a lane bringing the app up wants
+# to wait for a boot, so doctor sets AIQA_PROBE_ONLY and the wait is capped —
+# otherwise every doctor run on a laptop with the app off costs a full minute
+# per surface that declares this probe.
+PROBE_CAP="${AIQA_PROBE_ONLY:-}"
+
 while [ $# -gt 0 ]; do
   case "$1" in
     --wait) WAIT="${2:-0}"; shift 2 ;;
@@ -28,6 +34,8 @@ while [ $# -gt 0 ]; do
     *) echo "app_check: unknown argument $1" >&2; exit 2 ;;
   esac
 done
+
+if [ -n "$PROBE_CAP" ] && [ "$WAIT" -gt 5 ] 2>/dev/null; then WAIT=5; fi
 
 if [ -z "$URL" ]; then URL="$(cd "$ROOT" 2>/dev/null && cfg app.url)"; fi
 HEALTH="$(cd "$ROOT" 2>/dev/null && cfg app.health)"
@@ -54,7 +62,10 @@ START_TS=$(date +%s)
 DEADLINE=$(( START_TS + WAIT ))
 STATUS=""
 while : ; do
-  STATUS="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "$TARGET" 2>/dev/null || echo 000)"
+  # curl already prints 000 when it never got a response, so the usual
+  # `|| echo 000` fallback concatenates and yields "000000".
+  STATUS="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "$TARGET" 2>/dev/null)"
+  STATUS="${STATUS:-000}"
   # 2xx/3xx answer, and 401/403 too: an app demanding credentials is UP.
   case "$STATUS" in
     2*|3*|401|403) break ;;
