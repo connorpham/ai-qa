@@ -1,7 +1,7 @@
 {
-  "name": "ai-qa",
+  "name": "@connorpham6499/ai-qa",
   "version": "0.1.0",
-  "description": "An AI QA engineer you can drop into any codebase. It onboards like a new hire — works out what it needs to know, says what is missing — then verifies tickets against the spec with evidence a non-programmer can read.",
+  "description": "An AI QA engineer you can drop into any codebase. It onboards like a new hire \u2014 works out what it needs to know, says what is missing \u2014 then verifies tickets against the spec with evidence a non-programmer can read.",
   "license": "MIT",
   "type": "module",
   "bin": {
@@ -19,6 +19,7 @@
     "node": ">=20"
   },
   "scripts": {
+    "prepublishOnly": "npm test",
     "test": "node tests/conformance.mjs && node tests/e2e.mjs",
     "selftest": "node src/cli/scan.mjs --selftest"
   },
@@ -41,5 +42,8 @@
   "homepage": "https://github.com/connorpham/ai-qa#readme",
   "bugs": {
     "url": "https://github.com/connorpham/ai-qa/issues"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }
