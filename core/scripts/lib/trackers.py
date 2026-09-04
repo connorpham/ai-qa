@@ -211,6 +211,10 @@ def _blank_ticket(key, provider):
         "key": key, "provider": provider, "title": "", "description": "",
         "status": "", "assignee": "", "reporter": "", "type": "", "labels": [],
         "url": "", "created": "", "updated": "", "comments": [], "attachments": [],
+        # Header-shaped lines found in the body, which are deliberately NOT
+        # adopted as fields. The readiness note names them so "no status" can be
+        # told apart from "a status this file put somewhere I do not read".
+        "stray_fields": [],
     }
 
 
@@ -252,23 +256,44 @@ class Markdown(Tracker):
         t = _blank_ticket(key, self.id)
         t["url"] = path
         # Front-matter-ish "Key: value" header lines, then the body.
+        #
+        # Blank lines inside the header block are SKIPPED rather than treated as
+        # the start of the body. Everyone writes a blank line under a heading,
+        # and when that ended the header block the ticket's own `Status:` line
+        # was read as prose: /qa then called a ticket marked "Ready for QA"
+        # BLOCKED (not delivered). The header ends at the first line that is
+        # neither blank, nor the title, nor `Key: value`.
+        HEADER = re.compile(r"^\s*(Status|Assignee|Reporter|Type|Labels|Title|Summary):\s*(.*)$", re.I)
         body_lines = []
+        in_header = True
         for line in text.splitlines():
-            m = re.match(r"^\s*(Status|Assignee|Reporter|Type|Labels|Title|Summary):\s*(.*)$", line, re.I)
-            if m and not body_lines:
-                field, value = m.group(1).lower(), m.group(2).strip()
-                if field in ("title", "summary"):
-                    t["title"] = value
-                elif field == "labels":
-                    t["labels"] = [s.strip() for s in value.split(",") if s.strip()]
-                else:
-                    t[field] = value
-                continue
-            if line.startswith("# ") and not t["title"]:
-                t["title"] = line[2:].strip()
-                continue
+            if in_header:
+                if not line.strip():
+                    continue
+                m = HEADER.match(line)
+                if m:
+                    field, value = m.group(1).lower(), m.group(2).strip()
+                    if field in ("title", "summary"):
+                        t["title"] = value
+                    elif field == "labels":
+                        t["labels"] = [s.strip() for s in value.split(",") if s.strip()]
+                    else:
+                        t[field] = value
+                    continue
+                if line.startswith("# ") and not t["title"]:
+                    t["title"] = line[2:].strip()
+                    continue
+                in_header = False
             body_lines.append(line)
         t["description"] = "\n".join(body_lines).strip()
+        # A header field written further down the file is NOT adopted — that
+        # would make any sentence starting "Status:" change a verdict — but the
+        # readiness note needs to be able to say why a field it can see was not
+        # read, instead of reporting it as absent.
+        t["stray_fields"] = sorted({
+            HEADER.match(l).group(1).capitalize()
+            for l in body_lines if HEADER.match(l)
+        })
         return t
 
     def comment(self, key, body):

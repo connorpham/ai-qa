@@ -140,27 +140,100 @@ export async function call(opts) {
   };
 }
 
-function checkExpectations(res, flags, expects) {
-  const failures = [];
+/** Every assertion this call was asked to make, WITH its outcome. The command
+ * record needs the ones that held as much as the ones that broke: a reader who
+ * can only see failures cannot tell a checked value from an unchecked one. */
+function evaluate(res, flags, expects) {
+  const rows = [];
   if (flags["expect-status"]) {
     const want = Number(flags["expect-status"]);
-    if (res.status !== want) {
-      failures.push(`status: expected ${want}, got ${res.status} ${res.statusText}`);
-    }
+    rows.push({
+      label: "status", want: String(want), got: `${res.status} ${res.statusText}`.trim(),
+      ok: res.status === want,
+      message: `status: expected ${want}, got ${res.status} ${res.statusText}`,
+    });
   }
   for (const e of expects) {
     const i = e.indexOf("=");
-    if (i < 1) { failures.push(`--expect must look like path=value (got ${JSON.stringify(e)})`); continue; }
+    if (i < 1) {
+      rows.push({ label: e, want: "", got: "", ok: false,
+        message: `--expect must look like path=value (got ${JSON.stringify(e)})` });
+      continue;
+    }
     const key = e.slice(0, i);
     const want = e.slice(i + 1);
     const got = dig(res.json, key);
     // Compare as strings: a JSON number 450000 and the CLI's "450000" are the
     // same claim, and forcing the caller to think about types here helps nobody.
-    if (String(got) !== want) {
-      failures.push(`${key}: expected ${JSON.stringify(want)}, got ${JSON.stringify(got === undefined ? null : got)}`);
-    }
+    rows.push({
+      label: key, want, got: got === undefined ? "(absent)" : JSON.stringify(got),
+      ok: String(got) === want,
+      message: `${key}: expected ${JSON.stringify(want)}, got ${JSON.stringify(got === undefined ? null : got)}`,
+    });
   }
-  return failures;
+  return rows;
+}
+
+function checkExpectations(res, flags, expects) {
+  return evaluate(res, flags, expects).filter((r) => !r.ok).map((r) => r.message);
+}
+
+/** The command exactly as it ran, safe to paste. A header a caller typed by
+ * hand can carry a live token, so authorization-shaped values are redacted
+ * here — this file is written to be committed. */
+function commandLine(argv) {
+  const quote = (s) => (/[\s"'$`\\]/.test(s) ? `'${String(s).replace(/'/g, "'\\''")}'` : s);
+  const parts = ["node", ".ai-qa/scripts/api_check.mjs"];
+  for (let i = 0; i < argv.length; i++) {
+    const a = String(argv[i]);
+    if (a === "--header") {
+      const raw = String(argv[++i] ?? "");
+      const colon = raw.indexOf(":");
+      const key = colon > 0 ? raw.slice(0, colon) : raw;
+      const safe = /^\s*(authorization|cookie|set-cookie|x-api-key|api-key|token|x-auth-token)\s*$/i.test(key)
+        ? `${key.trim()}: ${REDACTED}` : raw;
+      parts.push("--header", quote(safe));
+      continue;
+    }
+    parts.push(quote(a));
+  }
+  return parts.join(" ");
+}
+
+/** Append this call to the case's command record.
+ *
+ * The evidence gate asks a NON-UI case for a recorded verification, and an API
+ * case's own artefacts are request.http and response.json — but a reader six
+ * months from now also needs the command that produced them and what it
+ * asserted. Writing it here means the tool produces the file the gate asks
+ * for, instead of asking a human to retype what just ran (and get it wrong). */
+function writeCommandRecord(dir, argv, req, res, rows) {
+  const file = path.join(dir, "cmd_verify.md");
+  const fresh = !fs.existsSync(file);
+  const head = "# Commands that produced this evidence\n\n" +
+    "Appended by `api_check.mjs` as each call ran, so this case can be re-run\n" +
+    "without reconstructing anything from memory. Tokens are never recorded —\n" +
+    "the request names the environment variable instead of its value.\n";
+  const table = rows.length
+    ? ["", "| what was asserted | expected | got | held? |", "|---|---|---|---|",
+       ...rows.map((r) => `| ${r.label} | ${r.want || "—"} | ${r.got} | ${r.ok ? "yes" : "**no**"} |`)].join("\n")
+    : "\nNo assertion was made on this call — it records the exchange only, and on\n" +
+      "its own it cannot support a verdict.";
+  const body = [
+    "",
+    `## ${req.method} ${req.url} → ${res.status} ${res.statusText} · ${new Date().toISOString()}`,
+    "",
+    "```",
+    `$ ${commandLine(argv)}`,
+    "```",
+    table,
+    "",
+    `Recorded: \`request.http\` · \`response.json\`${rows.some((r) => !r.ok) ? " — an assertion did not hold, so this is a finding, not a passing case" : ""}`,
+    "",
+  ].join("\n");
+  fs.mkdirSync(dir, { recursive: true });
+  fs.appendFileSync(file, (fresh ? head : "") + body);
+  return file;
 }
 
 async function main(argv) {
@@ -191,8 +264,10 @@ async function main(argv) {
     return 2;
   }
 
+  const rows = evaluate(out.res, flags, expects);
+  const failures = rows.filter((r) => !r.ok).map((r) => r.message);
   const files = flags.out ? writeEvidence(String(flags.out), out.req, out.res) : [];
-  const failures = checkExpectations(out.res, flags, expects);
+  if (flags.out) files.push(writeCommandRecord(String(flags.out), argv, out.req, out.res, rows));
 
   console.log(`API: ${failures.length ? "FAIL" : "OK"}  ${method} ${out.req.url} → ${out.res.status} ${out.res.statusText} (${out.res.took}ms)`);
   for (const f of failures) console.log(`  x ${f}`);
@@ -260,6 +335,34 @@ async function selftest() {
     expect(reqText.includes("<$AIQA_TEST_TOKEN>"), "request.http does not name the token's env var");
     expect(fs.existsSync(path.join(dir, "response.json")), "response.json was not written");
 
+    // the command record: the file the evidence gate asks a NON-UI case for,
+    // written by the tool rather than retyped by a human
+    {
+      const rows = evaluate(ok.res, { "expect-status": "200" }, ["total=450000", "total=999"]);
+      const argv = ["GET", "/orders/4102", "--out", dir, "--expect-status", "200",
+        "--header", "Authorization: Bearer live-token-value", "--header", "Accept: application/json"];
+      const file = writeCommandRecord(dir, argv, ok.req, ok.res, rows);
+      const first = fs.readFileSync(file, "utf8");
+      expect(first.includes("$ node .ai-qa/scripts/api_check.mjs GET /orders/4102"),
+        "cmd_verify.md does not record the command that ran");
+      expect(!first.includes("live-token-value"),
+        "A HEADER TOKEN LEAKED into cmd_verify.md");
+      expect(first.includes(REDACTED), "the redacted header is not marked as redacted");
+      expect(first.includes("Accept: application/json"),
+        "a harmless header was redacted too — the record stopped being reproducible");
+      expect(/\|\s*total\s*\|\s*450000\s*\|.*\|\s*yes\s*\|/.test(first),
+        "cmd_verify.md does not show the assertion that held");
+      expect(/\|\s*total\s*\|\s*999\s*\|.*\|\s*\*\*no\*\*\s*\|/.test(first),
+        "cmd_verify.md does not show the assertion that failed");
+      // a second call appends rather than replacing the first
+      writeCommandRecord(dir, ["GET", "/boom", "--out", dir], ok.req, ok.res, []);
+      const both = fs.readFileSync(file, "utf8");
+      expect((both.match(/^## /gm) || []).length === 2,
+        "a second call did not append to cmd_verify.md — the earlier call was lost");
+      expect((both.match(/^# Commands that produced/gm) || []).length === 1,
+        "the header was written twice");
+    }
+
     // a missing auth env var is BLOCKED, not a silent unauthenticated call
     delete process.env.AIQA_TEST_TOKEN;
     const noAuth = await call({ method: "GET", pathname: "/orders/4102", base, authEnv: "AIQA_TEST_TOKEN" });
@@ -278,7 +381,8 @@ async function selftest() {
     for (const f of fails) console.error(`  x ${f}`);
     return 1;
   }
-  console.log("api_check --selftest passed  (live server, assertions pass and fail, token never written, unreachable = BLOCKED)");
+  console.log("api_check --selftest passed  (live server, assertions pass and fail, token never written, "
+    + "command record appends and redacts, unreachable = BLOCKED)");
   return 0;
 }
 

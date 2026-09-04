@@ -27,6 +27,11 @@ import { fileURLToPath } from "node:url";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
+// Exit 2 = BLOCKED: the run could not start. Exit 1 is reserved for a real
+// finding, and every other gate here already draws that line — conflating them
+// is how a laptop with no browser installed gets reported as a broken product.
+const BLOCKED = 2;
+
 const INSTALL_HINT = `Playwright is not available.
 
   npm install --no-save playwright
@@ -64,7 +69,7 @@ export async function launch(opts = {}) {
   const pw = await loadPlaywright();
   if (!pw) {
     console.error(`BROWSER: BLOCKED — ${INSTALL_HINT}`);
-    process.exit(1);
+    process.exit(BLOCKED);
   }
   const headedCfg = cfg("app.headed");
   const headed = opts.headed !== undefined ? opts.headed : headedCfg !== "never";
@@ -129,7 +134,7 @@ async function check() {
   const pw = await loadPlaywright();
   if (!pw) {
     console.log(`BROWSER: BLOCKED\n${INSTALL_HINT}`);
-    process.exit(1);
+    process.exit(BLOCKED);
   }
   let browser;
   try {
@@ -142,7 +147,7 @@ async function check() {
     try { await browser?.close(); } catch { /* ignore */ }
     console.log(`BROWSER: BLOCKED — chromium failed to launch: ${e.message}`);
     console.log("  unblock: npx playwright install chromium");
-    process.exit(1);
+    process.exit(BLOCKED);
   }
 }
 

@@ -17,8 +17,8 @@ import {
   readIfExists, say, c, fail,
 } from "./util.mjs";
 import { CONFIG_NAME, configPath } from "./config.mjs";
-import { ManifestGuard, walkFiles } from "./manifest.mjs";
-import { TOOLS, renderTool } from "./adapters.mjs";
+import { ManifestGuard, walkFiles, MANIFEST_REL } from "./manifest.mjs";
+import { TOOLS, planWorkflows, applyPointers } from "./adapters.mjs";
 import { grade } from "./scan.mjs";
 import {
   detectDefaults, detectBranch, detectStart, detectUrl, detectContract, detectSchema, detectDbEnv,
@@ -286,8 +286,35 @@ export async function gather(root, scanRes, flags) {
   return a;
 }
 
+/** Which files besides the plan and the seeds an install touches: the ignore
+ * rules, the credential example, and the manifest. Listed here so the summary
+ * can count them instead of the count being a guess that install then
+ * contradicts. Mirrors the conditions in appendRules() exactly. */
+export function sideFiles(root, a) {
+  const out = [];
+  const envVars = a.trackerEnv || TRACKER_ENV[a.tracker] || [];
+  if (envVars.length) {
+    const cur = readIfExists(path.join(root, ".env.example"));
+    if (envVars.some((v) => !new RegExp(`^${v}=`, "m").test(cur))) out.push(".env.example");
+  }
+  for (const file of [".gitignore", ".gitattributes"]) {
+    if (!readIfExists(path.join(root, file)).includes("# ai-qa:")) out.push(file);
+  }
+  out.push(MANIFEST_REL);
+  return out;
+}
+
+/** Every file this install will create or replace — the one number the summary
+ * and the "written" line both come from. A count that omits the workflows (as
+ * the summary used to) or the seeds (as the result line used to) is a number
+ * nobody can check against the repo afterwards. */
+export function plannedFiles(root, a, plan, seeds) {
+  const absentSeeds = seeds.filter((s) => !fs.existsSync(path.join(root, s.rel))).map((s) => s.rel);
+  return [...plan.map((p) => p.rel), ...absentSeeds, ...sideFiles(root, a)];
+}
+
 // ---- the summary the user approves --------------------------------------------
-function printSummary(a, scanRes, plan) {
+function printSummary(a, scanRes, plan, seeds, root) {
   console.log(`\n${c.bold("  About to install")}\n`);
   const row = (k, v) => console.log(`    ${c.gray(k.padEnd(14))} ${v}`);
   row("project", `${a.name} (${a.key}-nnn, reports in ${a.language})`);
@@ -305,25 +332,57 @@ function printSummary(a, scanRes, plan) {
   row("autonomy", a.autonomy);
   row("tools", a.tools.join(", "));
   console.log(`\n${c.bold("  Files")}\n`);
-  console.log(`    ${c.gray(`${plan.length} files`)} — ${CONFIG_NAME}, .ai-qa/ (gates + manifest), docs/qa/ (dossier skeleton), ${a.tools.join(" + ")} workflows`);
+  console.log(`    ${c.gray(`${plannedFiles(root, a, plan, seeds).length} files`)} — ${CONFIG_NAME}, .ai-qa/ (gates + manifest), docs/qa/ (dossier skeleton), ${a.tools.join(" + ")} workflows`);
 
   const unknowns = [];
   if (!a.start) unknowns.push("no start command — the lane cannot bring the app up on its own");
   if (!a.url && (a.surfaces.includes("web") || a.surfaces.includes("api"))) unknowns.push("no app URL — every browser/API case will BLOCK until one is set");
-  const oracleGap = scanRes.gaps.find((g) => g.id === "oracle.specs");
-  if (oracleGap) unknowns.push("no spec documents found — /qa will refuse to invent expected values, and say so");
+  // `gaps` holds every check scoring below full marks, so a repo with one or
+  // two spec files lands here WITH its specs found. Saying "none" then would be
+  // false in the one section whose whole claim is that it does not guess — and
+  // it is the field that most changes what /qa is allowed to do.
+  const oracleCheck = (scanRes.dimensions || [])
+    .flatMap((d) => d.checks || []).find((k) => k.id === "oracle.specs");
+  const foundSpecs = oracleCheck && oracleCheck.got > 0 ? String(oracleCheck.evidence || "") : "";
+  if (foundSpecs) {
+    unknowns.push(`oracle.specs is empty, but the repo has spec-shaped documents — ${foundSpecs}` +
+      "\n  confirm which of them /qa should treat as the oracle, then list it in aiqa.config.yaml");
+  } else if (scanRes.gaps.some((g) => g.id === "oracle.specs")) {
+    unknowns.push("no spec documents found — /qa will refuse to invent expected values, and say so");
+  }
   if (unknowns.length) {
     console.log(`\n${c.bold("  Declared unknowns")} ${c.gray("— recorded, not guessed")}\n`);
-    for (const u of unknowns) console.log(`    ${c.yellow("·")} ${u}`);
+    for (const u of unknowns) {
+      const [first, ...rest] = String(u).split("\n");
+      console.log(`    ${c.yellow("·")} ${first}`);
+      for (const line of rest) console.log(`      ${c.gray(line.trim())}`);
+    }
     console.log(`\n    ${c.gray("/onboard turns each of these into a question for the team.")}`);
   }
   console.log();
 }
 
 // ---- install ------------------------------------------------------------------
+/** The subset of the config the adapters render into a workflow. Built here so
+ * init and update render from exactly the same shape — a divergence would make
+ * `update` want to rewrite files it had just written. */
+export function renderCfg(a) {
+  return {
+    project: { name: a.name, key: a.key, language: a.language },
+    app: { url: a.url, start: a.start },
+    surfaces: a.surfaces,
+    tracker: { provider: a.tracker },
+    autonomy: { level: a.autonomy },
+  };
+}
+
 /** Build the full file plan. Pure — nothing is written here, so the summary can
- * be accurate and a --dry-run is real. */
-export async function buildPlan(root, a, version) {
+ * be accurate and a --dry-run is real.
+ *
+ * The rendered agent workflows are part of the plan, not a separate pass. They
+ * are hash-tracked like everything else, and leaving them out is how the
+ * summary came to promise a different number of files than the install wrote. */
+export async function buildPlan(root, a, version, tools = a.tools || ["claude-code"]) {
   const plan = [];             // { rel, text }  — owned by ai-qa, hash-tracked
   const seeds = [];            // { rel, text }  — written once, then yours
 
@@ -353,6 +412,11 @@ export async function buildPlan(root, a, version) {
       rel: path.posix.join("docs/qa/method", rel.split(path.sep).join("/")),
       text: fs.readFileSync(path.join(pkgRoot, "core", "doctrine", rel), "utf8"),
     });
+  }
+
+  // the workflows, rendered once per agent tool
+  for (const tool of tools) {
+    for (const entry of await planWorkflows(tool, root, renderCfg(a))) plan.push(entry);
   }
 
   // documents a human owns after this moment
@@ -393,7 +457,7 @@ export async function init(flags) {
 
   const a = await gather(root, scanRes, flags);
   const { plan, seeds } = await buildPlan(root, a, pkg.version);
-  printSummary(a, scanRes, [...plan, ...seeds]);
+  printSummary(a, scanRes, plan, seeds, root);
 
   if (!flags.yes && process.stdin.isTTY) {
     const go = await askYesNo("Write these files?", true);
@@ -405,25 +469,26 @@ export async function init(flags) {
 async function install(root, a, scanRes, version, flags) {
   const { plan, seeds } = await buildPlan(root, a, version);
   const guard = new ManifestGuard(root, "init");
+  const created = [];   // everything that really landed on disk, counted once
 
-  for (const { rel, text } of plan) guard.write(rel, text);
+  for (const { rel, text } of plan) {
+    if (guard.write(rel, text) === "written") created.push(rel);
+  }
   for (const { rel, text } of seeds) {
-    if (writeIfAbsent(path.join(root, rel), text)) guard.note(rel);
+    if (writeIfAbsent(path.join(root, rel), text)) { guard.note(rel); created.push(rel); }
   }
 
-  // rendered workflows, one set per agent tool
-  const cfg = { project: { name: a.name, key: a.key, language: a.language },
-                app: { url: a.url, start: a.start }, surfaces: a.surfaces,
-                tracker: { provider: a.tracker }, autonomy: { level: a.autonomy } };
-  for (const tool of a.tools) {
-    await renderTool(tool, root, cfg, (rel, text) => guard.write(rel, text));
-  }
+  // Discovery pointers merge into files a human owns, so they are applied
+  // rather than planned — the workflows themselves are already in the plan.
+  for (const tool of a.tools) await applyPointers(tool, root, renderCfg(a));
 
-  appendRules(root, guard, a.trackerEnv || TRACKER_ENV[a.tracker] || []);
+  created.push(...appendRules(root, guard, a.trackerEnv || TRACKER_ENV[a.tracker] || []));
   const manifestFile = guard.save(version);
+  created.push(MANIFEST_REL);
 
   say.head("  Installed");
-  say.ok(`${guard.written.length} files written  ${c.gray(`· manifest: ${path.relative(root, manifestFile)}`)}`);
+  say.ok(`${created.length} files written  ${c.gray(`· manifest: ${path.relative(root, manifestFile)}`)}`);
+  if (guard.unchanged.length) say.info(`${guard.unchanged.length} already present with the same content`);
   if (guard.skipped.length) say.warn(`${guard.skipped.length} left alone (you had edited them)`);
 
   console.log(`\n${c.bold("  Next")}\n`);
@@ -433,8 +498,11 @@ async function install(root, a, scanRes, version, flags) {
   console.log(`    3. ${c.cyan(`/qa ${a.key}-1`)}              ${c.gray("verify a ticket against the spec, with evidence")}\n`);
 }
 
-/** .gitignore and .gitattributes rules — appended, never rewritten. */
+/** .gitignore and .gitattributes rules — appended, never rewritten.
+ * Returns the files it actually touched, so the install can report a count the
+ * user can check against `git status`. */
 function appendRules(root, guard, trackerEnv) {
+  const touched = [];
   const IGNORE = [
     "",
     "# ai-qa: evidence text commits, binaries don't",
@@ -467,6 +535,7 @@ function appendRules(root, guard, trackerEnv) {
     if (missing.length) {
       writeFile(abs, `${cur.replace(/\s*$/, "")}\n\n# ai-qa: tracker credentials — fill these in .env (never here)\n${missing.map((v) => `${v}=`).join("\n")}\n`);
       guard.note(".env.example");
+      touched.push(".env.example");
     }
   }
 
@@ -476,5 +545,7 @@ function appendRules(root, guard, trackerEnv) {
     if (cur.includes(marker)) continue;               // already ours
     writeFile(abs, `${cur.replace(/\s*$/, "")}\n${lines.join("\n")}\n`);
     guard.note(file);
+    touched.push(file);
   }
+  return touched;
 }
