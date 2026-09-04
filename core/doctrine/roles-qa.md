@@ -38,10 +38,12 @@ read at the moment it is needed. This is the index; nothing here is optional.
 | `requirement-smells.md` | Before writing a single expected value | The words in a ticket that hide a decision, and the questions to ask **before** testing |
 | `user-mindset.md` | Before designing cases | Who the user really is — four personas, the moves real people make that scripts never do, the four questions after every action |
 | `test-design.md` | While choosing the 2–5 cases | The shapes that earn a place, and how to spend a small budget by risk |
+| `case-writing.md` | While writing each case record, and when filling in ACTUAL | The fifteen-second test — a title that is a sentence about behaviour, steps with exact values, expected and actual as observable facts in the same shape |
 | `hostile-inputs.md` | While writing the boundary case | The values real people produce this week, by field type — pick two, never sweep |
 | `heuristics.md` | For the exploratory slot, and whenever the spec is silent | Consistency oracles (HICCUPPS), coverage (SFDIPOT), data shapes, interruptions, tours, RCRCRC |
 | `checklists.md` | For the whole-screen case, and while walking | The reflex checks by feature shape — forms, lists, money, roles, dates, delete… |
 | `evidence.md` | While recording | What makes a folder readable by a stranger in six months |
+| `report-writing.md` | Before the first word of the report | The five lines everyone reads, the section shapes, the jargon-to-plain table, the length budget |
 | `severity.md` | On every FAIL | The ladder, by consequence — and Origin: DEV or SPEC |
 | `red-flags.md` | When you hear yourself think "obviously…" | The excuses, the biases, and the gate that catches each |
 

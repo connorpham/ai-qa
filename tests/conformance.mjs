@@ -640,6 +640,203 @@ for (const [label, cmd, args] of [
   }
 }
 
+// ---- the tester's pen: a case and a report a stranger reads at first sight -----
+// The writing doctrine is enforced at three points — the workflow that has to
+// open it, the gate that refuses a value written as a judgement, and the export
+// that has to read the new report shape — so all three are checked here against
+// the real files, not against a description of them.
+{
+  const doctrineDir = path.join(pkgRoot, "core", "doctrine");
+  const readDoc = (f) => fs.readFileSync(path.join(doctrineDir, f), "utf8");
+  const qa = fs.readFileSync(path.join(wfDir, "qa.md"), "utf8");
+  const triage = fs.readFileSync(path.join(wfDir, "triage.md"), "utf8");
+
+  for (const f of ["case-writing.md", "report-writing.md"]) {
+    check(fs.existsSync(path.join(doctrineDir, f)), `doctrine ${f} is missing`);
+    check(readDoc(f).split("\n").length > 60, `${f} is too thin to teach anyone to write`);
+    check(qa.includes(f), `qa.md never opens ${f}`);
+    check(triage.includes(f), `triage.md never opens ${f} — a bug report is a case record with a different heading`);
+  }
+  // Opened at the right moment: case-writing while the cases are designed,
+  // report-writing before the report is written.
+  const between = (text, from, to, needle) => {
+    const a = text.indexOf(from); const b = text.indexOf(to, a + 1);
+    return a > 0 && b > a && text.slice(a, b).includes(needle);
+  };
+  check(between(qa, "## V2 — DESIGN THE VERIFICATION", "## V2b", "case-writing.md"),
+    "qa.md must open case-writing.md inside V2, where the case records are written");
+  check(between(qa, "## V5b — WRITE THE REPORT", "## V6", "report-writing.md"),
+    "qa.md must open report-writing.md inside V5b, before the report is written");
+
+  // The report template: the five lines first, then the section shapes the
+  // gate and the export depend on.
+  const tmplStart = qa.indexOf("## V5b — WRITE THE REPORT");
+  const tmpl = qa.slice(tmplStart, qa.indexOf("## V6", tmplStart));
+  const iOne = tmpl.indexOf("## 1. What was asked for");
+  for (const line of ["**Verdict:**", "**What it means:**", "**Next step:**"]) {
+    const i = tmpl.indexOf(line);
+    check(i > 0 && i < iOne, `the report template must carry ${line} BEFORE section 1 — it is the part everyone reads`);
+  }
+  check(/## 2\. What I checked[\s\S]*the case title/.test(tmpl),
+    "the report's table must be labelled by case title, never by TC_n");
+  check(/## 3\. What I found/.test(tmpl) && /Who it hurts/.test(tmpl),
+    "the report template has no findings section that says who it hurts");
+  check(between(tmpl, "## 4. Conclusion", "## 5.", "**Recommendation:**"),
+    "the bold Recommendation: line must sit inside the Conclusion — the export reads it from there");
+  check(/## 5\. What I could not check/.test(tmpl) && /"Nothing"/.test(tmpl),
+    "the report template must keep 'What I could not check', present even when it says Nothing");
+
+  // The banned words the doctrine names are the ones the gate refuses, and the
+  // gate and the export refuse the same list.
+  const gateSrc = fs.readFileSync(path.join(pkgRoot, "core/scripts/evd_check.py"), "utf8");
+  const packSrc = fs.readFileSync(path.join(pkgRoot, "core/scripts/lib/evdpack.py"), "utf8");
+  const tuple = (text, name) => {
+    const m = new RegExp(`^${name}\\s*=\\s*\\(([\\s\\S]*?)\\)`, "m").exec(text);
+    return m ? [...m[1].matchAll(/"([^"]*)"/g)].map((x) => x[1]) : null;
+  };
+  const gateVague = tuple(gateSrc, "_VAGUE_PHRASES");
+  const packVague = tuple(packSrc, "_VAGUE_PHRASES");
+  check(gateVague && gateVague.length > 20, "evd_check.py has no _VAGUE_PHRASES list");
+  check(gateVague && packVague && gateVague.join("|") === packVague.join("|"),
+    "the vague-phrase list drifted between evd_check.py and evdpack.py");
+  const caseDoc = readDoc("case-writing.md");
+  for (const w of ["works as expected", "correctly", "properly", "successfully", "no errors", "as expected"]) {
+    check(caseDoc.toLowerCase().includes(w), `case-writing.md's banned list lost "${w}"`);
+    check(gateVague && gateVague.includes(w), `the gate does not refuse "${w}" although case-writing.md bans it`);
+  }
+  check(/fifteen-second/i.test(caseDoc) && /Before —/.test(caseDoc) && /After —/.test(caseDoc),
+    "case-writing.md lost the fifteen-second test or its before/after record");
+  const repDoc = readDoc("report-writing.md");
+  check(/\| the oracle \|/.test(repDoc) && /DEV \/ SPEC/.test(repDoc),
+    "report-writing.md lost the jargon-to-plain table");
+  for (const v of ["PASS", "FAIL", "PARTIAL", "NEW-BUG", "BLOCKED", "UNCLEAR"]) {
+    check(new RegExp(`\\*\\*${v}\\*\\*`).test(repDoc), `report-writing.md does not explain ${v} in the reader's terms`);
+  }
+  check(repDoc.includes("**Recommendation:**"), "report-writing.md must name the one bold label the export reads");
+
+  // Against the real gate: a judgement in EXPECTED or ACTUAL goes red; the
+  // concrete value the green fixture carries stays green (proven by the
+  // fixture itself). Then the new report shape, filled in, passes the gate and
+  // is read correctly by the export.
+  const py = (code) => spawnSync("python3", ["-c", code], { encoding: "utf8" });
+  const fixture = (dir) => py(
+    `import sys; sys.path.insert(0, ${JSON.stringify(path.join(pkgRoot, "core/scripts"))}); ` +
+    `import evd_check; evd_check._green_fixture(${JSON.stringify(dir)})`);
+  const reindex = (dir) => spawnSync("python3", [path.join(pkgRoot, "core/scripts/evd_index.py"), "--evd", dir], { encoding: "utf8" });
+  const gateRun = (dir) => spawnSync("python3", [path.join(pkgRoot, "core/scripts/evd_check.py"), "--evd", dir, "--expect-tcs", "3"], { encoding: "utf8" });
+  const caseDirs = (dir) => fs.readdirSync(dir).filter((x) => /^TC_\d+/.test(x));
+  const setField = (mf, key, value) => fs.writeFileSync(mf,
+    fs.readFileSync(mf, "utf8").replace(new RegExp(`^${key}:.*$`, "m"), `${key}: ${value}`));
+
+  const root = fs.mkdtempSync(path.join(process.env.TMPDIR || "/tmp", "aiqa-conf-pen-"));
+  try {
+    for (const [key, value] of [["EXPECTED", "works as expected"], ["EXPECTED", "It should work correctly."],
+                                ["ACTUAL", "failed"], ["ACTUAL", "OK"], ["EXPECTED", "no errors"]]) {
+      const d = path.join(root, `vague_${key}_${value.replace(/\W+/g, "_")}`);
+      check(fixture(d).status === 0, "could not build the green fixture");
+      setField(path.join(d, caseDirs(d)[0], "manifest.md"), key, value);
+      reindex(d);
+      const g = gateRun(d);
+      check(g.status !== 0, `the gate accepted ${key}: ${JSON.stringify(value)} — a judgement, not a value`);
+      check(/judgement, not a value/.test(g.stdout + g.stderr), `the gate red for ${key}=${JSON.stringify(value)} but not for the writing rule`);
+    }
+    // …and a value that merely CONTAINS a judgement word is not flagged.
+    {
+      const d = path.join(root, "contains_word");
+      fixture(d);
+      setField(path.join(d, caseDirs(d)[0], "manifest.md"), "EXPECTED", "the total reads 450,000 (spec 3.2) and the screen works offline");
+      reindex(d);
+      check(gateRun(d).status === 0, "a concrete EXPECTED was refused because it contained the word 'works'");
+    }
+
+    // The new report shape, concrete, FAIL verdict, one failed case.
+    const d = path.join(root, "report_shape");
+    fixture(d);
+    const dirs = caseDirs(d).sort();
+    const c2 = path.join(d, dirs[1], "manifest.md");
+    fs.writeFileSync(c2, fs.readFileSync(c2, "utf8").replace("RESULT: PASS", "RESULT: FAIL") +
+      "TITLE: A quantity of 0 is refused with a message naming the minimum\n" +
+      "SEVERITY: Critical\nORIGIN: DEV\nFINDING: [Order edit] Quantity 0 is saved — when Save is pressed with Enter\n");
+    fs.writeFileSync(path.join(d, "REPORT.md"), [
+      "# SHOP-142 — FAIL",
+      "COMMIT: abc1234",
+      "VERIFIED-AT: 2026-09-04T10:41:00+07:00",
+      "ORACLE: docs/specs/orders.md 3.2",
+      "",
+      "**Verdict:** A quantity of 0 is accepted and saved — the order ends up with an empty line.",
+      "**What it means:** Warehouse staff receive orders with nothing to pick; every such order is a phone call.",
+      "**Next step:** Back to the developer with defect 1 (Critical). Release should wait.",
+      "",
+      "## 1. What was asked for",
+      "On the order screen, when staff change a quantity and press Save, the total must recalculate and a quantity below 1 must be refused.",
+      "",
+      "## 2. What I checked",
+      "| What I checked (the case title) | As whom | Expected | Actual | Result |",
+      "|---|---|---|---|---|",
+      "| Changing a quantity and pressing Save recalculates the total | staff | Total reads 450,000 | Total reads 450,000 | ✅ |",
+      "| A quantity of 0 is refused with a message naming the minimum | staff | field turns red, nothing saved | row saved with quantity 0 | ❌ |",
+      "",
+      "## 3. What I found",
+      "**[Order edit] Quantity 0 is saved — when Save is pressed with Enter.**",
+      "When staff type 0 and press Enter, the row is saved with quantity 0. It should be refused with the message naming the minimum (the orders rule, §3.4). The warehouse receives an order with nothing to pick.",
+      "Severity: Critical · Origin: the code · Evidence: A quantity of 0 is refused — 03_row_saved_boxed.png",
+      "",
+      "## 4. Conclusion",
+      "The total recalculates as specified, but the minimum-quantity rule is not enforced when Enter is used instead of the button. The screen is otherwise intact.",
+      "**Recommendation:** send it back for the quantity rule; release should wait, because every order edited by keyboard can end up empty.",
+      "",
+      "## 5. What I could not check",
+      "Nothing",
+      "",
+      "## 6. Observations — seen, not judged",
+      "none",
+      "",
+      "## Appendix",
+      "verifysheet.md · debate.md",
+      "",
+    ].join("\n"));
+    reindex(d);
+    const g = gateRun(d);
+    check(g.status === 0, `the new report shape is rejected by the gate:\n${g.stdout}${g.stderr}`);
+    const x = spawnSync("python3", [path.join(pkgRoot, "core/scripts/xlsx_export.py"), "--evd", d, "--strict"], { encoding: "utf8" });
+    check(x.status === 0, `the export refuses a complete pack in the new report shape:\n${x.stdout}${x.stderr}`);
+    const read = py(
+      `import sys, json; sys.path.insert(0, ${JSON.stringify(path.join(pkgRoot, "core/scripts/lib"))}); ` +
+      `import evdpack; p = evdpack.read_pack(${JSON.stringify(d)}); ` +
+      `print(json.dumps({"verdict": p.verdict, "rec": p.recommendation, "conc": p.conclusion, ` +
+      `"sev": p.report_severities, "defects": [[q.severity, q.summary] for q in p.defects], "gaps": p.gaps}))`);
+    let parsed = {};
+    try { parsed = JSON.parse(read.stdout.trim().split("\n").pop()); } catch { /* checked below */ }
+    check(parsed.verdict === "FAIL", `the export read the verdict as ${JSON.stringify(parsed.verdict)}`);
+    check(typeof parsed.rec === "string" && parsed.rec.startsWith("send it back") && parsed.rec.endsWith("empty."),
+      `the export did not read the whole Recommendation line: ${JSON.stringify(parsed.rec)}`);
+    check(typeof parsed.conc === "string" && parsed.conc.includes("minimum-quantity rule") &&
+      !parsed.conc.includes("Recommendation") && !parsed.conc.includes("Verdict:"),
+      `the Conclusion the spreadsheet prints is wrong: ${JSON.stringify(parsed.conc)}`);
+    check(Array.isArray(parsed.defects) && parsed.defects.length === 1 && parsed.defects[0][0] === "Critical"
+      && /Quantity 0 is saved/.test(parsed.defects[0][1]),
+      `the defect row was not built from the failed case's FINDING/SEVERITY: ${JSON.stringify(parsed.defects)}`);
+    check(Array.isArray(parsed.gaps) && parsed.gaps.length === 0,
+      `a complete pack in the new report shape declared gaps: ${JSON.stringify(parsed.gaps)}`);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+
+  // The README's mutation counts are the selftests' counts, or the README is
+  // making a claim the code no longer backs.
+  const readme = fs.readFileSync(path.join(pkgRoot, "README.md"), "utf8");
+  const gateSelf = spawnSync("python3", [path.join(pkgRoot, "core/scripts/evd_check.py"), "--selftest"], { encoding: "utf8" });
+  const xlsxSelf = spawnSync("python3", [path.join(pkgRoot, "core/scripts/xlsx_export.py"), "--selftest"], { encoding: "utf8" });
+  const gateN = /\((\d+) mutations/.exec(gateSelf.stdout);
+  const xlsxN = /\((\d+) honesty mutations/.exec(xlsxSelf.stdout);
+  const readmeGate = /\*\*(\d+) mutations, each proven to go red/.exec(readme);
+  const readmeXlsx = /\*\*(\d+) honesty mutations/.exec(readme);
+  check(gateN && readmeGate && gateN[1] === readmeGate[1],
+    `README says the evidence gate has ${readmeGate && readmeGate[1]} mutations; the selftest ran ${gateN && gateN[1]}`);
+  check(xlsxN && readmeXlsx && xlsxN[1] === readmeXlsx[1],
+    `README says the export has ${readmeXlsx && readmeXlsx[1]} honesty mutations; the selftest ran ${xlsxN && xlsxN[1]}`);
+}
+
 // ---- report -------------------------------------------------------------------
 if (fails.length) {
   console.error(`conformance: ${fails.length} FAILED of ${checks} checks\n`);

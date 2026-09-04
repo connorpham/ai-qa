@@ -47,7 +47,10 @@ this, and how much of it actually exists?* — and it is allowed to answer
 
 5. **Write for the human who replaces you.** Plain language, in the configured
    project language. A non-programmer reads it in ten minutes and knows what
-   this product does, how to run it, and what to be afraid of.
+   this product does, how to run it, and what to be afraid of. The language
+   rules in `docs/qa/method/report-writing.md` — the user's words, no code
+   vocabulary in the body, numbers with units, the same name for the same thing
+   — apply to the dossier as much as to a report.
 
 ---
 

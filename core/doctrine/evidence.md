@@ -25,15 +25,17 @@ that looks current is worse than none.
 ## The manifest, per case
 
 ```
+TITLE:        Changing a quantity and pressing Save recalculates the total
+KIND:         acceptance
 RESULT:       PASS | FAIL | BLOCKED
 AS:           staff@demo (role STAFF)
-PRECONDITION: order #4102 exists, state PENDING, created by admin@demo
-ENTRY:        signed in → Orders → filter Pending → row #4102 → Edit
-STEPS:        1. change quantity 2 → 3   2. press Save
-EXPECTED:     total recalculates to 450,000 (spec §3.2)
-ACTUAL:       total shows 450,000; "Saved" message appears
-AFTER:        list row shows 3 · value survives a reload
-BACK:         Back returns to Orders with the Pending filter intact
+PRECONDITION: order #4102 exists, status Pending, 2 × item A at 150,000 (checked read-only at 10:02)
+ENTRY:        signed in → Orders → filter "Pending" → row #4102 → "Edit"
+STEPS:        1. clear "Quantity" · 2. type 3 · 3. press "Save"
+EXPECTED:     "Total" reads 450,000 ₫ (spec §3.2)
+ACTUAL:       "Total" reads 450,000 ₫; banner "Order #4102 saved" — as expected
+AFTER:        list row shows 3 · "Total" 450,000 survives a reload · "Pending" badge unchanged
+BACK:         Back returns to Orders with the "Pending" filter kept; Cancel discards the change
 PERSONA:      the daily operator — keyboard, Enter to save, 200th time today
 OBSERVATIONS: the Pending badge in the sidebar still read 12 after the save until a manual refresh
 ```
@@ -49,6 +51,13 @@ Every field is there because a verification went wrong without it:
   working.
 - **BACK** — Cancel that does not cancel, filters that reset. Cheap to check,
   frequently broken.
+
+The fields are the skeleton. How each value is *written* — the title as a
+sentence about behaviour, steps with the exact value typed, expected as an
+observable fact and actual in the same shape — is `case-writing.md`, and it is
+what lets a stranger read the record in fifteen seconds. The gate refuses an
+EXPECTED or ACTUAL that is only a judgement word ("works", "failed"), because
+present is not the same as written.
 
 Three more are optional in the gate and expected by the reader:
 
@@ -70,6 +79,11 @@ Three more are optional in the gate and expected by the reader:
 Different audience, different rules. `REPORT.md` is read by people who do not
 work in the code: a product owner, a manager, sometimes a customer.
 
+- **The first five lines are the report.** The verdict word, then three
+  lines — *Verdict*, *What it means*, *Next step* — that a product owner could
+  paste into a chat and the team would know what to do. `report-writing.md`
+  has the template, the section shapes and the language rules; the bullets
+  below are the floor it stands on.
 - **Black-box voice.** What a user does and what the product does. No file
   paths, no route names, no internal vocabulary — those go in the appendix.
 - **The bar:** a non-programmer reads it in two minutes and understands what was

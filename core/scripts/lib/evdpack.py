@@ -41,6 +41,26 @@ FAILING_VERDICTS = ("FAIL", "PARTIAL", "NEW-BUG")
 # you have to fill in is a question you cannot skip.
 REQUIRED_FIELDS = ("RESULT", "AS", "PRECONDITION", "ENTRY", "STEPS", "EXPECTED", "ACTUAL")
 UI_ONLY_FIELDS = ("AFTER", "BACK")
+
+# Mirrors evd_check.py — conformance keeps the two tuples identical. A value made
+# only of one of these is a judgement, not something the screen showed, and the
+# sheet has nothing to print for "what was it supposed to read?"
+_VAGUE_PHRASES = (
+    "works", "work", "worked", "working", "not working", "not work", "works fine",
+    "works correctly", "works properly", "works as expected", "works ok", "work fine",
+    "work correctly", "work properly", "work as expected", "did not work", "does not work",
+    "doesn't work", "passes", "passed", "pass", "ok", "okay", "fine", "good", "success",
+    "successful", "successfully", "as expected", "correct", "correctly", "proper", "properly",
+    "no error", "no errors", "no issue", "no issues", "no problem", "no problems",
+    "behaves correctly", "behaves properly", "behaves as expected", "failed", "fail", "fails",
+    "failure", "error", "broken", "wrong", "incorrect", "n/a", "tbd", "todo",
+)
+VAGUE_VALUE = re.compile(
+    r"^\W*(?:it\s+|this\s+|the\s+(?:feature|page|screen|form|button)\s+)?(?:should\s+|must\s+)?"
+    r"(?:be\s+|is\s+|was\s+)?(?:"
+    + "|".join(re.escape(x).replace(r"\ ", r"\s+")
+               for x in sorted(_VAGUE_PHRASES, key=len, reverse=True))
+    + r")\W*$", re.I)
 # Required on a case that FAILED: a defect with no severity cannot be
 # prioritised, and one with no origin gets routed to the wrong person.
 FAIL_FIELDS = ("SEVERITY", "ORIGIN")
@@ -549,6 +569,11 @@ def _read_case(pack, dirname, titles):
     if case.result != "BLOCKED" and not case.requirements:
         pack.gap(name, "EXPECTED carries no citation — an expected value with no source is the "
                        "verifier's opinion, and this row cannot be traced to a requirement")
+    for key in ("EXPECTED", "ACTUAL"):
+        value = case.get(key)
+        if value and VAGUE_VALUE.match(value):
+            pack.gap(name, "{} is {!r} — a judgement, not a value; the sheet cannot say what the "
+                           "screen was supposed to read".format(key, value))
 
     if case.result == "BLOCKED" and not (case.reason and case.unblock):
         pack.gap(name, "BLOCKED with no REASON:/UNBLOCK: — a blocker with no way out is a shrug")

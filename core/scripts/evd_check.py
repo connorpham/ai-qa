@@ -44,6 +44,28 @@ KINDS = ("acceptance", "boundary", "whole-screen", "write-readback", "explorator
 REQUIRED_FIELDS = ("RESULT", "AS", "PRECONDITION", "ENTRY", "STEPS", "EXPECTED", "ACTUAL")
 UI_ONLY_FIELDS = ("AFTER", "BACK")
 
+# An EXPECTED that is only a judgement word is a wish, not a value; an ACTUAL
+# that is only a judgement word is a verdict with nothing behind it. Each phrase
+# here has been the ENTIRE content of a real case record, and none of them lets
+# a reader look at the screen and agree or disagree. Matched against the whole
+# value, so "the total reads 450,000 and works offline" is never flagged.
+_VAGUE_PHRASES = (
+    "works", "work", "worked", "working", "not working", "not work", "works fine",
+    "works correctly", "works properly", "works as expected", "works ok", "work fine",
+    "work correctly", "work properly", "work as expected", "did not work", "does not work",
+    "doesn't work", "passes", "passed", "pass", "ok", "okay", "fine", "good", "success",
+    "successful", "successfully", "as expected", "correct", "correctly", "proper", "properly",
+    "no error", "no errors", "no issue", "no issues", "no problem", "no problems",
+    "behaves correctly", "behaves properly", "behaves as expected", "failed", "fail", "fails",
+    "failure", "error", "broken", "wrong", "incorrect", "n/a", "tbd", "todo",
+)
+VAGUE_VALUE = re.compile(
+    r"^\W*(?:it\s+|this\s+|the\s+(?:feature|page|screen|form|button)\s+)?(?:should\s+|must\s+)?"
+    r"(?:be\s+|is\s+|was\s+)?(?:"
+    + "|".join(re.escape(x).replace(r"\ ", r"\s+")
+               for x in sorted(_VAGUE_PHRASES, key=len, reverse=True))
+    + r")\W*$", re.I)
+
 # A step image may carry its case number: TC3_02_total_after_save.png. The
 # prefix is what keeps a file legible after someone drags it out of the folder
 # and into a ticket, a chat or a slide, which is where evidence actually goes.
@@ -178,6 +200,19 @@ def check_case(case_dir, res, opts):
     for key in required:
         if key not in f or not f[key]:
             res.err(name, "manifest.md is missing {} — {}".format(key, _why(key)))
+
+    # Present is not the same as written. "EXPECTED: works as expected" passes
+    # the line above and tells the reader nothing — see case-writing.md.
+    for key in ("EXPECTED", "ACTUAL"):
+        value = f.get(key, "")
+        if value and VAGUE_VALUE.match(value):
+            res.err(name, "{} is {!r} — a judgement, not a value. Write what the screen shows: "
+                          "the number, the label or the state, with its citation. If that cannot "
+                          "be written, the expected behaviour is not yet known".format(key, value))
+    title = f.get("TITLE", "")
+    if title and (len(title.split()) < 3 or re.match(r"(?i)^\s*(?:tc|test|case|check|verify)\b", title)):
+        res.warn(name, "TITLE {!r} names a topic, not a behaviour — write who does what and what "
+                       "must happen, e.g. 'A quantity of 0 is refused'".format(title))
 
     result = f.get("RESULT", "").upper()
     if result and result not in CASE_RESULTS:
@@ -480,6 +515,10 @@ def selftest():
         ("no whole-screen case", lambda d: _rewrite(d, C3 + "/manifest.md", lambda t: t.replace("KIND: whole-screen", "KIND: acceptance"))),
         ("case missing AS", lambda d: _rewrite(d, C1 + "/manifest.md", lambda t: re.sub(r"(?m)^AS:.*\n", "", t))),
         ("case missing EXPECTED", lambda d: _rewrite(d, C1 + "/manifest.md", lambda t: re.sub(r"(?m)^EXPECTED:.*\n", "", t))),
+        ("EXPECTED is a wish, not a value", lambda d: _rewrite(d, C1 + "/manifest.md",
+            lambda t: re.sub(r"(?m)^EXPECTED:.*$", "EXPECTED: works as expected", t))),
+        ("ACTUAL is a judgement, not a value", lambda d: _rewrite(d, C2 + "/manifest.md",
+            lambda t: re.sub(r"(?m)^ACTUAL:.*$", "ACTUAL: failed", t))),
         ("case missing BACK", lambda d: _rewrite(d, C1 + "/manifest.md", lambda t: re.sub(r"(?m)^BACK:.*\n", "", t))),
         ("ENTRY is only a URL", lambda d: _rewrite(d, C1 + "/manifest.md",
             lambda t: re.sub(r"(?m)^ENTRY:.*$", "ENTRY: http://localhost:3000/orders/4102/edit", t))),
