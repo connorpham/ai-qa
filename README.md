@@ -1,5 +1,9 @@
 # ai-qa
 
+<p align="center">
+  <img src="https://raw.githubusercontent.com/connorpham/ai-qa-assets/main/hero.png" alt="ai-qa — an AI QA engineer you can drop into any codebase" width="880">
+</p>
+
 **An AI QA engineer you can drop into any codebase.**
 
 It onboards the way a person does — works out what it can, says plainly what it
@@ -50,6 +54,13 @@ ai-qa attacks both:
 
 Read-only. No network. Works in repos without ai-qa installed. Always exits 0.
 
+<p align="center">
+  <img src="https://raw.githubusercontent.com/connorpham/ai-qa-assets/main/scan.png" alt="ai-qa scan readiness scorecard — six gates scored, with the questions a new tester would ask" width="880">
+</p>
+
+<details>
+<summary>The same scorecard as plain text</summary>
+
 ```
   QA readiness  ~/work/shop
   38/100  grade D   next.js, react · web+database
@@ -69,6 +80,8 @@ Read-only. No network. Works in repos without ai-qa installed. Always exits 0.
   ? [ACCESS] Which test accounts exist, one per role? A verdict with no actor is
     untraceable — half of all UI bugs are role-shaped.
 ```
+
+</details>
 
 **ORACLE carries the most weight (25 points) on purpose.** Tests written against
 nothing verify nothing, so a repo with a great test suite and no specification
@@ -98,6 +111,10 @@ Installs into `.ai-qa/` (gates, profiles, manifest), `docs/qa/` (the dossier and
 method), and whatever each chosen agent tool natively discovers.
 
 ## The four workflows
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/connorpham/ai-qa-assets/main/workflows.png" alt="The four workflows: /onboard, /qa, /triage, /regress" width="880">
+</p>
 
 | | What it does |
 |---|---|
@@ -173,6 +190,10 @@ either gets an oracle or quietly invents one.
 
 ## The spreadsheet everyone else reads
 
+<p align="center">
+  <img src="https://raw.githubusercontent.com/connorpham/ai-qa-assets/main/xlsx.png" alt="The five-sheet workbook: Summary, Test Cases, Defects, Traceability, Evidence" width="880">
+</p>
+
 The markdown pack is the record. But the people a verdict is *for* — a project
 manager, a client, an auditor, whoever signs off — mostly do not open markdown,
 and a report nobody opens has the same value as a verification nobody ran.
@@ -221,6 +242,10 @@ produces the same file, so a workbook whose bytes changed is telling you the
 evidence changed.
 
 ## Gates that can actually go red
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/connorpham/ai-qa-assets/main/gates.png" alt="The three exit codes every gate agrees on: 0 green, 1 a real finding, 2 BLOCKED" width="880">
+</p>
 
 Every gate ships its own `--selftest` that mutates a passing fixture and asserts
 each mutation turns it red. A gate that has never failed does not exist.
@@ -331,6 +356,10 @@ and an unchosen surface is not installed.
 - **mobile** — device/emulator gating and evidence rules. *Honest scope: it gates the environment and the evidence; your project's Appium or Maestro setup does the driving.*
 
 ## Agent tools
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/connorpham/ai-qa-assets/main/architecture.png" alt="One tool-neutral core rendered by thin adapters into Claude Code, Cursor, Windsurf, Codex, and GitHub Copilot" width="880">
+</p>
 
 One method, rendered into whatever each tool discovers natively:
 **Claude Code** (`.claude/skills/`), **Cursor** (`.cursor/rules/`),

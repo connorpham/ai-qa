@@ -1,0 +1,57 @@
+<svg width="880" height="360" viewBox="0 0 880 360" fill="none" xmlns="http://www.w3.org/2000/svg" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">
+  <rect width="880" height="360" rx="12" fill="#0d1117" stroke="#30363d"/>
+  <text x="40" y="42" font-size="16" font-weight="700" fill="#e6edf3">One method, rendered into whatever each tool discovers natively</text>
+
+  <!-- core -->
+  <g transform="translate(40,72)">
+    <rect width="220" height="248" rx="10" fill="#161b22" stroke="#1f6feb"/>
+    <text x="20" y="30" font-size="13" font-weight="700" fill="#58a6ff">core/  (tool-neutral)</text>
+    <text x="20" y="62" font-size="11.5" fill="#c9d1d9">workflows/</text>
+    <text x="30" y="80" font-size="10.5" fill="#8b949e">onboard · qa · triage</text>
+    <text x="30" y="94" font-size="10.5" fill="#8b949e">· regress</text>
+    <text x="20" y="122" font-size="11.5" fill="#c9d1d9">doctrine/  (the mind)</text>
+    <text x="30" y="140" font-size="10.5" fill="#8b949e">user-mindset · heuristics</text>
+    <text x="30" y="154" font-size="10.5" fill="#8b949e">hostile-inputs · smells</text>
+    <text x="30" y="168" font-size="10.5" fill="#8b949e">case- &amp; report-writing</text>
+    <text x="20" y="196" font-size="11.5" fill="#c9d1d9">scripts/  (the gates)</text>
+    <text x="30" y="214" font-size="10.5" fill="#8b949e">each with a --selftest</text>
+    <text x="20" y="242" font-size="11.5" fill="#c9d1d9">templates/ · profiles/</text>
+  </g>
+
+  <!-- arrows -->
+  <g stroke="#30363d" stroke-width="2" fill="none">
+    <path d="M264 120 C 320 120, 320 96, 380 96"/>
+    <path d="M264 150 C 320 150, 320 150, 380 150"/>
+    <path d="M264 180 C 320 180, 320 204, 380 204"/>
+    <path d="M264 196 C 320 196, 320 258, 380 258"/>
+    <path d="M264 210 C 320 210, 320 312, 380 312"/>
+  </g>
+  <text x="322" y="86" font-size="10" fill="#6e7681" text-anchor="middle">adapters/</text>
+
+  <!-- tool targets -->
+  <g transform="translate(380,80)">
+    <rect width="460" height="34" rx="8" fill="#12261a" stroke="#2ea043"/>
+    <text x="16" y="22" font-size="12" fill="#3fb950" font-weight="600">Claude Code</text>
+    <text x="150" y="22" font-size="11" fill="#8b949e">.claude/skills/</text>
+  </g>
+  <g transform="translate(380,134)">
+    <rect width="460" height="34" rx="8" fill="#161b22" stroke="#30363d"/>
+    <text x="16" y="22" font-size="12" fill="#e6edf3" font-weight="600">Cursor</text>
+    <text x="150" y="22" font-size="11" fill="#8b949e">.cursor/rules/</text>
+  </g>
+  <g transform="translate(380,188)">
+    <rect width="460" height="34" rx="8" fill="#161b22" stroke="#30363d"/>
+    <text x="16" y="22" font-size="12" fill="#e6edf3" font-weight="600">Windsurf</text>
+    <text x="150" y="22" font-size="11" fill="#8b949e">.windsurf/workflows/</text>
+  </g>
+  <g transform="translate(380,242)">
+    <rect width="460" height="34" rx="8" fill="#161b22" stroke="#30363d"/>
+    <text x="16" y="22" font-size="12" fill="#e6edf3" font-weight="600">Codex</text>
+    <text x="150" y="22" font-size="11" fill="#8b949e">.codex/prompts/ + AGENTS.md</text>
+  </g>
+  <g transform="translate(380,296)">
+    <rect width="460" height="34" rx="8" fill="#161b22" stroke="#30363d"/>
+    <text x="16" y="22" font-size="12" fill="#e6edf3" font-weight="600">GitHub Copilot</text>
+    <text x="150" y="22" font-size="11" fill="#8b949e">.github/prompts/</text>
+  </g>
+</svg>
