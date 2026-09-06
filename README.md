@@ -1,7 +1,7 @@
 # ai-qa
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/connorpham/ai-qa/feat-readme-npm-git/assets/hero.png" alt="ai-qa — an AI QA engineer you can drop into any codebase" width="880">
+  <img src="https://raw.githubusercontent.com/connorpham/ai-qa-assets/main/hero.png" alt="ai-qa — an AI QA engineer you can drop into any codebase" width="880">
 </p>
 
 **An AI QA engineer you can drop into any codebase.**
@@ -55,7 +55,7 @@ ai-qa attacks both:
 Read-only. No network. Works in repos without ai-qa installed. Always exits 0.
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/connorpham/ai-qa/feat-readme-npm-git/assets/scan.png" alt="ai-qa scan readiness scorecard — six gates scored, with the questions a new tester would ask" width="880">
+  <img src="https://raw.githubusercontent.com/connorpham/ai-qa-assets/main/scan.png" alt="ai-qa scan readiness scorecard — six gates scored, with the questions a new tester would ask" width="880">
 </p>
 
 <details>
@@ -113,7 +113,7 @@ method), and whatever each chosen agent tool natively discovers.
 ## The four workflows
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/connorpham/ai-qa/feat-readme-npm-git/assets/workflows.png" alt="The four workflows: /onboard, /qa, /triage, /regress" width="880">
+  <img src="https://raw.githubusercontent.com/connorpham/ai-qa-assets/main/workflows.png" alt="The four workflows: /onboard, /qa, /triage, /regress" width="880">
 </p>
 
 | | What it does |
@@ -191,7 +191,7 @@ either gets an oracle or quietly invents one.
 ## The spreadsheet everyone else reads
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/connorpham/ai-qa/feat-readme-npm-git/assets/xlsx.png" alt="The five-sheet workbook: Summary, Test Cases, Defects, Traceability, Evidence" width="880">
+  <img src="https://raw.githubusercontent.com/connorpham/ai-qa-assets/main/xlsx.png" alt="The five-sheet workbook: Summary, Test Cases, Defects, Traceability, Evidence" width="880">
 </p>
 
 The markdown pack is the record. But the people a verdict is *for* — a project
@@ -244,7 +244,7 @@ evidence changed.
 ## Gates that can actually go red
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/connorpham/ai-qa/feat-readme-npm-git/assets/gates.png" alt="The three exit codes every gate agrees on: 0 green, 1 a real finding, 2 BLOCKED" width="880">
+  <img src="https://raw.githubusercontent.com/connorpham/ai-qa-assets/main/gates.png" alt="The three exit codes every gate agrees on: 0 green, 1 a real finding, 2 BLOCKED" width="880">
 </p>
 
 Every gate ships its own `--selftest` that mutates a passing fixture and asserts
@@ -358,7 +358,7 @@ and an unchosen surface is not installed.
 ## Agent tools
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/connorpham/ai-qa/feat-readme-npm-git/assets/architecture.png" alt="One tool-neutral core rendered by thin adapters into Claude Code, Cursor, Windsurf, Codex, and GitHub Copilot" width="880">
+  <img src="https://raw.githubusercontent.com/connorpham/ai-qa-assets/main/architecture.png" alt="One tool-neutral core rendered by thin adapters into Claude Code, Cursor, Windsurf, Codex, and GitHub Copilot" width="880">
 </p>
 
 One method, rendered into whatever each tool discovers natively:
