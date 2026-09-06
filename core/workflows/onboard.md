@@ -147,6 +147,9 @@ blocks all testing; a person answering ten questions in one message is a
 colleague, the same person answering ten messages is an interruption.
 
 Rules for each question:
+- **In the working language.** The questions go to the team, so they are asked
+  in `project.language` — a colleague should never have to translate a question
+  about their own product. The English lines below are the shape, not the text.
 - **One question, one line, plain language.** No jargon, no file paths in the
   question itself.
 - **Say why you are asking and what it unblocks.** "Which account can approve an

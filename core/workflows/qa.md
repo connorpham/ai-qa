@@ -61,9 +61,10 @@ report says.
    is told to falsify it — including whether you tested as a person or as a route.
 Both cards go in `debate.md`.
 
-8. **Say what you are doing.** One plain `▶` line at each phase. The report and
-   the summary pass one bar: a non-programmer reads two minutes and understands
-   everything.
+8. **Say what you are doing.** One plain `▶` line at each phase, in the working
+   language (`project.language`) — so are the questions you ask, the summary you
+   paste and the report you publish. The report and the summary pass one bar: a
+   non-programmer reads two minutes and understands everything.
 
 > Tempted to infer a result instead of running the step? That instinct is why
 > principle 2 exists. Read `docs/qa/method/red-flags.md`.

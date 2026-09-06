@@ -76,6 +76,7 @@ for (const tool of TOOLS) {
     check(!/\{project\.[a-z_]+\}|\{app\.[a-z_]+\}/.test(text),
       `${tool}: ${rel} still contains an unsubstituted {placeholder}`);
     check(text.includes("Active surfaces:"), `${tool}: ${rel} lost the surface block`);
+    check(text.includes("Working language:"), `${tool}: ${rel} lost the working-language block`);
   }
 
   // Tools without subagents must carry the note, or the challenger pass quietly stops.
@@ -102,6 +103,30 @@ for (const tool of TOOLS) {
   check(qa.text.includes("Environment: NOT CONFIGURED"),
     "an empty app: section must render the not-configured branch");
   check(!qa.text.includes("<unset>"), "the not-configured branch should not print <unset> placeholders");
+}
+
+// The working language changes what the workflow tells the agent to do — and
+// what it must NOT change: the machine-read keys the gates parse.
+{
+  const renderFor = async (language) => {
+    let qa = { text: "" };
+    let name = null;
+    await renderTool("claude-code", "/tmp/x", { ...cfg, project: { ...cfg.project, language } },
+      (_rel, text) => { if (name === "qa") qa = { text }; },
+      { dryRun: true, onWorkflow: (n) => { name = n; } });
+    return qa.text;
+  };
+  const en = await renderFor("en");
+  const vi = await renderFor("vi");
+  check(en.includes("Working language: English"), "an en install does not name English as the working language");
+  check(vi.includes("Working language: Tiếng Việt"), "a vi install does not name Tiếng Việt as the working language");
+  check(!en.includes("Tiếng Việt"), "an en install should not carry the Vietnamese example");
+  check(vi.includes('EXPECTED: "Tổng cộng" hiển thị 450.000'),
+    "a vi install lost the worked example — an English key with a Vietnamese value");
+  for (const [label, text] of [["en", en], ["vi", vi]]) {
+    check(text.includes("`RESULT:`") && text.includes("`ENVIRONMENT:`") && text.includes("Blocker/Critical/"),
+      `${label}: the language block does not list the machine-read keys that stay English`);
+  }
 }
 
 // Declared environments must reach the rendered workflow: their names, the
