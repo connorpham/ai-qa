@@ -1,0 +1,30 @@
+<svg width="880" height="300" viewBox="0 0 880 300" fill="none" xmlns="http://www.w3.org/2000/svg" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="880" y2="300" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#0d1117"/>
+      <stop offset="1" stop-color="#161b22"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#58a6ff"/>
+      <stop offset="1" stop-color="#bc8cff"/>
+    </linearGradient>
+  </defs>
+  <rect width="880" height="300" rx="14" fill="url(#bg)"/>
+  <rect x="0.5" y="0.5" width="879" height="299" rx="14" fill="none" stroke="#30363d"/>
+
+  <!-- brand -->
+  <text x="48" y="86" font-size="52" font-weight="700" fill="#e6edf3">ai-qa</text>
+  <rect x="48" y="102" width="120" height="4" rx="2" fill="url(#accent)"/>
+
+  <text x="48" y="142" font-size="19" font-weight="600" fill="#e6edf3">An AI QA engineer you can drop into any codebase.</text>
+  <text x="48" y="170" font-size="14" fill="#8b949e">It onboards like a new hire — works out what it can, says what is missing —</text>
+  <text x="48" y="190" font-size="14" fill="#8b949e">then verifies tickets against the spec with evidence a non-programmer can read.</text>
+
+  <!-- terminal -->
+  <rect x="48" y="212" width="784" height="64" rx="8" fill="#010409" stroke="#30363d"/>
+  <circle cx="66" cy="228" r="4" fill="#f85149"/>
+  <circle cx="80" cy="228" r="4" fill="#d29922"/>
+  <circle cx="94" cy="228" r="4" fill="#3fb950"/>
+  <text x="66" y="252" font-size="13" fill="#7ee787">$ <tspan fill="#e6edf3">npx @connorpham6499/ai-qa</tspan> <tspan fill="#58a6ff">scan</tspan>  <tspan fill="#484f58"># grade this repo before you commit</tspan></text>
+  <text x="66" y="270" font-size="13" fill="#7ee787">$ <tspan fill="#e6edf3">npx @connorpham6499/ai-qa</tspan> <tspan fill="#58a6ff">init</tspan>  <tspan fill="#484f58"># install the QA lane · then /onboard /qa /triage /regress</tspan></text>
+</svg>

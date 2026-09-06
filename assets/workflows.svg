@@ -1,0 +1,75 @@
+<svg width="880" height="330" viewBox="0 0 880 330" fill="none" xmlns="http://www.w3.org/2000/svg" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">
+  <rect width="880" height="330" rx="12" fill="#0d1117" stroke="#30363d"/>
+  <text x="440" y="40" font-size="16" font-weight="700" fill="#e6edf3" text-anchor="middle">The four workflows</text>
+  <text x="440" y="62" font-size="12" fill="#8b949e" text-anchor="middle">one method · run from inside your agent</text>
+
+  <!-- arrows between cards -->
+  <g stroke="#30363d" stroke-width="2">
+    <line x1="222" y1="180" x2="238" y2="180"/>
+    <line x1="430" y1="180" x2="446" y2="180"/>
+    <line x1="638" y1="180" x2="654" y2="180"/>
+  </g>
+  <g fill="#30363d">
+    <path d="M238 180 l-8 -4 v8 z"/>
+    <path d="M446 180 l-8 -4 v8 z"/>
+    <path d="M654 180 l-8 -4 v8 z"/>
+  </g>
+
+  <!-- /onboard -->
+  <g transform="translate(30,88)">
+    <rect width="192" height="184" rx="10" fill="#161b22" stroke="#2ea043"/>
+    <rect width="192" height="34" rx="10" fill="#12261a"/>
+    <text x="16" y="23" font-size="15" font-weight="700" fill="#3fb950">/onboard</text>
+    <text x="16" y="60" font-size="11.5" fill="#c9d1d9">Arrive knowing</text>
+    <text x="16" y="78" font-size="11.5" fill="#c9d1d9">nothing. Read all,</text>
+    <text x="16" y="96" font-size="11.5" fill="#c9d1d9">draft the dossier,</text>
+    <text x="16" y="114" font-size="11.5" fill="#c9d1d9">interview the gaps,</text>
+    <text x="16" y="132" font-size="11.5" fill="#c9d1d9">prove answers live.</text>
+    <text x="16" y="164" font-size="10.5" fill="#6e7681">→ onboarding.md,</text>
+    <text x="16" y="178" font-size="10.5" fill="#6e7681">  risk map, charters</text>
+  </g>
+
+  <!-- /qa -->
+  <g transform="translate(238,88)">
+    <rect width="192" height="184" rx="10" fill="#161b22" stroke="#1f6feb"/>
+    <rect width="192" height="34" rx="10" fill="#0d1e33"/>
+    <text x="16" y="23" font-size="15" font-weight="700" fill="#58a6ff">/qa</text>
+    <text x="16" y="60" font-size="11.5" fill="#c9d1d9">Verify one ticket</text>
+    <text x="16" y="78" font-size="11.5" fill="#c9d1d9">against the spec.</text>
+    <text x="16" y="96" font-size="11.5" fill="#c9d1d9">Expected w/ citation,</text>
+    <text x="16" y="114" font-size="11.5" fill="#c9d1d9">walk as a persona,</text>
+    <text x="16" y="132" font-size="11.5" fill="#c9d1d9">get falsified, report.</text>
+    <text x="16" y="164" font-size="10.5" fill="#6e7681">→ evidence a non-</text>
+    <text x="16" y="178" font-size="10.5" fill="#6e7681">  programmer reads</text>
+  </g>
+
+  <!-- /triage -->
+  <g transform="translate(446,88)">
+    <rect width="192" height="184" rx="10" fill="#161b22" stroke="#d29922"/>
+    <rect width="192" height="34" rx="10" fill="#2b2410"/>
+    <text x="16" y="23" font-size="15" font-weight="700" fill="#e3b341">/triage</text>
+    <text x="16" y="60" font-size="11.5" fill="#c9d1d9">Turn "it's broken"</text>
+    <text x="16" y="78" font-size="11.5" fill="#c9d1d9">into a fix today.</text>
+    <text x="16" y="96" font-size="11.5" fill="#c9d1d9">Reproduce, narrow,</text>
+    <text x="16" y="114" font-size="11.5" fill="#c9d1d9">severity by</text>
+    <text x="16" y="132" font-size="11.5" fill="#c9d1d9">consequence, file.</text>
+    <text x="16" y="164" font-size="10.5" fill="#6e7681">→ numbered steps</text>
+    <text x="16" y="178" font-size="10.5" fill="#6e7681">  + evidence</text>
+  </g>
+
+  <!-- /regress -->
+  <g transform="translate(654,88)">
+    <rect width="192" height="184" rx="10" fill="#161b22" stroke="#bc8cff"/>
+    <rect width="192" height="34" rx="10" fill="#1d1730"/>
+    <text x="16" y="23" font-size="15" font-weight="700" fill="#bc8cff">/regress</text>
+    <text x="16" y="60" font-size="11.5" fill="#c9d1d9">A suite people still</text>
+    <text x="16" y="78" font-size="11.5" fill="#c9d1d9">run in six months.</text>
+    <text x="16" y="96" font-size="11.5" fill="#c9d1d9">Rank by risk, prove</text>
+    <text x="16" y="114" font-size="11.5" fill="#c9d1d9">each can fail,</text>
+    <text x="16" y="132" font-size="11.5" fill="#c9d1d9">quarantine flakes.</text>
+    <text x="16" y="164" font-size="10.5" fill="#6e7681">→ coverage as what</text>
+    <text x="16" y="178" font-size="10.5" fill="#6e7681">  is protected</text>
+  </g>
+
+  <text x="440" y="308" font-size="11.5" fill="#6e7681" text-anchor="middle">It reports defects. It never fixes them, and it never invents an expected value.</text>
+</svg>

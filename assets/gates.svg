@@ -1,0 +1,42 @@
+<svg width="880" height="300" viewBox="0 0 880 300" fill="none" xmlns="http://www.w3.org/2000/svg" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">
+  <rect width="880" height="300" rx="12" fill="#0d1117" stroke="#30363d"/>
+  <text x="40" y="42" font-size="16" font-weight="700" fill="#e6edf3">Gates that can actually go red</text>
+  <text x="40" y="64" font-size="12" fill="#8b949e">Every gate ships its own --selftest. A gate that has never failed does not exist.</text>
+
+  <!-- three exit codes -->
+  <g transform="translate(40,90)">
+    <rect width="256" height="170" rx="10" fill="#0f1c14" stroke="#2ea043"/>
+    <text x="20" y="40" font-size="34" font-weight="700" fill="#3fb950">0</text>
+    <text x="72" y="40" font-size="15" font-weight="600" fill="#3fb950">green</text>
+    <line x1="20" y1="56" x2="236" y2="56" stroke="#21402a"/>
+    <text x="20" y="84" font-size="12.5" fill="#c9d1d9">The check passed.</text>
+    <text x="20" y="106" font-size="12.5" fill="#8b949e">Actor, precondition,</text>
+    <text x="20" y="124" font-size="12.5" fill="#8b949e">entry path, boundary,</text>
+    <text x="20" y="142" font-size="12.5" fill="#8b949e">annotation, severity,</text>
+    <text x="20" y="160" font-size="12.5" fill="#8b949e">challenger — all present.</text>
+  </g>
+
+  <g transform="translate(312,90)">
+    <rect width="256" height="170" rx="10" fill="#211014" stroke="#f85149"/>
+    <text x="20" y="40" font-size="34" font-weight="700" fill="#f85149">1</text>
+    <text x="72" y="40" font-size="15" font-weight="600" fill="#f85149">a real finding</text>
+    <line x1="20" y1="56" x2="236" y2="56" stroke="#432224"/>
+    <text x="20" y="84" font-size="12.5" fill="#c9d1d9">A defect was found.</text>
+    <text x="20" y="106" font-size="12.5" fill="#8b949e">A DB write hidden in a</text>
+    <text x="20" y="124" font-size="12.5" fill="#8b949e">CTE. A judgement word</text>
+    <text x="20" y="142" font-size="12.5" fill="#8b949e">where a value belongs.</text>
+    <text x="20" y="160" font-size="12.5" fill="#8b949e">"Planned 5, ran 1."</text>
+  </g>
+
+  <g transform="translate(584,90)">
+    <rect width="256" height="170" rx="10" fill="#231a0d" stroke="#d29922"/>
+    <text x="20" y="40" font-size="34" font-weight="700" fill="#e3b341">2</text>
+    <text x="72" y="40" font-size="15" font-weight="600" fill="#e3b341">BLOCKED</text>
+    <line x1="20" y1="56" x2="236" y2="56" stroke="#40340f"/>
+    <text x="20" y="84" font-size="12.5" fill="#c9d1d9">The run could not start.</text>
+    <text x="20" y="106" font-size="12.5" fill="#8b949e">Missing credential,</text>
+    <text x="20" y="124" font-size="12.5" fill="#8b949e">no browser, no oracle.</text>
+    <text x="20" y="142" font-size="12.5" fill="#8b949e">A broken laptop is not</text>
+    <text x="20" y="160" font-size="12.5" fill="#8b949e">a false bug report.</text>
+  </g>
+</svg>

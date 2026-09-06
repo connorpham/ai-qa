@@ -1,0 +1,79 @@
+<svg width="880" height="470" viewBox="0 0 880 470" fill="none" xmlns="http://www.w3.org/2000/svg" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">
+  <rect width="880" height="470" rx="12" fill="#0d1117" stroke="#30363d"/>
+  <!-- title bar -->
+  <circle cx="24" cy="24" r="5" fill="#f85149"/>
+  <circle cx="42" cy="24" r="5" fill="#d29922"/>
+  <circle cx="60" cy="24" r="5" fill="#3fb950"/>
+  <text x="440" y="29" font-size="12" fill="#8b949e" text-anchor="middle">ai-qa scan — read-only · no network · always exits 0</text>
+  <line x1="0" y1="48" x2="880" y2="48" stroke="#21262d"/>
+
+  <!-- header -->
+  <text x="40" y="86" font-size="15" fill="#8b949e">QA readiness  <tspan fill="#e6edf3">~/work/shop</tspan></text>
+  <text x="40" y="118" font-size="30" font-weight="700" fill="#f0883e">38/100</text>
+  <text x="170" y="118" font-size="18" fill="#e6edf3">grade <tspan font-weight="700" fill="#f0883e">D</tspan></text>
+  <text x="280" y="118" font-size="13" fill="#8b949e">next.js, react · web+database</text>
+
+  <!-- bars -->
+  <!-- RUN 13/20 65% -->
+  <g transform="translate(40,150)">
+    <text x="0" y="12" font-size="13" fill="#e6edf3">RUN</text>
+    <rect x="130" y="0" width="440" height="14" rx="7" fill="#21262d"/>
+    <rect x="130" y="0" width="286" height="14" rx="7" fill="#3fb950"/>
+    <text x="586" y="12" font-size="12" fill="#8b949e">13/20</text>
+    <text x="650" y="12" font-size="12" fill="#6e7681">Can I start it?</text>
+  </g>
+  <!-- ACCESS 5/15 33% -->
+  <g transform="translate(40,182)">
+    <text x="0" y="12" font-size="13" fill="#e6edf3">ACCESS</text>
+    <rect x="130" y="0" width="440" height="14" rx="7" fill="#21262d"/>
+    <rect x="130" y="0" width="145" height="14" rx="7" fill="#d29922"/>
+    <text x="586" y="12" font-size="12" fill="#8b949e">5/15</text>
+    <text x="650" y="12" font-size="12" fill="#6e7681">Can I get in?</text>
+  </g>
+  <!-- ORACLE 0/25 0% -->
+  <g transform="translate(40,214)">
+    <text x="0" y="12" font-size="13" fill="#e6edf3">ORACLE</text>
+    <rect x="130" y="0" width="440" height="14" rx="7" fill="#21262d"/>
+    <rect x="130" y="0" width="8" height="14" rx="7" fill="#f85149"/>
+    <text x="586" y="12" font-size="12" fill="#f85149">0/25</text>
+    <text x="650" y="12" font-size="12" fill="#6e7681">Do I know what 'correct' means?</text>
+  </g>
+  <!-- SURFACE 9/15 60% -->
+  <g transform="translate(40,246)">
+    <text x="0" y="12" font-size="13" fill="#e6edf3">SURFACE</text>
+    <rect x="130" y="0" width="440" height="14" rx="7" fill="#21262d"/>
+    <rect x="130" y="0" width="264" height="14" rx="7" fill="#3fb950"/>
+    <text x="586" y="12" font-size="12" fill="#8b949e">9/15</text>
+    <text x="650" y="12" font-size="12" fill="#6e7681">Do I know what to test?</text>
+  </g>
+  <!-- COVERAGE 6/15 40% -->
+  <g transform="translate(40,278)">
+    <text x="0" y="12" font-size="13" fill="#e6edf3">COVERAGE</text>
+    <rect x="130" y="0" width="440" height="14" rx="7" fill="#21262d"/>
+    <rect x="130" y="0" width="176" height="14" rx="7" fill="#d29922"/>
+    <text x="586" y="12" font-size="12" fill="#8b949e">6/15</text>
+    <text x="650" y="12" font-size="12" fill="#6e7681">What is already covered?</text>
+  </g>
+  <!-- PROCESS 5/10 50% -->
+  <g transform="translate(40,310)">
+    <text x="0" y="12" font-size="13" fill="#e6edf3">PROCESS</text>
+    <rect x="130" y="0" width="440" height="14" rx="7" fill="#21262d"/>
+    <rect x="130" y="0" width="220" height="14" rx="7" fill="#d29922"/>
+    <text x="586" y="12" font-size="12" fill="#8b949e">5/10</text>
+    <text x="650" y="12" font-size="12" fill="#6e7681">How does work arrive and leave?</text>
+  </g>
+
+  <line x1="40" y1="348" x2="840" y2="348" stroke="#21262d"/>
+  <text x="40" y="374" font-size="13" fill="#e6edf3" font-weight="600">What I would have to ask a human before I could test this</text>
+
+  <g transform="translate(40,392)">
+    <text x="0" y="14" font-size="13" fill="#f85149">?</text>
+    <text x="20" y="14" font-size="12.5" fill="#c9d1d9"><tspan fill="#f0883e">[ORACLE]</tspan> Where is the written description of correct behaviour? Without it</text>
+    <text x="20" y="32" font-size="12.5" fill="#8b949e">every verdict is my opinion against the developer's.</text>
+  </g>
+  <g transform="translate(40,432)">
+    <text x="0" y="14" font-size="13" fill="#f85149">?</text>
+    <text x="20" y="14" font-size="12.5" fill="#c9d1d9"><tspan fill="#d29922">[ACCESS]</tspan> Which test accounts exist, one per role? A verdict with no actor</text>
+    <text x="20" y="32" font-size="12.5" fill="#8b949e">is untraceable — half of all UI bugs are role-shaped.</text>
+  </g>
+</svg>
