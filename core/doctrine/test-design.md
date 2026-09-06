@@ -57,6 +57,19 @@ nobody thought to look; the other four confirm what someone already thought of.
 A pack with five cases and no exploratory one has spent its whole budget on
 confirmation.
 
+**⑥ The security probe** — when the ticket touches authentication, sessions,
+roles, money, personal data, or uploads, one of the five cases sends the input
+an attacker sends **on purpose**, not the one a user fumbles by accident. Open
+`security-probes.md` and take the two or three probes that fit the surface: is
+the lockout real, does the error message or the response *clock* leak which
+accounts exist, does the session survive a password change, does the protected
+route answer when called directly as the wrong role, does a payload get executed
+or echoed unescaped. On a ticket that merely brushes security, this shares the
+boundary or whole-screen slot; on a ticket that **is** authentication or
+authorization, it takes two or three cases, because there the security floor is
+the requirement. Its EXPECTED is either a cited rule or one of the no-citation
+floor outcomes in `security-probes.md`.
+
 ## The real-user move — in every case, not in a case of its own
 
 Cases ① to ④ are shapes; a person still has to walk them. Every case's STEPS
@@ -79,6 +92,17 @@ into a boundary that actually differs.
 The trap is classes that look equivalent and are not: a 0, a negative number and
 an empty field are three different classes in most systems, however similar they
 look in the form.
+
+The **opposite** trap is just as common: values that look different but are the
+**same** class, and the product forgets it. `admin`, `ADMIN` and `Admin` are one
+identity when the rule says "case-insensitive"; `+84 90…` and `090…` are one
+phone; `café` typed and `café` pasted (one glyph vs `e` + combining accent) are
+one name. The test is not "does each form work" — it is "do they collapse to
+**one**": logging in with the uppercase form must succeed, and registering the
+second form must be refused as a duplicate. A rule about "unique" or
+"case-insensitive" or "normalised" that is never tested across representations is
+a rule tested at zero of its edges. (This is the class of miss that hides in a
+happy path forever, because the happy path only ever types the value one way.)
 
 ## State transitions
 

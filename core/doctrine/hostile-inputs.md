@@ -4,11 +4,14 @@
 > T3 when varying the data. Pick two or three rows that fit the field in front
 > of you; never paste the whole table into a test plan.
 
-This is not a security catalogue. Every value below is produced by ordinary
+This is not a security catalogue — that is `security-probes.md`, the input an
+attacker sends on purpose. Every value below is instead produced by ordinary
 people doing ordinary work: pasting from a spreadsheet, living in a different
 locale, having an apostrophe in their name, being paid in a currency with no
 decimals. If the product is used by a thousand people, each of these arrives
-this week.
+this week. (The same character often lives in both files — the apostrophe in
+`O'Brien` here, and the apostrophe that starts `' OR '1'='1` there. The value is
+the same; the intent, and therefore the case, is different.)
 
 **The oracle rule still applies to every row.** The table says what to try. The
 spec says what should happen. Four outcomes need no citation, because no
