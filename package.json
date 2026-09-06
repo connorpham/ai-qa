@@ -1,7 +1,7 @@
 {
   "name": "@connorpham6499/ai-qa",
-  "version": "0.1.0",
-  "description": "An AI QA engineer you can drop into any codebase. It onboards like a new hire \u2014 works out what it needs to know, says what is missing \u2014 then verifies tickets against the spec with evidence a non-programmer can read.",
+  "version": "0.1.1",
+  "description": "An AI QA engineer you can drop into any codebase. It onboards like a new hire — works out what it needs to know, says what is missing — then verifies tickets against the spec with evidence a non-programmer can read.",
   "license": "MIT",
   "type": "module",
   "bin": {
