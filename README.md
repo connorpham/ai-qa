@@ -26,6 +26,21 @@ Then, inside your agent: `/onboard` · `/qa` · `/triage` · `/regress`.
 
 ---
 
+## Contents
+
+- [The problem this exists for](#the-problem-this-exists-for)
+- [The whole system at a glance](#the-whole-system-at-a-glance) — the diagram
+- [End to end: from an empty repo to a verdict](#end-to-end-from-an-empty-repo-to-a-verdict) — the run, step by step
+- [Inside `/qa`: how one ticket is verified](#inside-qa-how-one-ticket-is-verified) — the flowchart
+- [With a written spec, and without one](#with-a-written-spec-and-without-one--the-two-paths) — **the two paths** (documented vs undocumented repos)
+- [`scan`](#ai-qa-scan--the-mirror-before-you-commit-to-anything) · [`init`](#ai-qa-init--a-setup-that-already-read-your-repo) · [the four workflows](#the-four-workflows)
+- [Reading tickets](#reading-tickets--jira-backlog-github-or-files) · [Acceptance criteria](#acceptance-criteria) · [The spreadsheet everyone reads](#the-spreadsheet-everyone-else-reads)
+- [Gates that can go red](#gates-that-can-actually-go-red) · [The mind of the tester](#the-mind-of-the-tester) · [Rules the lane will not bend](#rules-the-lane-will-not-bend)
+- [Environments](#environments--local--dev--stg--prod) · [Working language](#the-working-language--en--vi) · [Surfaces](#surfaces) · [Agent tools](#agent-tools)
+- [Updating safely](#updating-safely) · [Layout](#layout) · [Requirements](#requirements) · [Tests](#tests)
+
+---
+
 ## The problem this exists for
 
 Ask an AI agent to test a feature and you get a confident paragraph. Ask what it
@@ -47,6 +62,71 @@ ai-qa attacks both:
 2. **It refuses to invent an oracle.** No written spec for an area? Then a
    verification there reports *differences*, never *defects*, and the report says
    so in its first lines. That refusal is the product.
+
+---
+
+## The whole system at a glance
+
+Four moving parts, and one rule connecting them: **nothing is a verdict until a
+gate that can go red has passed.** The CLI installs a lane into your repo; your
+agent reads the doctrine and drives the product; every claim it makes is checked
+by a gate and captured as evidence a stranger can read.
+
+```mermaid
+flowchart TB
+    subgraph repo["📁 Your repository"]
+        code["source code"]
+        spec["docs/ — the written spec<br/>(the oracle: what 'correct' means)"]
+        tickets["tickets<br/>Jira · Backlog · GitHub · files"]
+    end
+
+    subgraph cli["⚙️ ai-qa CLI &nbsp;·&nbsp; bin/ai-qa.mjs"]
+        scan["scan — grade readiness"]
+        init["init — install the lane"]
+        doctor["doctor — prove gates green"]
+        update["update — re-render safely"]
+    end
+
+    subgraph lane["🔧 The installed lane &nbsp;·&nbsp; .ai-qa/ + docs/qa/"]
+        doctrine["docs/qa/method/ — the QA doctrine<br/>(how a tester thinks)"]
+        gates[".ai-qa/scripts/ — the gates<br/>(each ships a --selftest)"]
+        config["aiqa.config.yaml — the contract<br/>(url · specs · accounts · surfaces)"]
+    end
+
+    subgraph agent["🤖 Your AI agent &nbsp;·&nbsp; Claude Code / Cursor / …"]
+        onboard["/onboard"]
+        qa["/qa"]
+        triage["/triage"]
+        regress["/regress"]
+    end
+
+    evd["📦 evd/&lt;TICKET&gt;/ — the evidence pack<br/>report · manifests · screenshots · xlsx"]
+
+    scan --> init
+    init --> lane
+    doctor -. verifies .-> gates
+    lane --> agent
+    agent -. reads .-> doctrine
+    agent -. reads .-> spec
+    agent -. fetches .-> tickets
+    agent -. runs .-> gates
+    agent ==> evd
+
+    classDef store fill:#FFF7E6,stroke:#E0A800,color:#3A2E00;
+    classDef tool fill:#E8F0FE,stroke:#3B6FD6,color:#0B2D66;
+    classDef out fill:#E9F9EE,stroke:#2E9E52,color:#0B3D1E;
+    class repo,lane store;
+    class cli,agent tool;
+    class evd out;
+```
+
+| Part | Lives in | What it is |
+|---|---|---|
+| **The CLI** | `bin/`, `src/` | `scan` · `init` · `doctor` · `update`. Installs and verifies the lane; never tests your product itself. |
+| **The doctrine** | `core/doctrine/` → `docs/qa/method/` | How a real tester thinks — personas, boundaries, security probes, accessibility, how to write a case and a report. The agent reads it at the moment each is needed. |
+| **The gates** | `core/scripts/` → `.ai-qa/scripts/` | Small programs that go **red** on a bad verification: missing evidence, a write to the database, a secret in a log, a pack that skipped security. Each proves itself with `--selftest`. |
+| **The workflows** | `core/workflows/` → your agent tool | `/onboard` · `/qa` · `/triage` · `/regress`, rendered into whatever your agent discovers natively. |
+| **The evidence** | `evd/<TICKET>/` | The output: a report a non-programmer reads in two minutes, plus the machine-checked pack behind it. |
 
 ---
 
@@ -122,6 +202,184 @@ method), and whatever each chosen agent tool natively discovers.
 | **`/qa`** | Verify one ticket against the spec. **Read the ticket for ambiguity first** and ask before testing. Derive expected values **with citations**, design 2–5 cases chosen by risk, **walk each one as a named persona with a move a real user makes** — the double-click, the Back after Save, the paste with a trailing space — run them for real, capture named and annotated evidence, record what was noticed but not asked about, cross-check every claim, pass the machine gate, get falsified by a fresh challenger, publish a report a non-programmer can read. |
 | **`/triage`** | Turn "it's broken" into something a developer can fix today: reproduce first-hand, narrow to the minimal conditions, separate observation from theory, dedup, assign severity by consequence, file with numbered steps and evidence. |
 | **`/regress`** | Build a suite people still run in six months. Promote the journeys past verifications left behind, rank by consequence × likelihood, **prove every case can fail**, quarantine flakes with a deadline, and report coverage as what is protected — never as a percentage. |
+
+---
+
+## End to end: from an empty repo to a verdict
+
+The whole lifecycle is five commands and four slash-workflows. You run the CLI
+once to install and prove the lane; after that you live inside your agent.
+
+```mermaid
+flowchart LR
+    A["1 · scan<br/>grade readiness<br/>(read-only)"] --> B["2 · init<br/>install the lane<br/>answer what the repo can't"]
+    B --> C["3 · doctor<br/>prove every gate<br/>can still go red"]
+    C --> D["4 · /onboard<br/>learn the repo,<br/>interview the team,<br/>write the dossier"]
+    D --> E["5 · /qa TICKET<br/>verify against the spec,<br/>with evidence"]
+    E --> F{"defect<br/>found?"}
+    F -->|yes| G["/triage<br/>reproduce, narrow,<br/>file a fixable bug"]
+    F -->|no| H(["ready to release"])
+    E --> I["/regress<br/>promote the journey<br/>into a lasting suite"]
+
+    classDef cli fill:#E8F0FE,stroke:#3B6FD6,color:#0B2D66;
+    classDef flow fill:#FFF7E6,stroke:#E0A800,color:#3A2E00;
+    classDef done fill:#E9F9EE,stroke:#2E9E52,color:#0B3D1E;
+    class A,B,C cli;
+    class D,E,G,I flow;
+    class H done;
+```
+
+**Step by step, with the commands you actually type:**
+
+```bash
+# ── 1. Look before you leap. Read-only, no network, works on any repo. ──
+npx @connorpham6499/ai-qa scan
+#   → a 0–100 readiness score and the exact questions a new tester would ask.
+#     ORACLE weighs most: tests written against nothing verify nothing.
+
+# ── 2. Install the lane. The scan already ran, so the wizard is short. ──
+npx @connorpham6499/ai-qa init          # or: init --ui  (a browser form)
+#   → writes .ai-qa/ (gates), docs/qa/ (doctrine + dossier skeleton),
+#     aiqa.config.yaml (the contract), and your agent's native workflow files.
+#     A value it cannot detect is left EMPTY — a declared unknown, not a guess.
+
+# ── 3. Prove the install. Green doctor is the definition of "installed". ──
+npx ai-qa doctor
+#   → runs every gate's --selftest. A gate that cannot fail does not exist.
+```
+
+Then, inside your agent (Claude Code, Cursor, …):
+
+```text
+/onboard          → reads the repo, asks what it cannot find in ONE batched
+                    interview, proves the answers by bringing the app up and
+                    walking one journey per role, and publishes:
+                      docs/qa/onboarding.md   the dossier (every line tagged
+                                              OBSERVED / INFERRED / TOLD / UNKNOWN)
+                      docs/qa/charters.md     runnable exploratory charters
+                      a readiness verdict naming what is still missing, and who owes it
+
+/qa SHOP-142      → verifies one ticket against the spec and publishes:
+                      evd/SHOP-142/REPORT.md          a two-minute, jargon-free report
+                      evd/SHOP-142/*_testcases.xlsx   the six-sheet workbook, images embedded
+                      a comment on the ticket, and a proposed status move
+
+/triage           → turns "it's broken" into a bug a developer can fix today
+/regress          → promotes what /qa proved into a suite people still run in six months
+```
+
+The rule that never bends: **every verdict comes from a run that happened this
+session, checked against the written spec, and proved by evidence a gate has
+inspected.** No spec for an area? The report says so in its first line, and calls
+its own verdict an opinion — [that refusal is the product](#the-problem-this-exists-for).
+
+---
+
+## Inside `/qa`: how one ticket is verified
+
+`/qa` is eight phases (V0–V7). The shape that matters: **design by risk, run for
+real, then have a *fresh* agent try to break the verdict before it is final** —
+and if the challenger finds a hole, the loop goes back and runs again.
+
+```mermaid
+flowchart TB
+    V0["V0 · Resolve the ticket<br/>fetch it for real · pin the commit · check status"]
+    V1["V1 · Derive what SHOULD happen<br/>read the spec + schema · cite every expected value"]
+    V2["V2 · Design 2–5 cases by risk<br/>acceptance · boundary · whole-screen<br/>write-readback · security · exploratory"]
+    V3["V3 · Create missing data<br/>through the product, under the write gate"]
+    V4["V4 · Run for real<br/>browser / API / database · capture named evidence"]
+    V5["V5 · Cross-check<br/>every claim in the ticket → a file that proves it"]
+    V6{"V6 · Challenger<br/>a fresh agent tries to<br/>FALSIFY the verdict"}
+    V7["V7 · Report + gates<br/>evidence gate · xlsx · comment on the ticket"]
+    DONE(["A verdict a non-programmer<br/>reads in two minutes"])
+
+    V0 --> V1 --> V2 --> V3 --> V4 --> V5 --> V6
+    V6 -->|hole found| V4
+    V6 -->|holds up| V7 --> DONE
+
+    classDef phase fill:#FFF7E6,stroke:#E0A800,color:#3A2E00;
+    classDef check fill:#FDECEC,stroke:#D64545,color:#5A1414;
+    classDef done fill:#E9F9EE,stroke:#2E9E52,color:#0B3D1E;
+    class V0,V1,V2,V3,V4,V5,V7 phase;
+    class V6 check;
+    class DONE done;
+```
+
+Two of these are the whole point of the tool. **V1** refuses to invent an
+expected value — no spec, no defect, only a reported *difference*. **V6** hands
+your finished verdict to an agent with empty context and tells it to prove you
+wrong: wrong role, a difference that is really about data, a boundary never
+tested, evidence that does not show what its caption claims. Both cards go in
+`debate.md`, and agreement reached without a run that actually executed is
+`UNCLEAR`, not `PASS`.
+
+---
+
+## With a written spec, and without one — the two paths
+
+This is the fork that decides everything, so ai-qa makes you face it on purpose.
+**Where does "correct" come from here?** If a written spec exists, a verification
+can call a divergence a *defect*. If nothing is written, it cannot — and the
+honest thing is to say so, not to quietly adopt whatever the code does today as
+the expected value. ai-qa takes the second path as seriously as the first: an
+honest *difference* with an owner beats an invented *defect* every time.
+
+```mermaid
+flowchart TB
+    Q{"Does this area have a<br/>WRITTEN spec / acceptance criteria?"}
+    Q -->|"Yes — an oracle exists"| HAS
+    Q -->|"No — nothing written"| NONE
+
+    subgraph HAS["✅ Project WITH documentation"]
+        direction TB
+        H1["Point aiqa.config.yaml → oracle.specs<br/>at the docs"]
+        H2["/qa derives each EXPECTED value<br/>and CITES it to a section"]
+        H3["Divergence from the spec = a DEFECT"]
+        H4["Verdict: PASS / FAIL, with a severity"]
+        H1 --> H2 --> H3 --> H4
+    end
+
+    subgraph NONE["⚠️ Project WITHOUT documentation"]
+        direction TB
+        N1["oracle.specs left EMPTY<br/>— a declared unknown, not a guess"]
+        N2["/qa will NOT invent an expected value"]
+        N3["It reports DIFFERENCES, never defects<br/>+ consistency findings: inconsistent with its<br/>own other screen, its last release, the law"]
+        N4["The report says so in line 1:<br/>'compares against nothing written' —<br/>the verdict is labelled an opinion"]
+        N5["The questions it had to ask become<br/>your spec's to-do list → write it, re-verify"]
+        N1 --> N2 --> N3 --> N4 --> N5
+    end
+
+    classDef q fill:#E8F0FE,stroke:#3B6FD6,color:#0B2D66;
+    classDef good fill:#E9F9EE,stroke:#2E9E52,color:#0B3D1E;
+    classDef warn fill:#FFF3E0,stroke:#E0A800,color:#3A2E00;
+    class Q q;
+    class HAS good;
+    class NONE warn;
+```
+
+The same distinction runs through every command:
+
+| | 📗 Project **with** documentation | 📙 Project **without** documentation |
+|---|---|---|
+| Where "correct" comes from | the written spec, **cited** section by section | nothing written yet — it has to be decided by a human |
+| What `ai-qa scan` shows | a high **ORACLE** score | ORACLE near **0** — printed as the number-one gap, because it weighs most (25 pts) |
+| What `/onboard` does | maps each area to its spec in the dossier's §4 oracle map | tags the area `[UNKNOWN]` and turns it into the first question for the team |
+| The config line | `oracle.specs: [docs/spec/…]` | `oracle.specs: []` — an honest blank the workflows report as a blocker |
+| What `/qa` produces | **defects** — PASS / FAIL with severity and citation | **differences** and consistency findings, each with an owner; the verdict is labelled an opinion |
+| The way forward | verify tickets against the spec | let the questions ai-qa asks *become* your first written spec — then the area flips to the left column |
+
+**You do not need documentation to start** — you need to be honest about not
+having it. The most valuable output on an undocumented repo is not a verdict; it
+is the precise list of questions a careful tester would have to ask before any
+verdict could mean anything. That list is your spec, half-written.
+
+> Practical tip: even a one-paragraph acceptance criterion in the ticket, or a
+> `docs/qa/` note capturing a decision the moment it's made, moves an area from
+> the right column to the left. ai-qa reads Markdown specs, Jira/Backlog
+> acceptance criteria, and a design source (Figma) as oracles — start with
+> whatever exists.
+
+---
 
 ## Reading tickets — Jira, Backlog, GitHub, or files
 
