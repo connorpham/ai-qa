@@ -133,6 +133,37 @@ function surfaceBlock(cfg) {
     `> behind it; say so rather than pretending it was verified.\n\n`;
 }
 
+/** The working-language block, on every workflow. The lane does not only WRITE
+ * its report in the project's language — it WORKS in it: narration, questions,
+ * summaries, the dossier, ticket comments. The machine-read contract stays in
+ * English, and the list of what that covers lives here, once, so no workflow
+ * re-decides it and no gate goes hunting for a translated key. */
+function langBlock(cfg) {
+  const lang = String(cfg?.project?.language ?? "en").trim() || "en";
+  const name = lang === "vi" ? "Tiếng Việt" : "English";
+  const out = [
+    `> **Working language: ${name}** (\`project.language: ${lang}\`). Everything a person`,
+    "> reads or is asked is written in it — the `▶` phase narration, questions to the",
+    "> team, chat summaries, the report, bug reports, the dossier, ticket comments.",
+    "> Write naturally in that language from the start; never draft in English and",
+    "> translate word by word. What stays in English is the machine-read contract,",
+    "> exactly as the gates expect it: field keys (`RESULT:`, `EXPECTED:` …), report",
+    "> header keys (`COMMIT:` / `VERIFIED-AT:` / `ENVIRONMENT:` / `ORACLE:`), the verdict",
+    "> word (PASS/FAIL/PARTIAL/NEW-BUG/BLOCKED/UNCLEAR), severity (Blocker/Critical/",
+    "> Major/Minor), ORIGIN (DEV/SPEC), KIND values, `TC_<n>_snake_case` folder names,",
+    "> and gate lines (`APP: UP`, `API: BLOCKED`, `DB: OK`). Field VALUES are in the",
+    "> working language, and a screen label is quoted exactly as the product displays",
+    "> it — the localised text on the button, not its translation.",
+  ];
+  if (lang === "vi") {
+    out.push(
+      "> Ví dụ một dòng đúng chuẩn — khoá tiếng Anh, giá trị tiếng Việt, nhãn màn hình",
+      '> nguyên văn: `EXPECTED: "Tổng cộng" hiển thị 450.000 ₫ (spec §3.2)`.',
+    );
+  }
+  return `${out.join("\n")}\n\n`;
+}
+
 /** Surface-conditional blocks:
  *
  *   <!-- surface:api,mobile -->  …only rendered when one is active…  <!-- /surface -->
@@ -170,7 +201,7 @@ export async function planWorkflows(tool, root, cfg) {
       name,
       description: render(raw.meta.description || "", cfg),
       args: render(raw.meta["argument-hint"] || "", cfg),
-      body: surfaceBlock(cfg) + (needsEnv ? envBlock(cfg) : "") +
+      body: surfaceBlock(cfg) + langBlock(cfg) + (needsEnv ? envBlock(cfg) : "") +
             filterSurfaces(render(raw.body, cfg), Array.isArray(cfg?.surfaces) ? cfg.surfaces : ["web"]),
     };
     const rendered = adapter.render(wf, ctx);

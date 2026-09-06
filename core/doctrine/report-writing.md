@@ -168,6 +168,12 @@ not, something from the body belongs in the appendix.
 
 ## Writing in the project's language
 
+`project.language` is the WORKING language, not a translation step at the end:
+the `▶` narration, the questions to the team, the chat summary, the bug report
+and the dossier are written in it from the first word. Drafting in English and
+translating afterwards produces the stilted sentence a reader stumbles on — if
+you find yourself translating, you drafted in the wrong language.
+
 The report is written in `project.language`. Six things stay in English because
 the gate and the spreadsheet read them: the verdict word on the first line, the
 `COMMIT:` / `VERIFIED-AT:` / `ENVIRONMENT:` / `ORACLE:` keys, the four severity
@@ -175,6 +181,11 @@ words, and the bold `**Recommendation:**` label. Everything else — the three s
 the section headings' text, the table headers, the findings — is written for
 the team that reads it, and English test jargon is not mixed in. *"Verdict"*
 can be *"Kết luận"*; *"PASS"* on the first line cannot.
+
+Screen labels are quoted as the product displays them. On a Vietnamese product
+the button is *"Lưu"*, so the step says `press "Lưu"` — never `press "Save"`
+with the label translated back to English, because the reader will look for a
+button that does not exist.
 
 ## Before and after
 

@@ -384,6 +384,30 @@ environments:
   a stg verification reads stg's database — not your laptop's wearing a
   staging name.
 
+## The working language — en · vi
+
+`project.language` is not a translation step at the end — it is the language
+the lane **works in**. Set once at `init` (or edit the config), and:
+
+- The `▶` narration, the questions `/onboard` puts to the team, the chat
+  summaries, the report, `/triage` bug reports, the dossier and ticket comments
+  are all written in it from the first word — never drafted in English and
+  translated after, which is how reports end up stilted.
+- The spreadsheet's headers and legend follow it automatically (`--lang`
+  overrides per export).
+- **What stays English is the machine-read contract**, and the rendered
+  workflows carry the exact list so no run re-decides it: field keys
+  (`RESULT:`, `EXPECTED:` …), report header keys (`COMMIT:` / `VERIFIED-AT:` /
+  `ENVIRONMENT:` / `ORACLE:`), the verdict word, the four severity words,
+  `ORIGIN`/`KIND` values, `TC_<n>_snake_case` folder names, and gate lines
+  (`APP: UP`, `DB: OK`). *"Verdict"* can be *"Kết luận"*; *"PASS"* on the first
+  line cannot.
+- Screen labels are quoted exactly as the product displays them: on a
+  Vietnamese product the step says `press "Lưu"`, never `press "Save"` — the
+  reader will look for the button that actually exists. The shape of a correct
+  line: `EXPECTED: "Tổng cộng" hiển thị 450.000 ₫ (spec §3.2)` — English key,
+  Vietnamese value, label verbatim.
+
 ## Surfaces
 
 Chosen at init; each activates its own gates and its own branch of the workflows,
@@ -445,7 +469,7 @@ loud BLOCKED with the install command rather than degrading quietly.
 ## Tests
 
 ```bash
-npm test        # 450 conformance checks + 120 end-to-end checks
+npm test        # 476 conformance checks + 124 end-to-end checks
 ```
 
 The e2e suite installs into a scratch repository and then tries to break each

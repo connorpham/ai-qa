@@ -140,7 +140,7 @@ ${gaps.length ? `<div class="gaps">
   <div class="row">
     <label class="field"><span>Ticket key <em>&mdash; e.g. SHOP &rarr; SHOP-142</em></span>
       <input type="text" name="key" value="${esc(defaults.key)}" pattern="[A-Za-z][A-Za-z0-9]{0,9}" required></label>
-    <label class="field"><span>Report language</span>
+    <label class="field"><span>Working language — reports, questions, everything the team reads</span>
       <select name="language">${LANGUAGES.map((l) =>
         `<option value="${l}"${l === defaults.language ? " selected" : ""}>${l === "vi" ? "Tiếng Việt" : "English"}</option>`).join("")}</select></label>
   </div>

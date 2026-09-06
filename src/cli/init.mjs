@@ -79,6 +79,10 @@ version: 1
 project:
   name: ${yamlStr(a.name, "project name")}
   key: ${a.key}
+  # The WORKING language (en | vi) — not only the report: the lane narrates,
+  # asks the team, summarises, files bugs and writes the dossier in it. Field
+  # keys, verdict words, severities and gate lines stay in English because the
+  # gates read them; field values and screen labels follow the product.
   language: ${a.language}
   adopted: ${today}
 
@@ -239,7 +243,7 @@ export async function gather(root, scanRes, flags) {
   if (interactive) say.step(1, total, "The project");
   a.name = await get("name", "Project name", path.basename(root));
   a.key = (await get("key", "Ticket key prefix (e.g. SHOP → SHOP-142)", "QA")).toUpperCase();
-  a.language = await getChoice("language", "Language for reports the team reads", LANGUAGES, "en");
+  a.language = await getChoice("language", "Working language — reports, questions, everything the team reads", LANGUAGES, "en");
 
   // ── 2. surfaces ──────────────────────────────────────────────────────────────
   if (interactive) {
@@ -351,7 +355,7 @@ export function plannedFiles(root, a, plan, seeds) {
 function printSummary(a, scanRes, plan, seeds, root) {
   console.log(`\n${c.bold("  About to install")}\n`);
   const row = (k, v) => console.log(`    ${c.gray(k.padEnd(14))} ${v}`);
-  row("project", `${a.name} (${a.key}-nnn, reports in ${a.language})`);
+  row("project", `${a.name} (${a.key}-nnn, works in ${a.language === "vi" ? "Tiếng Việt" : "English"})`);
   row("surfaces", a.surfaces.join(", "));
   if (a.start) row("start", a.start);
   if (a.url) row("url", a.url);

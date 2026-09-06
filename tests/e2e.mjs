@@ -310,6 +310,23 @@ for (const [label, cmd, args] of [
     "with no app configured the workflow must render the not-configured branch");
   check(/BLOCKED, not skipped/.test(skill),
     "the not-configured branch must say cases get BLOCKED, not silently skipped");
+  check(skill.includes("Working language: English"),
+    "the installed workflow does not carry the working-language block");
+}
+
+// ---- 12b. a Vietnamese install works in Vietnamese, end to end -----------------
+{
+  const viRepo = path.join(tmp, "vi");
+  fs.mkdirSync(viRepo, { recursive: true });
+  fs.writeFileSync(path.join(viRepo, "README.md"), "# demo\n");
+  spawnSync("git", ["init"], { cwd: viRepo, encoding: "utf8" });
+  const r = run(viRepo, ["init", "--yes", "--key", "VN", "--language", "vi"]);
+  check(r.status === 0, `init --language vi failed:\n${r.stdout}${r.stderr}`);
+  const skill = fs.readFileSync(path.join(viRepo, ".claude/skills/qa/SKILL.md"), "utf8");
+  check(skill.includes("Working language: Tiếng Việt"),
+    "a vi install must name Tiếng Việt as the working language");
+  check(skill.includes('EXPECTED: "Tổng cộng" hiển thị 450.000'),
+    "a vi install lost the worked example — an English key with a Vietnamese value");
 }
 
 
