@@ -22,6 +22,12 @@ the images confirm a story the reader already has rather than being a puzzle.
 account or a previous session is labelled as such — or discarded. Stale evidence
 that looks current is worse than none.
 
+**Anchored to an environment.** The report's `ENVIRONMENT: <name — url>` line
+says where every verdict came from — `local`, `dev`, `stg`, `prod` — and the
+gate refuses a report without it. A bug found on staging is not evidence about
+production; a pass on a laptop is not evidence about anything shared. The
+`APP: UP … · env: <name>` line quoted into the sheet is the proof the two agree.
+
 ## The manifest, per case
 
 ```

@@ -252,14 +252,14 @@ each mutation turns it red. A gate that has never failed does not exist.
 
 | Gate | Refuses |
 |---|---|
-| `evd_check.py` | Missing actor, precondition, entry path, reload check, boundary case, annotation, severity, or challenger card. A case folder called `TC_2` and nothing else, a screenshot carrying another case's number, an index that no longer matches the folders. Catches "planned 5 cases, ran 1". A case with no screen is evidenced by a read-only query, a command record, or a recorded request/response pair — the artefacts this toolchain actually writes — here or in one folder per call. An `EXPECTED` or `ACTUAL` that is only a judgement word — "works as expected", "failed" — because that is a wish, not a value. **25 mutations, each proven to go red.** |
+| `evd_check.py` | Missing actor, precondition, entry path, reload check, boundary case, annotation, severity, or challenger card. A case folder called `TC_2` and nothing else, a screenshot carrying another case's number, an index that no longer matches the folders. Catches "planned 5 cases, ran 1". A report that does not say which environment produced the verdict. A case with no screen is evidenced by a read-only query, a command record, or a recorded request/response pair — the artefacts this toolchain actually writes — here or in one folder per call. An `EXPECTED` or `ACTUAL` that is only a judgement word — "works as expected", "failed" — because that is a wish, not a value. **26 mutations, each proven to go red.** |
 | `evd_index.py` | Writes the case table into `evd/<TICKET>/manifest.md` from the case manifests, so `what was tested here` is answered by the folder itself — and cannot drift from it. `xlsx_export.py` reads that table for each case's one-line title. |
 | `db_verify.py` | Any write — including one hidden inside a CTE, behind a comment, or batched after a `SELECT`. **7 reads allowed, 18 writes refused.** |
 | `api_check.mjs` | Silent assertion failures; a token reaching an evidence file; an unreachable host being reported as a failure rather than as BLOCKED. Writes the command it ran and what it asserted into `cmd_verify.md`, so the case can be re-run without anyone retyping it. |
 | `annotate.py` | An "annotation" with no box and no caption — that is a copy. |
 | `tracker.py` | A credential reaching an evidence file or an error message; a missing token being reported as a failed verification rather than a blocked one. |
 | `browser.mjs` | Falling back to headless when Playwright is missing. That is a BLOCKED run with an install command. |
-| `xlsx_export.py` | A guessed severity, a citation nobody wrote, a conclusion the pack does not support, a cell of terminal escape codes that would make the workbook unopenable. **16 honesty mutations, each proven to be reported in the file itself.** |
+| `xlsx_export.py` | A guessed severity, a citation nobody wrote, a conclusion the pack does not support, a missing environment, a cell of terminal escape codes that would make the workbook unopenable. **18 honesty mutations, each proven to be reported in the file itself.** |
 
 **Every gate uses the same exit codes**: `0` green · `1` a real finding · `2`
 BLOCKED, the run could not start. Conflating 1 and 2 is how a laptop with no
@@ -343,6 +343,47 @@ Every one of these has a matching entry in
 [`core/doctrine/red-flags.md`](core/doctrine/red-flags.md) — the excuse, and the
 gate that catches it.
 
+## Environments — local · dev · stg · prod
+
+A verdict is only meaningful on the environment that produced it — a bug found
+on staging is not evidence about production — so *where* is a first-class,
+gated coordinate:
+
+```yaml
+environments:
+  default: local
+  local:
+    url: ''            # empty = app.url
+    writes: allowed
+  stg:
+    url: 'https://stg.example.com'
+    writes: allowed
+  prod:
+    url: 'https://www.example.com'
+    writes: forbidden  # the default for anything named prod
+```
+
+- **One resolver.** Every gate reads the active environment through the same
+  file (`lib/ctx.py`): the `env=` argument to `/qa`, else `$AIQA_ENV`, else
+  `default:`. `app_check.sh --env stg` · `api_check.mjs --env stg` ·
+  `AIQA_ENV=stg` for a whole session — the tools cannot disagree about where a
+  run happened.
+- **The report says where.** `ENVIRONMENT: <name — url>` is a gated header line
+  in `REPORT.md`: `evd_check.py` refuses a report without it, and the
+  spreadsheet prints it on the Summary sheet (or `NOT DECLARED`, listed as a
+  gap). The bring-up proof carries the same name: `APP: UP … · env: stg`.
+- **An undeclared name blocks.** `AIQA_ENV=stg` with no `stg:` block resolves to
+  no url at all — the run is BLOCKED, never a quiet fall-back to localhost
+  while the report says staging.
+- **prod is read-only by default.** On `writes: forbidden` — and any environment
+  named prod/production is, unless its block explicitly says otherwise — no
+  test data is created, the write gate never opens, and any case that would
+  change state is BLOCKED, not attempted; read-only journeys still run. Only
+  the literal `writes: allowed` opens the gate, so a typo fails closed.
+- **Per-environment `api_base` and `db_url_env`** override the global ones, so
+  a stg verification reads stg's database — not your laptop's wearing a
+  staging name.
+
 ## Surfaces
 
 Chosen at init; each activates its own gates and its own branch of the workflows,
@@ -404,7 +445,7 @@ loud BLOCKED with the install command rather than degrading quietly.
 ## Tests
 
 ```bash
-npm test        # 430 conformance checks + 116 end-to-end checks
+npm test        # 450 conformance checks + 120 end-to-end checks
 ```
 
 The e2e suite installs into a scratch repository and then tries to break each

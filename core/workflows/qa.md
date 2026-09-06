@@ -1,7 +1,7 @@
 ---
 name: qa
 description: "Verify one ticket a developer has claimed done, against the spec, with evidence — and change no product code. Reads the ticket for ambiguity first and asks the requirement owner before testing; reads the spec and the schema to derive what SHOULD happen (citing each source); designs 2-5 test cases chosen by risk (the exact acceptance path, a boundary that must behave the other way using a value a real user would produce, whole-screen sanity from the reflex checklist for that feature shape, a read-back check for anything that writes, and an exploratory case driven by one named heuristic when the budget allows); walks every case as a real person would — a named persona, a double-click, a Back after Save, a return after the session expired; creates any missing data the way a user would through the real UI under a write gate, runs every case for real on the active surfaces, captures named and annotated evidence, records what it noticed but was not asked about, cross-checks every claim in the ticket against a file that proves it, passes the machine evidence gate, gets falsified by a fresh challenger, and publishes a report a non-programmer can read in two minutes. It reports defects; it never fixes them."
-argument-hint: "<TICKET: {project.key}-nnn | tracker URL> [base=<url overriding app.url for this run>]"
+argument-hint: "<TICKET: {project.key}-nnn | tracker URL> [env=<environment name — else $AIQA_ENV, else environments.default>] [base=<url overriding the environment for this run>]"
 ---
 
 # /qa — does it actually do what the spec says?
@@ -99,7 +99,7 @@ Both cards go in `debate.md`.
 ```
 ▶ Verifying {project.key}-nnn — <one line: what it claims to do>
   status: <status> · surface: <web/api/mobile/database> · code: <branch @ sha>
-  target: <url>
+  environment: <name — its url> · target: <url>
 ```
 
 ## V1 — DERIVE WHAT *SHOULD* HAPPEN
@@ -265,13 +265,36 @@ are what turn a folder of prose into a row somebody can sort, count and act on:
 
 ## V2b — BRING THE ENVIRONMENT UP
 
-Follow the Environment block at the top of this file. Quote the `APP: UP` line
-into the sheet — that line is your bring-up proof. Resolve a test account per
-role you need, read-only. No usable account → V3.
+**Resolve WHERE this run happens first, by name.** The `env=` argument wins,
+else `$AIQA_ENV`, else `environments.default` in `aiqa.config.yaml`. Export
+`AIQA_ENV=<name>` before any gate runs, so every gate on every active surface
+reads the same coordinates — the resolution lives in one place (`lib/ctx.py`)
+and the tools cannot disagree. The chosen name and its url
+become the report's `ENVIRONMENT:` line; the evidence gate refuses a report
+without one, because a bug found on staging is not evidence about production.
+
+Two refusals, both deliberate:
+
+- **A name the config does not declare is a BLOCKED run.** The gates resolve an
+  undeclared environment to an empty url rather than falling back to localhost —
+  testing your laptop while the report says `stg` is a fabricated verdict.
+- **`writes: forbidden` is a hard scope cut** (and any environment named prod is
+  forbidden unless its block explicitly says otherwise). No test data is
+  created, the write gate never opens, and every case whose STEPS would create
+  or change state is `BLOCKED (read-only environment)` with the environment
+  named. Read-only journeys still run and still produce verdicts.
+
+Then follow the Environment block at the top of this file. Quote the `APP: UP`
+line into the sheet — that line is your bring-up proof, and its `env:` tag must
+name the environment you resolved. Resolve a test account per role you need,
+read-only. No usable account → V3.
 
 ## V3 — CREATE MISSING DATA, THE WAY A USER WOULD
 
-Only if V2 found gaps. Trace the flow that *produces* the record and drive it
+Only if V2 found gaps — and never on an environment whose `writes` is
+`forbidden`: there, a case that needs data the environment does not have is
+`BLOCKED (missing data on <name>)` with what exists instead, and nothing is
+created. Trace the flow that *produces* the record and drive it
 like a person. Follow the write gate (principle 4). Capture the run under
 `evd/<TICKET>/data_prep/`. Producing flow does not exist or depends on something
 unavailable → that case is `BLOCKED (missing data)` with what you tried. Never
@@ -438,6 +461,7 @@ them so they can be pasted into a chat without the rest of the report.
 # <TICKET> — <PASS / FAIL / PARTIAL / NEW-BUG / BLOCKED / UNCLEAR>
 COMMIT: <sha the cases ran against>
 VERIFIED-AT: <ISO timestamp>
+ENVIRONMENT: <name — url, e.g. "stg — https://stg.shop.example">
 ORACLE: <spec files cited — or "NONE: this verdict compares against nothing written">
 
 **Verdict:** <one sentence — what does or does not work, for whom, in the user's words>
@@ -476,7 +500,7 @@ Verify sheet · citations by file and section · debate.md · every evidence fil
 path → what it shows · the technical vocabulary kept out of the body.
 ```
 
-The gate reads the verdict word on the first line, the three `KEY:` lines and —
+The gate reads the verdict word on the first line, the four `KEY:` lines and —
 on a failing verdict — the words Severity and Origin. The spreadsheet prints
 section 4 on its first sheet and reads the bold **Recommendation:** line, so
 both have to stand without the rest of the report around them. Everything else
@@ -574,6 +598,9 @@ in the template is for the person reading it.
       is labelled an opinion, not a fact
 - [ ] Every case ran for real this session; bring-up proven by the quoted
       `APP: UP` line; blocked cases carry reason and unblock path
+- [ ] The environment resolved by NAME before bring-up, exported as `AIQA_ENV`,
+      and recorded as `ENVIRONMENT: <name — url>` in the report; nothing was
+      created or changed on a `writes: forbidden` environment
 - [ ] Ticket read for requirement smells before V2; every question asked of the
       requirement owner with what it blocked — or the ticket honestly
       `BLOCKED (not testable as written)`

@@ -106,6 +106,7 @@ _T = {
     "status_when": ("Ticket status when verified", "Trạng thái ticket khi kiểm thử"),
     "commit": ("Code under test (commit)", "Mã nguồn được kiểm (commit)"),
     "verified_at": ("Verified at", "Thời điểm kiểm thử"),
+    "environment": ("Environment tested (name — url)", "Môi trường kiểm thử (tên — url)"),
     "oracle": ("Oracle — the written source of 'correct'",
                "Nguồn chuẩn — tài liệu quyết định thế nào là 'đúng'"),
     "surfaces": ("Surfaces exercised", "Bề mặt đã kiểm"),
@@ -449,6 +450,7 @@ def build_summary(wb, pack, L, out_dir):
     _pair(sh, L.h("status_when"), declared(pack.status))
     _pair(sh, L.h("commit"), declared(pack.commit, "mono"))
     _pair(sh, L.h("verified_at"), declared(pack.verified_at, "mono"))
+    _pair(sh, L.h("environment"), declared(pack.environment))
     _pair(sh, L.h("oracle"), declared(pack.oracle))
     _pair(sh, L.h("surfaces"), declared(pack.surfaces))
     _pair(sh, L.h("folder"), S(os.path.basename(pack.dir), "mono"))
@@ -943,6 +945,7 @@ _SCREEN_CASE = _CASE.replace("KIND: acceptance", "KIND: whole-screen").replace(
 _REPORT = """# SHOP-142 — PARTIAL
 COMMIT: 3d9d99d
 VERIFIED-AT: 2026-09-04T08:25:41+00:00
+ENVIRONMENT: stg — https://stg.demo-shop.example
 ORACLE: docs/spec/discounts.md (Pricing specification, version 4, section 3.2)
 
 ## 1. What was asked for? (told as a user)
@@ -971,6 +974,7 @@ TICKET: SHOP-142 — Apply the gold-tier loyalty discount at checkout
 STATUS WHEN VERIFIED: Ready for QA
 COMMIT: 3d9d99d (main, working tree clean)
 VERIFIED-AT: 2026-09-04T08:26:30+00:00
+ENVIRONMENT: stg — https://stg.demo-shop.example
 ORACLE: docs/spec/discounts.md — Pricing specification, version 4, section 3
 SURFACES: the ordering flow, and the stored order record read back read-only
 VERDICT: PARTIAL — everything the ticket asked for holds as worded; the discount
@@ -1116,6 +1120,8 @@ def selftest():
     expect(pack.worst_severity == "Major", "worst severity is {}".format(pack.worst_severity))
     expect(pack.verdict == "PARTIAL", "verdict read as {!r}".format(pack.verdict))
     expect(pack.commit == "3d9d99d", "COMMIT read as {!r}".format(pack.commit))
+    expect(pack.environment == "stg — https://stg.demo-shop.example",
+           "ENVIRONMENT read as {!r}".format(pack.environment))
     expect("500,000" in pack.conclusion, "the conclusion was not carried into the workbook")
     expect("**" not in pack.conclusion and "Recommendation" not in pack.conclusion,
            "the conclusion swallowed the finding and recommendation blocks that have their "
@@ -1165,6 +1171,8 @@ def selftest():
            "the green fixture printed NOT DECLARED in its identity block")
     expect("3d9d99d" in identity and "discounts.md" in identity and "Ready for QA" in identity,
            "the identity block lost the commit, the oracle or the ticket status")
+    expect("stg — https://stg.demo-shop.example" in identity,
+           "the identity block does not say which environment the verdict came from")
     expect("TC_2" in cases and "boundary" in cases, "the boundary case is not in the sheet")
     expect("spec 3.2 R1" in trace, "the citation did not reach the traceability matrix")
     expect("response.json" in evidence, "the evidence index is empty")
@@ -1237,6 +1245,14 @@ def selftest():
          lambda d: _rewrite(d, "REPORT.md",
                             lambda t: re.sub(r"(?m)^ORACLE:.*$", "ORACLE: NONE", t)),
          lambda pack, text: any("opinion, not a fact" in w for _w, w in pack.gaps)),
+        ("no ENVIRONMENT line anywhere",
+         lambda d: (_rewrite(d, "REPORT.md", lambda t: re.sub(r"(?m)^ENVIRONMENT:.*\n", "", t)),
+                    _rewrite(d, "manifest.md", lambda t: re.sub(r"(?m)^ENVIRONMENT:.*\n", "", t))),
+         lambda pack, text: any("no ENVIRONMENT" in w for _w, w in pack.gaps)),
+        ("no ENVIRONMENT in the report, but the pack manifest has it",
+         lambda d: _rewrite(d, "REPORT.md", lambda t: re.sub(r"(?m)^ENVIRONMENT:.*\n", "", t)),
+         lambda pack, text: (pack.environment.startswith("stg")
+                             and not any("no ENVIRONMENT" in w for _w, w in pack.gaps))),
         ("a missing REPORT.md",
          lambda d: os.remove(os.path.join(d, "REPORT.md")),
          lambda pack, text: (pack.verdict == "PARTIAL"  # falls back to the manifest's VERDICT

@@ -21,6 +21,7 @@ so they can be pasted into a chat without the rest:
 # SHOP-142 — FAIL
 COMMIT: 3d9d99d
 VERIFIED-AT: 2026-09-04T10:41:00+07:00
+ENVIRONMENT: stg — https://stg.shop.example
 ORACLE: docs/spec/discounts.md §3.2
 
 **Verdict:** The SAVE10 discount shows on the screen but is not taken off the total — a customer is charged the full 500,000.
@@ -169,8 +170,8 @@ not, something from the body belongs in the appendix.
 
 The report is written in `project.language`. Six things stay in English because
 the gate and the spreadsheet read them: the verdict word on the first line, the
-`COMMIT:` / `VERIFIED-AT:` / `ORACLE:` keys, the four severity words, and the
-bold `**Recommendation:**` label. Everything else — the three summary lines,
+`COMMIT:` / `VERIFIED-AT:` / `ENVIRONMENT:` / `ORACLE:` keys, the four severity
+words, and the bold `**Recommendation:**` label. Everything else — the three summary lines,
 the section headings' text, the table headers, the findings — is written for
 the team that reads it, and English test jargon is not mixed in. *"Verdict"*
 can be *"Kết luận"*; *"PASS"* on the first line cannot.

@@ -145,12 +145,108 @@ def get(cfg: Dict[str, Any], dotted: str, default: Any = None) -> Any:
     return default if cur is None else cur
 
 
+# ---------------------------------------------------------------------------
+# environments — local · dev · stg · prod
+#
+# One resolver, used by every gate. The Node scripts shell out to this file for
+# config values, so environment resolution has exactly one implementation and
+# the gates cannot disagree about where a run happened.
+#
+# The rules, and why each one exists:
+#   * The active name is $AIQA_ENV, else environments.default, else "" (legacy:
+#     no environments section means app.url is the whole story).
+#   * A declared environment whose url is EMPTY falls back to app.url — that is
+#     how the default `local:` block inherits the detected URL without keeping
+#     a second copy of it.
+#   * A CHOSEN name with no block in the config resolves to "" and the run
+#     BLOCKS. Falling back to localhost while the report says "stg" would be
+#     the exact guess this tool promises never to make.
+# ---------------------------------------------------------------------------
+ENV_VAR = "AIQA_ENV"
+
+
+def env_name(cfg: Dict[str, Any]) -> str:
+    """The active environment name — $AIQA_ENV wins, else environments.default."""
+    name = os.environ.get(ENV_VAR, "").strip()
+    if name:
+        return name
+    return str(get(cfg, "environments.default", "") or "").strip()
+
+
+def _env_block(cfg: Dict[str, Any], name: str) -> Optional[Dict[str, Any]]:
+    block = get(cfg, "environments." + name, None)
+    return block if isinstance(block, dict) else None
+
+
+def env_get(cfg: Dict[str, Any], key: str, legacy: str = "", default: str = "") -> str:
+    """One coordinate of the active environment.
+
+    environments.<name>.<key>, an empty value falling back to the legacy key
+    (`url` -> app.url, `db_url_env` -> database.url_env). A chosen name with no
+    block returns "" — a declared unknown, never a silent localhost.
+    """
+    name = env_name(cfg)
+    if name:
+        block = _env_block(cfg, name)
+        if block is None:
+            return ""
+        v = str(block.get(key, "") or "").strip()
+        if v:
+            return v
+    return str(get(cfg, legacy, default) or "") if legacy else default
+
+
+def env_api_base(cfg: Dict[str, Any]) -> str:
+    """The API base for the active environment: its api_base, else its url,
+    else the legacy api.base_url / app.url chain."""
+    name = env_name(cfg)
+    if name:
+        block = _env_block(cfg, name)
+        if block is None:
+            return ""
+        for key in ("api_base", "url"):
+            v = str(block.get(key, "") or "").strip()
+            if v:
+                return v
+    return str(get(cfg, "api.base_url", "") or "") or str(get(cfg, "app.url", "") or "")
+
+
+def env_writes(cfg: Dict[str, Any]) -> str:
+    """'allowed' or 'forbidden'. Fail closed: only the literal value `allowed`
+    opens the gate, and an environment named prod/production is forbidden
+    unless it explicitly says otherwise — which it should not."""
+    name = env_name(cfg)
+    if not name:
+        return "allowed"
+    block = _env_block(cfg, name)
+    v = str((block or {}).get("writes", "") or "").strip().lower()
+    if v:
+        return "allowed" if v == "allowed" else "forbidden"
+    return "forbidden" if name.lower() in ("prod", "production") else "allowed"
+
+
+def resolve(cfg: Dict[str, Any], dotted: str) -> Any:
+    """`get`, plus the virtual env.* keys the gates query:
+    env.name · env.url · env.health · env.api_base · env.db_url_env · env.writes"""
+    if dotted == "env.name":
+        return env_name(cfg)
+    if dotted == "env.writes":
+        return env_writes(cfg)
+    if dotted == "env.api_base":
+        return env_api_base(cfg)
+    if dotted.startswith("env."):
+        legacy = {"url": "app.url", "health": "app.health",
+                  "db_url_env": "database.url_env"}.get(dotted[4:], "")
+        return env_get(cfg, dotted[4:], legacy)
+    return get(cfg, dotted, "")
+
+
 if __name__ == "__main__":
     import json
     import sys
 
     cfg = load()
     if len(sys.argv) > 1:
-        print(get(cfg, sys.argv[1], ""))
+        print(resolve(cfg, sys.argv[1]))
     else:
         print(json.dumps(cfg, indent=2, default=str))

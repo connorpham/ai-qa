@@ -111,6 +111,34 @@ app:
   # Ignored when headless. One-off: AIQA_PACE=demo node journey.mjs
   pace: human
 
+# Where a verification may run. Every run resolves exactly ONE of these — the
+# env= argument, else $AIQA_ENV, else \`default:\` — and the report's
+# ENVIRONMENT: line records which (the evidence gate refuses a report without
+# one), because a bug found on staging is not evidence about production.
+# An empty url falls back to app.url above. A CHOSEN environment with no block
+# here is a declared unknown: the run BLOCKS rather than quietly testing
+# localhost under a nicer name.
+environments:
+  default: local
+  local:
+    url: ''          # empty = app.url above
+    writes: allowed
+  # Uncomment what exists. writes: forbidden = the lane creates NO test data
+  # there and any case that would change state is BLOCKED, not attempted. An
+  # environment named prod/production is writes: forbidden unless it says
+  # otherwise — and it should not say otherwise.
+  # dev:
+  #   url: 'https://dev.example.com'
+  #   api_base: ''     # empty = this url, then api.base_url
+  #   db_url_env: ''   # empty = database.url_env — the NAME of the var, never the value
+  #   writes: allowed
+  # stg:
+  #   url: 'https://stg.example.com'
+  #   writes: allowed
+  # prod:
+  #   url: 'https://www.example.com'
+  #   writes: forbidden
+
 api:
   base_url: ${yamlStr(a.apiBase, "api base url")}
   # OpenAPI/GraphQL/proto file. Empty = no contract, and contract tests say so
@@ -379,6 +407,9 @@ export function renderCfg(a) {
     surfaces: a.surfaces,
     tracker: { provider: a.tracker },
     autonomy: { level: a.autonomy },
+    // update passes the user's edited environments through; init renders the
+    // block it is about to write, so the workflows describe the same config.
+    environments: a.environments || { default: "local", local: { url: "", writes: "allowed" } },
   };
 }
 

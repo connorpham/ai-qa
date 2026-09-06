@@ -4,13 +4,15 @@
 # A gate that boots your application is a gate that can hide a broken boot.
 # This only asks "is it answering?" and prints ONE machine-quotable line:
 #
-#   APP: UP    <url> (<http status>) in <n>s
+#   APP: UP    <url> (<http status>) in <n>s · env: <name>
 #   APP: DOWN  <url> — <what happened> · unblock: <what to do>
 #   APP: SKIP  app.url is not configured
 #
-# The UP line IS the bring-up proof: quote it into the verify sheet.
+# The UP line IS the bring-up proof: quote it into the verify sheet. The env
+# tag names which of the configured environments answered — the same name the
+# report's ENVIRONMENT: line must carry.
 #
-#   bash .ai-qa/scripts/app_check.sh [--wait 60] [--url http://…]
+#   bash .ai-qa/scripts/app_check.sh [--wait 60] [--url http://…] [--env stg]
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -31,20 +33,34 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --wait) WAIT="${2:-0}"; shift 2 ;;
     --url)  URL="${2:-}";   shift 2 ;;
+    --env)  export AIQA_ENV="${2:-}"; shift 2 ;;
     *) echo "app_check: unknown argument $1" >&2; exit 2 ;;
   esac
 done
 
 if [ -n "$PROBE_CAP" ] && [ "$WAIT" -gt 5 ] 2>/dev/null; then WAIT=5; fi
 
-if [ -z "$URL" ]; then URL="$(cd "$ROOT" 2>/dev/null && cfg app.url)"; fi
-HEALTH="$(cd "$ROOT" 2>/dev/null && cfg app.health)"
+# The environment resolves in ONE place (lib/ctx.py): $AIQA_ENV, else
+# environments.default, else the legacy app.url. A chosen name with no block in
+# the config resolves to an empty url — a declared unknown, never localhost.
+ENV_NAME="$(cd "$ROOT" 2>/dev/null && cfg env.name)"
+if [ -z "$URL" ]; then URL="$(cd "$ROOT" 2>/dev/null && cfg env.url)"; fi
+HEALTH="$(cd "$ROOT" 2>/dev/null && cfg env.health)"
 START="$(cd "$ROOT" 2>/dev/null && cfg app.start)"
+ENV_TAG=""
+if [ -n "$ENV_NAME" ]; then ENV_TAG=" · env: $ENV_NAME"; fi
 
 if [ -z "$URL" ]; then
-  echo "APP: SKIP  app.url is not configured in aiqa.config.yaml"
-  echo "           every case needing a running app is BLOCKED, not skipped —"
-  echo "           ask the owner for the URL and set app.url."
+  if [ -n "$ENV_NAME" ]; then
+    echo "APP: SKIP  environment '$ENV_NAME' has no url — set environments.$ENV_NAME.url"
+    echo "           (or app.url) in aiqa.config.yaml. Every case needing a running app"
+    echo "           is BLOCKED, not skipped — a run cannot fall back to localhost and"
+    echo "           still claim it tested '$ENV_NAME'."
+  else
+    echo "APP: SKIP  app.url is not configured in aiqa.config.yaml"
+    echo "           every case needing a running app is BLOCKED, not skipped —"
+    echo "           ask the owner for the URL and set app.url."
+  fi
   exit 0
 fi
 
@@ -77,12 +93,12 @@ ELAPSED=$(( $(date +%s) - START_TS ))
 
 case "$STATUS" in
   2*|3*|401|403)
-    echo "APP: UP    $TARGET ($STATUS) in ${ELAPSED}s"
+    echo "APP: UP    $TARGET ($STATUS) in ${ELAPSED}s$ENV_TAG"
     exit 0 ;;
   000)
-    echo "APP: DOWN  $TARGET — no answer after ${ELAPSED}s · unblock: start it with: ${START:-<app.start is not set>}"
+    echo "APP: DOWN  $TARGET — no answer after ${ELAPSED}s$ENV_TAG · unblock: start it with: ${START:-<app.start is not set>}"
     exit 1 ;;
   *)
-    echo "APP: DOWN  $TARGET — HTTP $STATUS after ${ELAPSED}s · unblock: check the app log; ${START:-<app.start is not set>}"
+    echo "APP: DOWN  $TARGET — HTTP $STATUS after ${ELAPSED}s$ENV_TAG · unblock: check the app log; ${START:-<app.start is not set>}"
     exit 1 ;;
 esac
