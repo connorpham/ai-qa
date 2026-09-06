@@ -310,6 +310,8 @@ def check_report(evd, res):
     for key, why in (("COMMIT", "the verdict binds to the code it ran against"),
                      ("VERIFIED-AT", "on squash/rebase repos the commit dies with the branch; "
                                      "this timestamp is the fallback anchor"),
+                     ("ENVIRONMENT", "which environment this verdict came from, as <name — url> — "
+                                     "a bug found on staging is not evidence about production"),
                      ("ORACLE", "what 'correct' was compared against — write NONE if nothing was")):
         if not re.search(r"(?im)^\s*{}:\s*\S".format(key), text):
             res.err("REPORT.md", "no {}: line — {}".format(key, why))
@@ -431,6 +433,7 @@ SCREEN_CASE = GREEN_CASE.replace("KIND: acceptance", "KIND: whole-screen")
 GREEN_REPORT = """# SHOP-142 — PASS
 COMMIT: abc1234
 VERIFIED-AT: 2026-09-03T10:00:00Z
+ENVIRONMENT: local — http://localhost:3000
 ORACLE: docs/specs/orders.md 3.2
 
 ## 1. What was asked for
@@ -509,6 +512,7 @@ def selftest():
         ("missing debate.md", lambda d: os.remove(os.path.join(d, "debate.md"))),
         ("missing root manifest", lambda d: os.remove(os.path.join(d, "manifest.md"))),
         ("no COMMIT line", lambda d: _rewrite(d, "REPORT.md", lambda t: t.replace("COMMIT: abc1234\n", ""))),
+        ("no ENVIRONMENT line", lambda d: _rewrite(d, "REPORT.md", lambda t: t.replace("ENVIRONMENT: local — http://localhost:3000\n", ""))),
         ("no ORACLE line", lambda d: _rewrite(d, "REPORT.md", lambda t: t.replace("ORACLE: docs/specs/orders.md 3.2\n", ""))),
         ("FAIL without severity", lambda d: _rewrite(d, "REPORT.md", lambda t: t.replace("— PASS", "— FAIL"))),
         ("no boundary case", lambda d: _rewrite(d, C2 + "/manifest.md", lambda t: t.replace("KIND: boundary", "KIND: acceptance"))),

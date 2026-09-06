@@ -108,14 +108,26 @@ def assert_read_only(sql):
 
 # ---------------------------------------------------------------------------
 def connection_url():
+    """(env var NAME, its value, environment name). The var comes from the
+    active environment's db_url_env when one is declared, so a verification on
+    stg reads stg's database — falling back to database.url_env only when the
+    environment does not name its own. A chosen environment with no block in
+    the config resolves to no var at all: BLOCKED, never the local database
+    wearing a staging name."""
     var = "DATABASE_URL"
+    env_name = ""
     if ctx is not None:
         try:
-            var = ctx.get(ctx.load(), "database.url_env", "DATABASE_URL") or "DATABASE_URL"
+            cfg = ctx.load()
+            env_name = ctx.env_name(cfg)
+            if env_name:
+                var = ctx.env_get(cfg, "db_url_env", "database.url_env", "DATABASE_URL")
+            else:
+                var = ctx.get(cfg, "database.url_env", "DATABASE_URL") or "DATABASE_URL"
         except Exception:
             pass
-    url = os.environ.get(var, "")
-    return var, url
+    url = os.environ.get(var, "") if var else ""
+    return var, url, env_name
 
 
 def sqlite_path(url):
@@ -312,9 +324,17 @@ def main():
         print("     under the write gate, and use this tool to confirm what it wrote.")
         return 2
 
-    var, url = connection_url()
+    var, url, env_name = connection_url()
+    if not var:
+        print("DB: BLOCKED — environment '{}' is not declared in aiqa.config.yaml · "
+              "unblock: add an environments.{} block (or unset AIQA_ENV)".format(env_name, env_name))
+        write_evidence(args.out, stmt, None,
+                       "environment '{}' is not declared".format(env_name), "")
+        return 1
     if not url:
-        print("DB: BLOCKED — ${} is not set · unblock: export it, or correct database.url_env".format(var))
+        where = " (environment: {})".format(env_name) if env_name else ""
+        print("DB: BLOCKED — ${} is not set{} · unblock: export it, or correct "
+              "database.url_env / environments.<name>.db_url_env".format(var, where))
         write_evidence(args.out, stmt, None, "${} is not set".format(var), var)
         return 1
 

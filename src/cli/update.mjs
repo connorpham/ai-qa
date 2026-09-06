@@ -55,6 +55,7 @@ export async function update(flags) {
     trackerProject: get(cfg, "tracker.project", ""),
     branch: get(cfg, "git.protected_branch", "main"),
     autonomy: get(cfg, "autonomy.level", "assisted"),
+    environments: get(cfg, "environments", null),
   };
   a.trackerEnv = TRACKER_ENV[a.tracker] || [];
   if (!Array.isArray(a.surfaces)) a.surfaces = [a.surfaces].filter(Boolean);

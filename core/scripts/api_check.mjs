@@ -242,13 +242,24 @@ async function main(argv) {
   const pathname = positional[1];
   if (!pathname) {
     console.log("usage: node api_check.mjs <METHOD> <path> [--out <dir>] [--expect-status N] [--expect key=value]");
-    console.log("                          [--body file.json] [--auth-env VAR] [--header 'K: V'] [--base URL]");
+    console.log("                          [--body file.json] [--auth-env VAR] [--header 'K: V'] [--base URL] [--env NAME]");
     return 2;
   }
 
-  const base = flags.base || cfg("api.base_url") || cfg("app.url");
+  // --env pins the environment for this process; ctx.py (which every cfg()
+  // call shells to) resolves the rest, so this gate and app_check.sh cannot
+  // disagree about where the run happened.
+  if (flags.env && flags.env !== true) process.env.AIQA_ENV = String(flags.env);
+
+  // env.api_base: the active environment's api_base, else its url, else the
+  // legacy api.base_url / app.url chain. A chosen environment with no block in
+  // the config resolves to "" — BLOCKED, never a silent localhost.
+  const base = flags.base || cfg("env.api_base");
   if (!base && !/^https?:\/\//.test(pathname)) {
-    console.log("API: BLOCKED — no base URL · unblock: set api.base_url or app.url in aiqa.config.yaml, or pass --base");
+    const envName = cfg("env.name");
+    console.log(envName
+      ? `API: BLOCKED — environment '${envName}' has no url · unblock: set environments.${envName}.url or .api_base in aiqa.config.yaml, or pass --base`
+      : "API: BLOCKED — no base URL · unblock: set api.base_url or app.url in aiqa.config.yaml, or pass --base");
     return 2;
   }
 

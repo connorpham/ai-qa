@@ -104,6 +104,32 @@ for (const tool of TOOLS) {
   check(!qa.text.includes("<unset>"), "the not-configured branch should not print <unset> placeholders");
 }
 
+// Declared environments must reach the rendered workflow: their names, the
+// default, and prod's write-forbidden rule — the same coordinates the gates read.
+{
+  let qa = { text: "" };
+  let name = null;
+  const envCfg = {
+    ...cfg,
+    environments: {
+      default: "local",
+      local: { url: "", writes: "allowed" },
+      stg: { url: "https://stg.example.com" },
+      prod: { url: "https://www.example.com" },   // writes unset — must render forbidden
+    },
+  };
+  await renderTool("claude-code", "/tmp/x", envCfg,
+    (_rel, text) => { if (name === "qa") qa = { text }; },
+    { dryRun: true, onWorkflow: (n) => { name = n; } });
+  check(qa.text.includes("**Environments:**"), "the qa workflow lost the environments list");
+  check(qa.text.includes("`local` (default)"), "the default environment is not marked in the workflow");
+  check(qa.text.includes("https://stg.example.com"), "a declared environment url did not reach the workflow");
+  check(/`prod`[^\n]*writes forbidden/.test(qa.text),
+    "prod with no writes: value must render as forbidden — the fail-closed default");
+  check(qa.text.includes("ENVIRONMENT: <name — url>"),
+    "the environments bullet does not say the report must record the environment");
+}
+
 // Surfaces must actually change what the workflow says.
 {
   const only = async (surfaces) => {
@@ -177,6 +203,63 @@ check(get(parseConfig("a:\n  b: keep # dropped\n"), "a.b") === "keep", "node par
   const pySurfaces = py("surfaces");
   check(pySurfaces.includes("web") && pySurfaces.includes("database"),
     `python parser: surfaces = ${pySurfaces}`);
+  fs.rmSync(tmp, { recursive: true, force: true });
+}
+
+// ---- environments: one resolver, and it never guesses -------------------------
+// Every gate resolves the environment through lib/ctx.py, so the contract lives
+// there: the default is named, an empty url inherits app.url, a CHOSEN name the
+// config does not declare resolves to NOTHING (a run must block rather than
+// test localhost while its report says stg), and prod is write-forbidden unless
+// it explicitly says otherwise.
+{
+  check(get(parsed, "environments.default") === "local",
+    `the rendered config names no default environment: ${get(parsed, "environments.default")}`);
+  check(get(parsed, "environments.local.writes") === "allowed",
+    "the rendered local environment does not declare writes: allowed");
+
+  const tmp = fs.mkdtempSync(path.join(process.env.TMPDIR || "/tmp", "aiqa-conf-env-"));
+  fs.writeFileSync(path.join(tmp, "aiqa.config.yaml"), yaml);
+  const ctxPy = path.join(pkgRoot, "core", "scripts", "lib", "ctx.py");
+  const py = (key, envName) => {
+    const env = { ...process.env };
+    delete env.AIQA_ENV;
+    if (envName) env.AIQA_ENV = envName;
+    const r = spawnSync("python3", [ctxPy, key], { cwd: tmp, encoding: "utf8", env });
+    return r.status === 0 ? r.stdout.trim() : `<python failed: ${r.stderr.trim()}>`;
+  };
+  check(py("env.name") === "local", `env.name should default to local: ${py("env.name")}`);
+  check(py("env.url") === "http://localhost:3000",
+    `local's empty url must inherit app.url: ${py("env.url")}`);
+  check(py("env.writes") === "allowed", `local must allow writes: ${py("env.writes")}`);
+  check(py("env.url", "stg") === "",
+    `an UNDECLARED environment must resolve to no url at all, got: ${JSON.stringify(py("env.url", "stg"))}`);
+  check(py("env.name", "stg") === "stg", "AIQA_ENV must win over environments.default");
+  check(py("env.writes", "prod") === "forbidden",
+    `an environment named prod must be write-forbidden by default: ${py("env.writes", "prod")}`);
+
+  // A declared block: its url wins, its api_base falls back to its url — never
+  // to the legacy api.base_url of a different environment.
+  const yamlStg = yaml.replace("  local:", "  stg:\n    url: 'https://stg.example.com'\n  local:");
+  fs.writeFileSync(path.join(tmp, "aiqa.config.yaml"), yamlStg);
+  check(py("env.url", "stg") === "https://stg.example.com",
+    `a declared stg url was not resolved: ${py("env.url", "stg")}`);
+  check(py("env.api_base", "stg") === "https://stg.example.com",
+    `stg's api_base must fall back to stg's url, not to another environment's: ${py("env.api_base", "stg")}`);
+  check(py("env.db_url_env", "stg") === "DATABASE_URL",
+    `a stg block with no db_url_env must fall back to database.url_env: ${py("env.db_url_env", "stg")}`);
+
+  // Legacy: a config with NO environments section keeps the old app.url story.
+  const legacy = yaml.split("\n").filter((l, i, all) => {
+    const start = all.findIndex((x) => x.startsWith("environments:"));
+    const end = all.findIndex((x, j) => j > start && /^[a-z]/.test(x));
+    return i < start || i >= end;
+  }).join("\n");
+  fs.writeFileSync(path.join(tmp, "aiqa.config.yaml"), legacy);
+  check(!legacy.includes("environments:"), "the legacy fixture still carries an environments block");
+  check(py("env.name") === "", `with no environments section there is no active name: ${py("env.name")}`);
+  check(py("env.url") === "http://localhost:3000",
+    `with no environments section env.url must be app.url: ${py("env.url")}`);
   fs.rmSync(tmp, { recursive: true, force: true });
 }
 
@@ -264,6 +347,7 @@ for (const [label, cmd, args] of [
     fs.writeFileSync(path.join(evd, "debate.md"), "my card\nchallenger card\nresolution\n");
     fs.writeFileSync(path.join(evd, "REPORT.md"), [
       "# SHOP-1 — PASS", "COMMIT: abc1234", "VERIFIED-AT: 2026-09-04T00:00:00Z",
+      "ENVIRONMENT: local — http://127.0.0.1:4319",
       "ORACLE: docs/spec/discounts.md 3.2", "", "## 4. Conclusion", "The requirement is met.", "",
     ].join("\n"));
 
@@ -677,6 +761,9 @@ for (const [label, cmd, args] of [
     const i = tmpl.indexOf(line);
     check(i > 0 && i < iOne, `the report template must carry ${line} BEFORE section 1 — it is the part everyone reads`);
   }
+  const iEnv = tmpl.indexOf("ENVIRONMENT:");
+  check(iEnv > 0 && iEnv < iOne,
+    "the report template must carry an ENVIRONMENT: line in its header — the gate refuses a report without one");
   check(/## 2\. What I checked[\s\S]*the case title/.test(tmpl),
     "the report's table must be labelled by case title, never by TC_n");
   check(/## 3\. What I found/.test(tmpl) && /Who it hurts/.test(tmpl),
@@ -761,6 +848,7 @@ for (const [label, cmd, args] of [
       "# SHOP-142 — FAIL",
       "COMMIT: abc1234",
       "VERIFIED-AT: 2026-09-04T10:41:00+07:00",
+      "ENVIRONMENT: local — http://localhost:3000",
       "ORACLE: docs/specs/orders.md 3.2",
       "",
       "**Verdict:** A quantity of 0 is accepted and saved — the order ends up with an empty line.",

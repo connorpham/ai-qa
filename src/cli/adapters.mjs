@@ -63,6 +63,33 @@ function envBlock(cfg) {
     );
   }
 
+  // The named environments, when the config declares them. Rendered from the
+  // same config the gates read, so the workflow and the tools name the same
+  // coordinates.
+  const envs = (cfg && typeof cfg.environments === "object") ? cfg.environments : null;
+  const envNames = envs
+    ? Object.keys(envs).filter((k) => k !== "default" && envs[k] && typeof envs[k] === "object")
+    : [];
+  if (envNames.length) {
+    const def = String(envs.default ?? "").trim();
+    const listed = envNames.map((n) => {
+      const u = String(envs[n].url ?? "").trim();
+      const w = String(envs[n].writes ?? "").trim()
+        || (/^prod(uction)?$/i.test(n) ? "forbidden" : "allowed");
+      return `\`${n}\`${n === def ? " (default)" : ""} — ${u || "app.url"} · writes ${w}`;
+    }).join(" · ");
+    out.push(
+      `> - **Environments:** ${listed}. Resolve ONE name before bring-up — the \`env=\``,
+      ">   argument, else `$AIQA_ENV`, else the default — and export `AIQA_ENV=<name>` so",
+      ">   every gate on every surface reads the same coordinates. The report's",
+      ">   `ENVIRONMENT: <name — url>` line records it, and the evidence gate refuses a",
+      ">   report without one. A name the config does not declare is a BLOCKED run — never",
+      ">   a silent fall-back to localhost. On `writes: forbidden` (the default when the",
+      ">   environment is named prod) no test data is created and any case that would",
+      ">   change state is BLOCKED, not attempted; read-only journeys still run.",
+    );
+  }
+
   if (surfaces.includes("web")) {
     out.push(
       "> - **Web = a real browser window someone could watch.** Drive journeys with",

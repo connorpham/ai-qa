@@ -393,6 +393,7 @@ class Pack(object):
         self.verdict = ""
         self.commit = ""
         self.verified_at = ""
+        self.environment = ""
         self.oracle = ""
         self.surfaces = ""
         self.status = ""
@@ -676,10 +677,13 @@ def read_pack(evd, project=None):
         rf = header_fields(report)
         pack.commit = rf.get("COMMIT", "") or head.get("COMMIT", "")
         pack.verified_at = rf.get("VERIFIED-AT", "") or head.get("VERIFIED-AT", "")
+        pack.environment = rf.get("ENVIRONMENT", "") or head.get("ENVIRONMENT", "")
         pack.oracle = rf.get("ORACLE", "") or head.get("ORACLE", "")
         for key, value, why in (("COMMIT", pack.commit, "the verdict binds to the code it ran against"),
                                 ("VERIFIED-AT", pack.verified_at, "the fallback anchor when the "
                                  "branch and its commit are squashed away"),
+                                ("ENVIRONMENT", pack.environment, "which environment produced this "
+                                 "verdict — a bug found on staging is not evidence about production"),
                                 ("ORACLE", pack.oracle, "what 'correct' was compared against")):
             if not value:
                 pack.gap("REPORT.md", "no {}: line, in the report or the pack manifest — {}"

@@ -178,6 +178,23 @@ for (const [label, cmd, args] of [
     { cwd: repo, encoding: "utf8" });
   check(r.stdout.trim() === "SHOP", `installed ctx.py read project.key as ${JSON.stringify(r.stdout.trim())}`);
 }
+// …and the environments the install wrote resolve from the installed tree:
+// local by default, inheriting app.url — and an environment nobody declared
+// resolves to NOTHING, so a run blocks instead of testing localhost as "stg".
+{
+  const env = { ...process.env };
+  delete env.AIQA_ENV;
+  const q = (key, name) => spawnSync("python3", [".ai-qa/scripts/lib/ctx.py", key],
+    { cwd: repo, encoding: "utf8", env: name ? { ...env, AIQA_ENV: name } : env }).stdout.trim();
+  check(q("env.name") === "local", `installed default environment is ${JSON.stringify(q("env.name"))}`);
+  check(q("env.url") === q("app.url") || (q("env.url") === "" && q("app.url") === ""),
+    `local must inherit app.url from the installed config: env.url=${q("env.url")} app.url=${q("app.url")}`);
+  check(q("env.url", "stg") === "", "an undeclared stg resolved to a url — a run could lie about where it ran");
+  const skip = spawnSync("bash", [".ai-qa/scripts/app_check.sh"],
+    { cwd: repo, encoding: "utf8", timeout: 60_000, env: { ...env, AIQA_ENV: "stg" } });
+  check(/APP: SKIP\s+environment 'stg' has no url/.test(skip.stdout),
+    `app_check on an undeclared environment must SKIP naming it:\n${skip.stdout.trim()}`);
+}
 // app_check must SKIP (not crash) when the app is simply not running.
 {
   const r = spawnSync("bash", [".ai-qa/scripts/app_check.sh"], { cwd: repo, encoding: "utf8", timeout: 60_000 });
