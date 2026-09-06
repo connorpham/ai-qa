@@ -294,6 +294,8 @@ difference between a tester and a script, and it is written down in
 | `hostile-inputs.md` | While writing the boundary case | The values ordinary people produce every week, by field type: the pasted trailing space, `1.000`, `O'Brien`, 29 February, 31 Jan + 1 month, a currency with no decimals, someone else's id. Pick two; never sweep. |
 | `heuristics.md` | For the exploratory case, and whenever the spec is silent | HICCUPPS consistency oracles — what the product is *inconsistent with* when nothing is written: its own other screen, its last release, its own tooltip, the law. SFDIPOT coverage, Zero-One-Many, interruptions, follow-the-data, the tours, RCRCRC. One heuristic per pack, named as `HEURISTIC:`, different each time. |
 | `checklists.md` | For the whole-screen case | The reflex checks a seasoned tester does without thinking, by feature shape — forms, lists, search, roles, money, lifecycles, dates, notifications, exports, delete, small screens. "Still behaves" becomes a list of specific looks. |
+| `security-probes.md` | When the ticket touches auth, sessions, roles, money, personal data, or uploads | The input an attacker sends *on purpose*, grounded in OWASP WSTG — weak lockout, user enumeration by message **and** timing, session and cookie flaws, IDOR, injection — with a floor of outcomes no spec permits (a bypass, an executed payload, a leaked secret, a session that outlives logout). |
+| `ui-fidelity.md` | For the whole-screen case, and any ticket with a design source | Measure the surface instead of admiring it: computed style vs the design token (never vs the code), fonts proven to load, and the measurable **WCAG 2.2 AA** subset — contrast, focus, keyboard, labels, target size — as a written oracle even when the ticket is silent. |
 | `red-flags.md` | When you hear yourself think "obviously…" | The excuses, and now the biases behind them — confirmation, anchoring, automation, sunk cost, the pesticide paradox, expert blindness — each paired with the part of the lane built to give it less room. |
 | `case-writing.md` | While writing each case record | The fifteen-second test: cover everything but TITLE, RESULT, EXPECTED and ACTUAL, and a stranger still knows what happened. A title that is a sentence about behaviour (*An order of exactly 499,999 gets no discount*), one action per step with the exact value typed, expected as an observable fact with its citation, actual in the same shape. Before-and-after tables for every field. |
 | `report-writing.md` | Before the first word of the report | The five lines everyone reads — the verdict word, then **Verdict / What it means / Next step**, under sixty words, pasteable into a chat. Table rows labelled by case title, never by number. Findings as four-sentence stories that say who it hurts. A jargon-to-plain table, a length budget, and the rule that "What I could not check" is present even when it says *Nothing*. |
@@ -452,8 +454,9 @@ src/ui/server.mjs    the browser wizard (local, single-use, no dependencies)
 core/workflows/      onboard · qa · triage · regress   (tool-neutral)
 core/doctrine/       the QA method: roles (the index), severity, evidence, test design,
                      red flags — the tester's mind: user-mindset, heuristics,
-                     hostile-inputs, requirement-smells, checklists — and the
-                     tester's pen: case-writing, report-writing
+                     hostile-inputs, requirement-smells, checklists — the adversary
+                     and the eye: security-probes (OWASP WSTG), ui-fidelity (WCAG 2.2)
+                     — and the tester's pen: case-writing, report-writing
 core/scripts/        the gates, each with a --selftest
 core/templates/      the dossier and registries a human owns after install
 adapters/            one thin renderer per agent tool
