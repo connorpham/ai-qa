@@ -77,6 +77,19 @@ words; the expected and actual cells carry the number or label, the same way
 the case record does. Result is one mark: ✅ passed · ❌ failed · ⛔ could not
 run.
 
+> **The row is a Given / When / Then scenario, and that is on purpose.** Behaviour-
+> driven development already gave the world a shape every reader understands
+> without training: *Given* a situation, *When* someone acts, *Then* this must
+> follow. A case record is exactly that — **Given** its `AS` and `PRECONDITION`,
+> **When** its `STEPS`, **Then** its `EXPECTED` — so *as whom* is the Given,
+> *expected* is the Then, and *actual* is what in fact happened. You do not have
+> to write the keywords in the report's table, but the case must be able to be
+> read that way; a case that cannot be phrased "Given… When… Then…" is missing an
+> actor, an action, or an oracle. The workbook's **Evidence images** sheet prints
+> the scenario in full — Given/When/Then in plain language — and then embeds every
+> step's screenshot in order, so a reader who opens nothing else still sees *what
+> was done*, step by step, not only how it ended.
+
 **3. What I found** — one block per defect, worst first, or the sentence *No
 defects found.* Each block is a story with a bold first line:
 

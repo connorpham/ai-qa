@@ -28,6 +28,20 @@ TRUNCATED = " …[truncated — the full text is in the evidence file]"
 # A fixed DOS timestamp, so the same input produces the same bytes.
 _ZIP_DATE = (1980, 1, 1, 0, 0, 0)
 
+# A drawing anchor is measured in EMU (English Metric Units); at the 96 DPI Excel
+# assumes, one screen pixel is 9525 of them. This is the only unit conversion an
+# embedded image needs, and getting it wrong stretches every picture.
+EMU_PER_PX = 9525
+
+
+def png_size(data):
+    """(width, height) in pixels from a PNG's IHDR, with no image library — just
+    the bytes every PNG starts with. Returns None for anything that is not a PNG,
+    so the caller can fall back to a default box rather than crash on a JPEG."""
+    if len(data) >= 24 and data[:8] == b"\x89PNG\r\n\x1a\n" and data[12:16] == b"IHDR":
+        return (int.from_bytes(data[16:20], "big"), int.from_bytes(data[20:24], "big"))
+    return None
+
 _ILLEGAL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f￾￿]")
 _SHEETNAME_BAD = re.compile(r"[\[\]:*?/\\]")
 
@@ -228,6 +242,8 @@ class Sheet:
         self.merges = []                  # "A1:F1"
         self.autofilter = None            # "A4:R20"
         self._links = []                  # (cellref, target, display, tooltip)
+        self.pics = []                    # {data, row, col, w, h, name, descr}
+        self._index = None                # 1-based position, set by Workbook.sheet()
 
     # -- writing --------------------------------------------------------------
     def row(self, cells=None, height=None):
@@ -242,6 +258,14 @@ class Sheet:
 
     def blank(self, height=6.0):
         return self.row([], height)
+
+    def image(self, data, row, col, w_px, h_px, name="", descr=""):
+        """Anchor a picture's top-left to a cell (1-based row/col) at a fixed
+        pixel size, so it does not stretch when a column is widened. `data` is
+        the raw image bytes; they are written verbatim into the workbook."""
+        self.pics.append({"data": data, "row": row, "col": col,
+                          "w": int(w_px), "h": int(h_px),
+                          "name": name or "image", "descr": descr})
 
     def merge(self, r1, c1, r2, c2):
         self.merges.append("{}:{}".format(ref(r1, c1), ref(r2, c2)))
@@ -343,11 +367,15 @@ class Sheet:
         fit = ' fitToWidth="1" fitToHeight="0"' if self.fit_width else ""
         out.append('<pageSetup orientation="{}"{} paperSize="9"/>'.format(
             "landscape" if self.landscape else "portrait", fit))
+        # The drawing reference comes AFTER pageSetup in the schema; out of order,
+        # Excel silently drops the sheet. Its rId follows the hyperlink rIds.
+        if self.pics:
+            out.append('<drawing r:id="rId{}"/>'.format(len(self._links) + 1))
         out.append("</worksheet>")
         return "".join(out)
 
     def rels_xml(self):
-        if not self._links:
+        if not self._links and not self.pics:
             return None
         out = ['<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
                '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">']
@@ -355,7 +383,51 @@ class Sheet:
             out.append('<Relationship Id="rId{}" Type="http://schemas.openxmlformats.org/'
                        'officeDocument/2006/relationships/hyperlink" Target="{}"'
                        ' TargetMode="External"/>'.format(i, esc(target)))
+        if self.pics:
+            out.append('<Relationship Id="rId{}" Type="http://schemas.openxmlformats.org/'
+                       'officeDocument/2006/relationships/drawing"'
+                       ' Target="../drawings/drawing{}.xml"/>'.format(
+                           len(self._links) + 1, self._index))
         out.append("</Relationships>")
+        return "".join(out)
+
+    def drawing_xml(self):
+        """One floating picture per image, sized in EMU so it keeps its shape
+        whatever the columns do. Media ids are local to this drawing's rels
+        (rId1, rId2, …), assigned in the same order as self.pics."""
+        if not self.pics:
+            return None
+        out = ['<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
+               '<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/'
+               'spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/'
+               'drawingml/2006/main">']
+        for i, p in enumerate(self.pics, start=1):
+            cx, cy = p["w"] * EMU_PER_PX, p["h"] * EMU_PER_PX
+            out.append(
+                '<xdr:oneCellAnchor>'
+                '<xdr:from><xdr:col>{col}</xdr:col><xdr:colOff>0</xdr:colOff>'
+                '<xdr:row>{row}</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from>'
+                '<xdr:ext cx="{cx}" cy="{cy}"/>'
+                '<xdr:pic>'
+                '<xdr:nvPicPr>'
+                '<xdr:cNvPr id="{id}" name="{name}" descr="{descr}"/>'
+                '<xdr:cNvPicPr><a:picLocks noChangeAspect="1"/></xdr:cNvPicPr>'
+                '</xdr:nvPicPr>'
+                '<xdr:blipFill>'
+                '<a:blip xmlns:r="http://schemas.openxmlformats.org/officeDocument/'
+                '2006/relationships" r:embed="rId{id}"/>'
+                '<a:stretch><a:fillRect/></a:stretch>'
+                '</xdr:blipFill>'
+                '<xdr:spPr>'
+                '<a:xfrm><a:off x="0" y="0"/><a:ext cx="{cx}" cy="{cy}"/></a:xfrm>'
+                '<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>'
+                '</xdr:spPr>'
+                '</xdr:pic>'
+                '<xdr:clientData/>'
+                '</xdr:oneCellAnchor>'.format(
+                    col=max(0, p["col"] - 1), row=max(0, p["row"] - 1),
+                    cx=cx, cy=cy, id=i, name=esc(p["name"]), descr=esc(p["descr"])))
+        out.append("</xdr:wsDr>")
         return "".join(out)
 
 
@@ -369,6 +441,7 @@ class Workbook:
     def sheet(self, name, **kw):
         sh = Sheet(safe_sheet_name(name, self._names), **kw)
         self.sheets.append(sh)
+        sh._index = len(self.sheets)   # 1-based, so its drawing part can be named
         return sh
 
     # -- parts ----------------------------------------------------------------
@@ -377,7 +450,10 @@ class Workbook:
                '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">',
                '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package'
                '.relationships+xml"/>',
-               '<Default Extension="xml" ContentType="application/xml"/>',
+               '<Default Extension="xml" ContentType="application/xml"/>']
+        if any(sh.pics for sh in self.sheets):
+            out.append('<Default Extension="png" ContentType="image/png"/>')
+        out += [
                '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats'
                '-officedocument.spreadsheetml.sheet.main+xml"/>',
                '<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats'
@@ -501,28 +577,47 @@ class Workbook:
 
     # -- output ---------------------------------------------------------------
     def parts(self):
-        """Every zip entry, in write order. Exposed so a test can assert on the
-        parts without unzipping a temporary file."""
+        """Every zip entry, in write order. Text parts are str; embedded image
+        media are bytes. Exposed so a test can assert on the parts without
+        unzipping a temporary file."""
         items = [("[Content_Types].xml", self._content_types()),
                  ("_rels/.rels", self._root_rels()),
                  ("docProps/core.xml", self._core()),
                  ("xl/workbook.xml", self._workbook()),
                  ("xl/_rels/workbook.xml.rels", self._workbook_rels()),
                  ("xl/styles.xml", self._styles())]
+        media = []            # (arcname, bytes), appended after the sheets
+        media_seq = 0
         for i, sh in enumerate(self.sheets, start=1):
             items.append(("xl/worksheets/sheet{}.xml".format(i), sh.xml()))
             rels = sh.rels_xml()
             if rels:
                 items.append(("xl/worksheets/_rels/sheet{}.xml.rels".format(i), rels))
+            if sh.pics:
+                drels = ['<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
+                         '<Relationships xmlns="http://schemas.openxmlformats.org/'
+                         'package/2006/relationships">']
+                for k, p in enumerate(sh.pics, start=1):
+                    media_seq += 1
+                    arc = "image{}.png".format(media_seq)
+                    media.append(("xl/media/" + arc, p["data"]))
+                    drels.append('<Relationship Id="rId{}" Type="http://schemas.'
+                                 'openxmlformats.org/officeDocument/2006/relationships/image"'
+                                 ' Target="../media/{}"/>'.format(k, arc))
+                drels.append("</Relationships>")
+                items.append(("xl/drawings/drawing{}.xml".format(i), sh.drawing_xml()))
+                items.append(("xl/drawings/_rels/drawing{}.xml.rels".format(i), "".join(drels)))
+        items.extend(media)
         return items
 
     def save(self, path):
         if not self.sheets:
             raise ValueError("a workbook with no sheets is not a workbook")
         with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
-            for name, text in self.parts():
+            for name, payload in self.parts():
                 info = zipfile.ZipInfo(name, date_time=_ZIP_DATE)
                 info.compress_type = zipfile.ZIP_DEFLATED
                 info.external_attr = 0o644 << 16
-                z.writestr(info, text.encode("utf-8"))
+                z.writestr(info, payload if isinstance(payload, bytes)
+                           else payload.encode("utf-8"))
         return path

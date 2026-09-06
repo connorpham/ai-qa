@@ -228,7 +228,7 @@ _T = {
     "l_answers": ("What it answers", "Trả lời câu hỏi gì"),
     "l_term": ("Term", "Thuật ngữ"),
     "l_means": ("What it means", "Nghĩa là gì"),
-    "l_sheets": ("The five sheets", "Năm sheet"),
+    "l_sheets": ("The six sheets", "Sáu sheet"),
     "l_status": ("Case status", "Kết quả của case"),
     "l_kind": ("Case kinds — the shapes a verification must include",
                "Loại case — các dạng bắt buộc phải có"),
@@ -244,6 +244,27 @@ _T = {
                  "Mỗi case thực sự kiểm yêu cầu nào — và case nào không kiểm yêu cầu nào cả?"),
     "sheet_ev": ("Where is the proof for each row above?",
                  "Bằng chứng cho từng dòng ở trên nằm ở đâu?"),
+    "sheet_img": ("The annotated screenshots, embedded — the picture that carries each verdict.",
+                  "Ảnh chụp có chú thích, nhúng sẵn — tấm ảnh mang kết luận của từng case."),
+    "img_note": ("Each boxed screenshot from a case, embedded so the workbook stands alone — no "
+                 "folder to open, nothing to lose when the images leave git. The caption is the "
+                 "one drawn onto the image at capture time.",
+                 "Mỗi ảnh có khung của từng case, nhúng thẳng vào đây để file tự đứng một mình — "
+                 "không cần mở thư mục, không mất gì khi ảnh rời khỏi git. Chú thích chính là dòng "
+                 "đã vẽ lên ảnh lúc chụp."),
+    "img_none": ("No annotated screenshots in this pack. A non-UI verification (a migration, an "
+                 "API check, a database read) proves itself with a recorded run, not a picture.",
+                 "Gói này không có ảnh chụp chú thích. Một lần kiểm không giao diện (migration, "
+                 "kiểm API, đọc cơ sở dữ liệu) tự chứng minh bằng bản ghi chạy, không phải bằng ảnh."),
+    "img_caption": ("Case", "Case"),
+    "bdd_scenario": ("Scenario", "Kịch bản"),
+    "bdd_given": ("Given", "Cho trước"),
+    "bdd_when": ("When", "Khi"),
+    "bdd_and": ("and", "và"),
+    "bdd_then": ("Then", "Thì"),
+    "bdd_result": ("In fact", "Thực tế"),
+    "bdd_step_shot": ("Step {n} {dash} {what}", "Bước {n} {dash} {what}"),
+    "bdd_verdict_shot": ("Result {dash} {what}", "Kết quả {dash} {what}"),
     "priority_note": ("The product owner decides", "Do product owner quyết định"),
     "blocked_prefix": ("BLOCKED — nothing was verified. Reason: {reason}",
                        "BỊ CHẶN — chưa kiểm được gì. Lý do: {reason}"),
@@ -253,7 +274,7 @@ _T = {
                       "trích từ dòng EXPECTED của case"),
 }
 
-SHEET_NAMES = ("Summary", "Test Cases", "Defects", "Traceability", "Evidence")
+SHEET_NAMES = ("Summary", "Test Cases", "Defects", "Traceability", "Evidence", "Evidence images")
 LANGS = ("en", "vi")
 
 
@@ -580,7 +601,8 @@ def build_summary(wb, pack, L, out_dir):
             (SHEET_NAMES[1], L("sheet_tc"), "bold"),
             (SHEET_NAMES[2], L("sheet_df"), "bold"),
             (SHEET_NAMES[3], L("sheet_tr"), "bold"),
-            (SHEET_NAMES[4], L("sheet_ev"), "bold")])
+            (SHEET_NAMES[4], L("sheet_ev"), "bold"),
+            (SHEET_NAMES[5], L("sheet_img"), "bold")])
     legend(L.h("l_status"), L.h("l_term"), L.h("l_means"),
            [(r_, RESULT_MEANING[r_], result_style(r_)) for r_ in CASE_RESULTS])
     legend(L.h("l_kind"), L.h("l_term"), L.h("l_means"),
@@ -809,6 +831,125 @@ def build_evidence(wb, pack, L, out_dir):
 
 
 # ---------------------------------------------------------------------------
+# sheet 6 — Evidence images: a step-by-step walkthrough, read as a scenario
+#
+# Not a wall of result screenshots. Each case is rendered as a Given/When/Then
+# scenario a non-technical reader follows in plain language, then EVERY step's
+# screenshot is embedded in the order it happened — so the sheet shows what was
+# DONE, not only how it ended. The annotated result shot comes last, marked.
+# ---------------------------------------------------------------------------
+STEP_W = 760             # px: width a numbered step shot is drawn at
+VERDICT_W = 900          # px: the annotated result gets more room
+IMG_FALLBACK = (1280, 800)   # px: assumed shape when the bytes are not a readable PNG
+PX_TO_PT = 0.75          # a screen pixel is 0.75 point tall — for the row that holds it
+
+_STEP_NO = re.compile(r"(?:^|/)TC\d+_(\d+)_", re.I)
+# A step marker "1." / "2)" at the start of a line OR inline after a space, so
+# it splits both one-per-line STEPS and the compact "1. x  2. y  3. z" form.
+_STEP_NUM_TEXT = re.compile(r"(?:^|\s)(\d{1,2})[.)]\s+")
+
+
+def _shot_order(e):
+    """Sort a case's screenshots the way they were taken: by step number, with
+    the annotated (_boxed) result placed right after its own raw shot."""
+    m = _STEP_NO.search(e.rel.replace("\\", "/"))
+    step = int(m.group(1)) if m else 999
+    return (step, 1 if "_boxed." in e.rel.lower() else 0)
+
+
+def _shot_what(e):
+    """A human phrase for what the file shows, from its name: the note the box
+    carries if there is one, else the words baked into the filename."""
+    if e.note:
+        return e.note
+    stem = e.rel.split("/")[-1].rsplit(".", 1)[0]
+    stem = re.sub(r"^TC\d+_\d+_", "", stem)
+    stem = stem.replace("_boxed", "").replace("_", " ").strip()
+    return stem or e.rel.split("/")[-1]
+
+
+def _gherkin(case, L):
+    """Given / When / Then from the fields the case already carries: the actor
+    and precondition are the Given, the numbered STEPS are the When, EXPECTED is
+    the Then, and the ACTUAL is what in fact happened."""
+    given = case.get("AS")
+    pre = case.get("PRECONDITION")
+    if pre:
+        given = "{}, {}".format(given, pre) if given else pre
+    raw_steps = case.get("STEPS")
+    steps = [s.strip(" .") for s in _STEP_NUM_TEXT.split(raw_steps) if s.strip(" .")]
+    # split() keeps the captured numbers as separate items; drop the bare digits
+    steps = [s for s in steps if not s.isdigit()]
+    if not steps and raw_steps:
+        steps = [raw_steps.strip()]
+    return {"given": given or NOT_DECLARED, "when": steps,
+            "then": case.get("EXPECTED") or NOT_DECLARED,
+            "fact": case.get("ACTUAL")}
+
+
+def _embed(sh, data, name, descr, max_w):
+    w0, h0 = xlsx.png_size(data) or IMG_FALLBACK
+    scale = min(1.0, float(max_w) / w0) if w0 else 1.0
+    dw, dh = int(w0 * scale), int(h0 * scale)
+    band = sh.blank(dh * PX_TO_PT + 6.0)
+    sh.image(data, band, 1, dw, dh, name=name, descr=(descr or name)[:250])
+
+
+def build_evidence_images(wb, pack, L, out_dir):
+    sh = wb.sheet(SHEET_NAMES[5], widths=[150], freeze=(2, 0), fit_width=False)
+    r = sh.row([S("{} {} {}".format(pack.key, DASH, L.h("sheet_img")), "title")], 26.0)
+    sh.merge(r, 1, r, 1)
+    r = sh.row([S(L("img_note"), "note")], 30.0)
+    sh.merge(r, 1, r, 1)
+
+    cases_with_shots = [c for c in pack.cases
+                        if any(e.rel.lower().endswith(".png") for e in c.evidence)]
+    if not cases_with_shots:
+        sh.blank(6.0)
+        sh.row([S(L("img_none"), "muted")], 40.0)
+        return sh
+
+    for case in cases_with_shots:
+        sh.blank(10.0)
+        tc = case.name.split("_")[0].replace("TC", "TC ")
+        title = case.title or case.name
+        badge = " [{}]".format(case.result) if case.result else ""
+        sh.row([S("{} {} {}{}".format(L.h("img_caption"), tc, DASH + " " + title, badge),
+                  "section")], 22.0)
+
+        # --- the scenario, in plain Given / When / Then --------------------
+        g = _gherkin(case, L)
+        sh.row([S("{}: {}".format(L.h("bdd_scenario"), title), "bold")], 16.0)
+        sh.row([S("  {} {}".format(L.h("bdd_given"), g["given"]), "mono")], 15.0)
+        for i, step in enumerate(g["when"]):
+            kw = L.h("bdd_when") if i == 0 else L.h("bdd_and")
+            sh.row([S("  {} {}".format(kw, step), "mono")], 15.0)
+        sh.row([S("  {} {}".format(L.h("bdd_then"), g["then"]), "mono")], 15.0)
+        if g["fact"]:
+            sh.row([S("  {} {}".format(L.h("bdd_result"), g["fact"]), "mono")], 15.0)
+
+        # --- every step's screenshot, in the order it happened -------------
+        shots = sorted((e for e in case.evidence if e.rel.lower().endswith(".png")),
+                       key=_shot_order)
+        for e in shots:
+            m = _STEP_NO.search(e.rel.replace("\\", "/"))
+            boxed = "_boxed." in e.rel.lower()
+            what = _shot_what(e)
+            if boxed:
+                cap = L("bdd_verdict_shot", dash=DASH, what=what)
+            else:
+                cap = L("bdd_step_shot", n=(m.group(1) if m else "?"), dash=DASH, what=what)
+            sh.row([S(cap, "label" if boxed else "note")], 15.0)
+            try:
+                data = open(e.abs, "rb").read()
+            except OSError:
+                sh.row([S(e.rel + " — file not found beside the workbook", "muted")], 15.0)
+                continue
+            _embed(sh, data, case.name, cap, VERDICT_W if boxed else STEP_W)
+    return sh
+
+
+# ---------------------------------------------------------------------------
 # export
 # ---------------------------------------------------------------------------
 def default_out(evd):
@@ -828,6 +969,7 @@ def export(evd, out=None, lang=None, project=None):
     build_defects(wb, pack, L, out_dir)
     build_traceability(wb, pack, L, out_dir)
     build_evidence(wb, pack, L, out_dir)
+    build_evidence_images(wb, pack, L, out_dir)
 
     parent = os.path.dirname(os.path.abspath(out))
     if parent and not os.path.isdir(parent):
@@ -1105,6 +1247,34 @@ def selftest():
                    "the workbook has no {} sheet".format(sheet_name))
         expect(len([n for n in names if n.startswith("xl/worksheets/_rels/")]) >= 1,
                "no sheet declared hyperlink relationships — the evidence links are dead")
+
+        # The green fixture carries a *_boxed.png, so the workbook must actually
+        # embed it: media bytes, a drawing that places them, and the png content
+        # type. A link is not an embed — this proves the image is IN the file.
+        media = [n for n in names if n.startswith("xl/media/") and n.endswith(".png")]
+        expect(media, "a pack with an annotated screenshot embedded no image media")
+        expect(any(n.startswith("xl/drawings/drawing") and n.endswith(".xml") for n in names),
+               "image media with no drawing part — the picture is in the zip but anchored nowhere")
+        ctypes = z.read("[Content_Types].xml").decode("utf-8")
+        expect('Extension="png"' in ctypes,
+               "png media with no content-type default — Excel will call the file corrupt")
+        embedded = z.read(media[0])
+        expect(embedded[:8] == b"\x89PNG\r\n\x1a\n" or len(embedded) >= 8,
+               "the embedded media is not the image bytes")
+        # The walkthrough shows the STEPS, not only the result: the green
+        # fixture's case has a step shot AND a _boxed result, so more than one
+        # image must be embedded per case's worth of pngs.
+        expect(len(media) >= 2,
+               "the walkthrough embedded only one image — the steps that show what was DONE are missing")
+
+    # The image sheet reads as a Given/When/Then scenario a non-coder follows,
+    # not a caption-less pile of screenshots.
+    walk = _sheet_text(out, 6)
+    for kw in ("Scenario", "Given", "When", "Then"):
+        expect(kw in walk, "the walkthrough sheet is missing the '{}' line — it is not a readable "
+                           "scenario".format(kw))
+    expect("Step " in walk or "Result " in walk,
+           "the walkthrough labels no step or result image — the reader cannot tell what each shows")
 
     # every style a builder asked for must exist in styles.xml
     expect(max(xlsx.STYLES.values()) + 1 == len(xlsx._XFS),

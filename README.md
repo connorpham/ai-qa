@@ -204,7 +204,7 @@ python3 .ai-qa/scripts/xlsx_export.py --evd evd/SHOP-142 --strict   # exit 1 whi
 python3 .ai-qa/scripts/xlsx_export.py --evd evd/SHOP-142 --lang vi  # headers follow project.language by default
 ```
 
-Five sheets, laid out to **ISO/IEC/IEEE 29119-3** with an IEEE-829-style field
+Six sheets, laid out to **ISO/IEC/IEEE 29119-3** with an IEEE-829-style field
 set, so nobody has to be taught how to read it:
 
 | Sheet | The question it answers on sight | Standard |
@@ -214,6 +214,7 @@ set, so nobody has to be taught how to read it:
 | **Defects** | What is wrong, how much does it hurt, who fixes it? One row per failed case, ranked worst-first. | §9 incident report |
 | **Traceability** | Which requirement does each case actually check — and which cases check nothing? | requirement traceability matrix |
 | **Evidence** | Where is the proof for every row above? Clickable, relative to the workbook. | — |
+| **Evidence images** | Each case as a plain **Given / When / Then** scenario, then **every step's screenshot embedded in order** — so a reader who opens nothing else sees what was *done*, step by step, not only how it ended. | — |
 
 The severity ladder is not invented for the spreadsheet: **Blocker / Critical /
 Major / Minor** come from `docs/qa/method/severity.md`, the same file the report
