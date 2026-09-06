@@ -172,6 +172,12 @@ Required shapes:
   list of specific looks, not a glance: open `docs/qa/method/checklists.md`,
   find the shape the screen is — a form, a list, a money screen, a lifecycle, a
   delete — and walk that list. Record what you looked at even when it was fine.
+  On a screen with a design source or a user-facing surface, open
+  `docs/qa/method/ui-fidelity.md`: measure computed style against the design
+  token (not the code), confirm the fonts actually loaded, and prove the
+  measurable WCAG 2.2 AA checks — contrast, a visible focus ring, keyboard
+  reach, real labels — because accessibility is a written oracle even when the
+  ticket is silent, and "looks right" is the least trustworthy sentence in QA.
 - **④ Write → read-back** (`evidence.require_db_verify`) — anything that writes
   gets verified by reading the row back after the action, plus the rollback path
   if one is specified.
@@ -182,6 +188,21 @@ Required shapes:
   follow-the-data, a consistency oracle — named as `HEURISTIC:` with a timebox.
   Record what you tried even when you found nothing. Four confirming cases and
   no exploring one has spent the whole budget on what someone already thought of.
+- **⑥ The security probe** — when the ticket touches authentication, sessions,
+  roles, money, personal data, or uploads, one case sends the input an attacker
+  sends **on purpose**. Open `docs/qa/method/security-probes.md` and take the two
+  or three probes that fit the surface: is the lockout real and does the error
+  message *or its timing* leak which accounts exist; does the session survive a
+  password change; does the protected route answer when called directly as the
+  wrong role (server-side, not the hidden button); is an injected payload
+  executed or echoed unescaped; is a secret in any response. Also test identity
+  **across representations** — the uppercase username, the duplicate that differs
+  only by case or accent (`test-design.md`), the gap that hides in every happy
+  path because the happy path types the value only one way. On a ticket that
+  merely brushes security this shares slot ② or ③; on one that **is** auth or
+  authorization it takes two or three cases, because there the security floor is
+  the requirement. Its EXPECTED is a cited rule or one of the no-citation floor
+  outcomes in `security-probes.md`.
 
 **Per case, write the JOURNEY — you are a person using a product, not a script
 hitting a route.** Open `docs/qa/method/case-writing.md` before the first record
@@ -391,8 +412,8 @@ images and no verification file is not verification.
 
 ```
 evd/<TICKET>/
-├── manifest.md          # plain language: the requirement, each verdict — and the
-│                        # generated index block (see below)
+├── manifest.md          # plain language: the requirement, each verdict, the
+│                        # COVERAGE: block — and the generated index block (below)
 ├── verifysheet.md       # V1/V2: expected values with citations, the journeys
 ├── debate.md            # V6: your card, the challenger's card, the resolution
 ├── REPORT.md            # V5b: what a non-programmer reads
@@ -426,6 +447,23 @@ python3 .ai-qa/scripts/evd_index.py --evd evd/<TICKET>
 It rewrites one marked block inside `evd/<TICKET>/manifest.md` — a table of
 case, what it proves, kind, result, and which file to open — and leaves your
 prose alone. `evd_check.py` reds a stale one.
+
+**Declare the coverage decision.** In the prose of `evd/<TICKET>/manifest.md`
+(outside the generated block), write a `COVERAGE:` line for each lens the gate
+insists a verifier decide about — the two skipped in silence more than any
+other. Name the case that covered it, or waive it out loud with a reason:
+
+```markdown
+COVERAGE:
+- security: TC_4        (or)   security: n/a — cosmetic label change, no auth, session or write path
+- accessibility: TC_6  (or)   accessibility: n/a — backend migration, no UI in this change
+```
+
+The gate reds on a pack that says nothing — because "nobody wrote it into the
+ticket" is exactly how a whole class of defect goes untested while the pack
+looks complete. A waiver is a five-second honest answer; the silent skip is what
+this refuses. See `docs/qa/method/security-probes.md` and `ui-fidelity.md` for
+when each lens genuinely applies.
 
 Gate before moving on — pass the number of cases you PLANNED, so "planned 5,
 ran 1" can go red:
@@ -608,6 +646,15 @@ in the template is for the person reading it.
 - [ ] Boundary case and whole-screen case both ran — not only the happy path;
       the boundary value came from `hostile-inputs.md`, the whole-screen case
       walked the `checklists.md` shape for that screen
+- [ ] Ticket touches auth / sessions / roles / money / personal data / uploads →
+      at least one `security-probes.md` probe ran (lockout real, enumeration by
+      message *and* timing, session invalidation, server-side authorization,
+      injection refused), and identity was tested across representations
+      (uppercase, duplicate-by-case-or-accent) — or the report says why none applied
+- [ ] Ticket has a design source or user-facing screen → `ui-fidelity.md` run:
+      computed style measured against the design token, fonts proven to load, and
+      the WCAG 2.2 AA checks that apply (contrast, focus visible, keyboard reach,
+      labels) proven with numbers — a11y failures cited against their SC as defects
 - [ ] Every case names a `PERSONA:` and carries at least one real-user move in
       its STEPS — none tested only the route
 - [ ] Exploratory slot used with a named `HEURISTIC:` when the budget allowed —

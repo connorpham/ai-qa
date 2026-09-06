@@ -364,7 +364,9 @@ for (const [label, cmd, args] of [
         "--expect-status", "201", "--expect", "discount=50000"]);
       check(r2.status === 0, `api_check failed while building the pack: ${r2.out}`);
     }
-    fs.writeFileSync(path.join(evd, "manifest.md"), "# SHOP-1\nWhat was checked, in plain language.\n");
+    fs.writeFileSync(path.join(evd, "manifest.md"), "# SHOP-1\nWhat was checked, in plain language.\n\n"
+      + "COVERAGE:\n- security: n/a — backend-only recorder pack, no auth or session surface\n"
+      + "- accessibility: n/a — no UI in this change\n");
     // The index describes the folder, so it is rewritten whenever the folder
     // changes — exactly what the gate insists on downstream.
     const reindex = () => run("python3", [path.join(pkgRoot, "core/scripts/evd_index.py"), "--evd", evd]);

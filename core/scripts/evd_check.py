@@ -37,7 +37,7 @@ except Exception:  # pragma: no cover - an older install may not have it
 
 VERDICTS = ("PASS", "FAIL", "PARTIAL", "NEW-BUG", "BLOCKED", "UNCLEAR")
 CASE_RESULTS = ("PASS", "FAIL", "BLOCKED")
-KINDS = ("acceptance", "boundary", "whole-screen", "write-readback", "exploratory")
+KINDS = ("acceptance", "boundary", "whole-screen", "write-readback", "exploratory", "security")
 
 # Fields every case manifest must carry. The names are the discipline: a field
 # you have to fill in is a question you cannot skip.
@@ -333,6 +333,61 @@ def check_report(evd, res):
                               "reading it in two minutes; move it to the appendix".format(", ".join(jargon)))
 
 
+# The two lenses a verifier skips in silence more than any other, and always for
+# the same reason: nobody wrote them into the ticket, so nobody tested them, so
+# the pack looks complete while a whole class of defect was never looked at. The
+# gate cannot decide WHEN they apply — that is judgement — but it can refuse the
+# silence: the pack must NAME the case that covered each, or waive it out loud
+# with a reason. A waiver is a five-second, honest answer ("no UI in this
+# change"); the silent skip is the failure this rule exists to make impossible.
+REQUIRED_COVERAGE = ("security", "accessibility")
+_WAIVER = re.compile(r"(?i)\b(n/?a|not applicable|out of scope|kh[oô]ng áp d[uụ]ng|khong ap dung)\b")
+
+
+def check_coverage(evd, res, cases):
+    """The root manifest must declare, for each risk lens the framework insists on
+    a decision about, either the case that covered it or an out-loud waiver."""
+    path = os.path.join(evd, "manifest.md")
+    if not os.path.exists(path):
+        return  # its absence is already reported upstream
+    text = read(path)
+
+    if not re.search(r"(?im)^\s*#*\s*COVERAGE\s*:", text):
+        res.err("manifest.md", "no COVERAGE: block — the pack never says whether {} were in scope. "
+                               "Silent omission is exactly how a lens gets skipped: name the case that "
+                               "covered each, or waive it with a reason.".format(" and ".join(REQUIRED_COVERAGE)))
+        return
+
+    # Scope to the COVERAGE section: from the marker to the next heading or EOF,
+    # so the word "security" elsewhere in the prose is not mistaken for a line.
+    after = text.split(re.split(r"(?im)^\s*#*\s*COVERAGE\s*:", text, maxsplit=1)[0], 1)[-1]
+    block = re.split(r"(?im)^\s*#{1,6}\s+\S", after, maxsplit=1)[0]
+
+    present = {int(CASE_DIR.match(c).group(1).lstrip("0") or "0"): c for c in cases}
+    for lens in REQUIRED_COVERAGE:
+        m = re.search(r"(?im)^\s*[-*]?\s*{}\s*:\s*(.+?)\s*$".format(lens), block)
+        if not m:
+            res.err("manifest.md", "COVERAGE names no line for '{}' — decide it: a case, or a waiver "
+                                   "with a reason".format(lens))
+            continue
+        value = m.group(1)
+        tc = re.search(r"\bTC[_-]?(\d+)\b", value, re.I)
+        if tc:
+            no = int(tc.group(1))
+            if no not in present:
+                res.err("manifest.md", "COVERAGE says '{}: {}' but there is no such case folder — a "
+                                       "citation to a case that does not exist".format(lens, value))
+            continue
+        if _WAIVER.search(value):
+            reason = _WAIVER.sub("", value).strip(" -—:.,").strip()
+            if len(reason) < 10:
+                res.err("manifest.md", "COVERAGE waives '{}' with no reason — a waiver with no reason "
+                                       "is a silent skip wearing a label".format(lens))
+            continue
+        res.err("manifest.md", "COVERAGE line for '{}' is neither a case (TC_n) nor a waiver "
+                               "(n/a — reason): {!r}".format(lens, value))
+
+
 def run(evd, expect_tcs, opts):
     res = Result()
     if not os.path.isdir(evd):
@@ -392,6 +447,7 @@ def run(evd, expect_tcs, opts):
                                    "python3 .ai-qa/scripts/evd_index.py --evd {}".format(why, evd))
 
     check_report(evd, res)
+    check_coverage(evd, res, cases)
 
     for name, why in (("verifysheet.md", "where expected values are derived and cited"),
                       ("debate.md", "the challenger's card — a verdict nobody tried to break")):
@@ -466,7 +522,9 @@ def _mkcase(root, name, manifest, images=True):
 
 def _green_fixture(root):
     os.makedirs(root, exist_ok=True)
-    for n, t in (("manifest.md", "# SHOP-142\nWhat was checked, in plain language.\n"),
+    for n, t in (("manifest.md", "# SHOP-142\nWhat was checked, in plain language.\n\n"
+                  "COVERAGE:\n- security: n/a — read-only pricing display, no auth, session or "
+                  "write path touched\n- accessibility: TC_3\n"),
                  ("REPORT.md", GREEN_REPORT),
                  ("verifysheet.md", "EXPECTED per spec 3.2\n"),
                  ("debate.md", "verifier card\nchallenger card\nresolution\n")):
@@ -544,6 +602,14 @@ def selftest():
         ("an image from another case", lambda d: shutil.copyfile(
             os.path.join(d, C1, "TC1_01_orders_list.png"),
             os.path.join(d, C1, "TC9_01_orders_list.png"))),
+        ("no COVERAGE block", lambda d: _rewrite(d, "manifest.md",
+            lambda t: re.sub(r"(?is)\nCOVERAGE:.*$", "\n", t))),
+        ("COVERAGE names no security line", lambda d: _rewrite(d, "manifest.md",
+            lambda t: re.sub(r"(?im)^\s*-\s*security:.*\n", "", t))),
+        ("COVERAGE waives a lens with no reason", lambda d: _rewrite(d, "manifest.md",
+            lambda t: re.sub(r"(?im)^(\s*-\s*security:).*$", r"\1 n/a", t))),
+        ("COVERAGE cites a case that does not exist", lambda d: _rewrite(d, "manifest.md",
+            lambda t: t.replace("accessibility: TC_3", "accessibility: TC_9"))),
     ]
     for i, (label, mutate) in enumerate(mutations):
         d = fresh("mut{}".format(i))

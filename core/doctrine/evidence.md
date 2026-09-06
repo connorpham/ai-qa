@@ -58,6 +58,26 @@ Every field is there because a verification went wrong without it:
 - **BACK** — Cancel that does not cancel, filters that reset. Cheap to check,
   frequently broken.
 
+## The coverage decision, per pack
+
+The root `manifest.md` carries one more thing the gate will not do without: a
+`COVERAGE:` block that states, for the two lenses a verifier skips in silence
+more than any other — **security** and **accessibility** — either the case that
+covered it or an out-loud waiver with a reason.
+
+```
+COVERAGE:
+- security: TC_4        (or)  security: n/a — read-only display, no auth/session/write path
+- accessibility: TC_6  (or)  accessibility: n/a — backend migration, no UI in this change
+```
+
+The gate cannot decide *when* a lens applies — that is judgement — but it refuses
+the *silence*, because "nobody wrote it into the ticket" is precisely how a whole
+class of defect goes untested while the pack looks finished. A waiver is a
+five-second honest answer; a pack that says nothing about security or
+accessibility is one that never decided, and never deciding is how the gap hides.
+See `security-probes.md` and `ui-fidelity.md`.
+
 The fields are the skeleton. How each value is *written* — the title as a
 sentence about behaviour, steps with the exact value typed, expected as an
 observable fact and actual in the same shape — is `case-writing.md`, and it is

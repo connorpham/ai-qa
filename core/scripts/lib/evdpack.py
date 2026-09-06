@@ -27,7 +27,7 @@ import re
 # ---------------------------------------------------------------------------
 VERDICTS = ("PASS", "FAIL", "PARTIAL", "NEW-BUG", "BLOCKED", "UNCLEAR")
 CASE_RESULTS = ("PASS", "FAIL", "BLOCKED")
-KINDS = ("acceptance", "boundary", "whole-screen", "write-readback", "exploratory")
+KINDS = ("acceptance", "boundary", "whole-screen", "write-readback", "exploratory", "security")
 
 # Ordered worst-first: the report ranks by this, so the order IS the ladder.
 SEVERITIES = ("Blocker", "Critical", "Major", "Minor")
@@ -87,6 +87,7 @@ KIND_MEANING = {
     "whole-screen": "The neighbourhood still works; a fix that breaks a neighbour is a defect too",
     "write-readback": "The record was read back after the write — the interface saying 'Saved' is a claim about the interface",
     "exploratory": "Shapes and edges nobody planned for, usually added after a challenger pass",
+    "security": "The input an attacker sends on purpose — lockout, enumeration, session, authorization, injection (OWASP WSTG)",
 }
 
 RESULT_MEANING = {

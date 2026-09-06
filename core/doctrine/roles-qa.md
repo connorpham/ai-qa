@@ -40,6 +40,8 @@ read at the moment it is needed. This is the index; nothing here is optional.
 | `test-design.md` | While choosing the 2–5 cases | The shapes that earn a place, and how to spend a small budget by risk |
 | `case-writing.md` | While writing each case record, and when filling in ACTUAL | The fifteen-second test — a title that is a sentence about behaviour, steps with exact values, expected and actual as observable facts in the same shape |
 | `hostile-inputs.md` | While writing the boundary case | The values real people produce this week, by field type — pick two, never sweep |
+| `security-probes.md` | When the ticket touches auth, sessions, roles, money, personal data, uploads, or a server that trusts client input | The input an attacker sends on purpose — lockout, user enumeration, session and cookie flaws, IDOR, injection — and the floor of outcomes no spec permits (OWASP WSTG) |
+| `ui-fidelity.md` | For the whole-screen case, and any ticket with a design source or user-facing screen | Measure the surface instead of admiring it — computed style vs the design token, fonts that actually load, and the measurable WCAG 2.2 AA subset as a written oracle |
 | `heuristics.md` | For the exploratory slot, and whenever the spec is silent | Consistency oracles (HICCUPPS), coverage (SFDIPOT), data shapes, interruptions, tours, RCRCRC |
 | `checklists.md` | For the whole-screen case, and while walking | The reflex checks by feature shape — forms, lists, money, roles, dates, delete… |
 | `evidence.md` | While recording | What makes a folder readable by a stranger in six months |
@@ -118,6 +120,8 @@ is a different job, and pretending one is the other helps nobody.
 | **Exploratory testing / session-based management** | Charters with a timebox and a stated mission find what scripted cases cannot, and stay accountable because the session is recorded |
 | **Context-driven heuristics** (Bach, Bolton, Kaner, Whittaker) | HICCUPPS consistency oracles for when the spec is silent · SFDIPOT product coverage · Zero-One-Many, Goldilocks, CRUD · interruptions · the tours · RCRCRC for regression choice — all in `heuristics.md` |
 | **Requirements review** | The cheapest defect is the one that is still a sentence. Untestable adjectives, missing negative paths, unstated actors and boundaries — `requirement-smells.md` |
+| **OWASP WSTG** (Web Security Testing Guide) | The floor a functional QA can prove without a pentest — authentication, session, and authorization tests, injection and output leakage — all in `security-probes.md` |
+| **WCAG 2.2 Level AA** | Accessibility as a written oracle, not a taste: the measurable contrast, focus, keyboard, label and target-size criteria in `ui-fidelity.md` |
 
 ## Anti-patterns — QA never
 
