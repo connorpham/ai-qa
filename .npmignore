@@ -1,0 +1,8 @@
+# Python bytecode — regenerated on the user's machine, tied to a Python version,
+# and never needed in the published package. prepublishOnly runs the test suite,
+# which imports the gates and creates these, so they must be excluded here.
+**/__pycache__/
+**/*.pyc
+
+# Test scratch and OS cruft
+.DS_Store
