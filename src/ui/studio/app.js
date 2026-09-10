@@ -131,6 +131,29 @@
   const stage = $("stage"); const canvas = $("canvas"); const svg = $("edges");
   const TYPES = SCHEMA.nodeTypes;
 
+  // A five-step flow is wider than the viewport between the palette and the
+  // inspector, and a canvas you can only see two steps of hides the rest —
+  // the opposite of why it exists. So the stage scales, and opening a flow
+  // fits it. Every pointer coordinate is divided by this, or dragging drifts.
+  let zoom = 1;
+  function setZoom(z) {
+    zoom = Math.min(1, Math.max(0.35, z));
+    stage.style.transformOrigin = "0 0";
+    stage.style.transform = `scale(${zoom})`;
+    $("zoomLabel").textContent = `${Math.round(zoom * 100)}%`;
+  }
+  function bbox() {
+    if (!flow.nodes.length) return null;
+    const xs = flow.nodes.map((n) => n.x), ys = flow.nodes.map((n) => n.y);
+    return { x: Math.min(...xs), y: Math.min(...ys), r: Math.max(...xs) + 230, b: Math.max(...ys) + 120 };
+  }
+  function fitView() {
+    const b = bbox(); if (!b) { setZoom(1); return; }
+    const pad = 32;
+    setZoom(Math.min(1, (canvas.clientWidth - pad) / (b.r + pad), (canvas.clientHeight - pad) / (b.b + pad)));
+    canvas.scrollTo({ left: Math.max(0, b.x * zoom - 16), top: Math.max(0, b.y * zoom - 16) });
+  }
+
   function summarize(n) {
     const x = n.data || {};
     switch (n.type) {
@@ -230,7 +253,7 @@
   });
 
   // -- pointer interactions ------------------------------------------------------
-  const stagePoint = (e) => { const r = stage.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; };
+  const stagePoint = (e) => { const r = stage.getBoundingClientRect(); return { x: (e.clientX - r.left) / zoom, y: (e.clientY - r.top) / zoom }; };
   function startNodeDrag(e, n) {
     if (e.button !== 0) return;
     e.preventDefault();
@@ -250,7 +273,7 @@
       document.removeEventListener("pointermove", move); document.removeEventListener("pointerup", up); ghost.remove();
       const r = canvas.getBoundingClientRect();
       if (moved && ev.clientX >= r.left && ev.clientX <= r.right && ev.clientY >= r.top && ev.clientY <= r.bottom) { const p = stagePoint(ev); addNode(type, p.x - 20, p.y - 16); }
-      else if (!moved) addNode(type, canvas.scrollLeft + 40 + (flow.nodes.length % 3) * 260, canvas.scrollTop + 40 + Math.floor(flow.nodes.length / 3) * 130);
+      else if (!moved) addNode(type, canvas.scrollLeft / zoom + 40 + (flow.nodes.length % 3) * 260, canvas.scrollTop / zoom + 40 + Math.floor(flow.nodes.length / 3) * 130);
     };
     document.addEventListener("pointermove", move); document.addEventListener("pointerup", up);
   }
@@ -279,9 +302,12 @@
     const cols = new Map();
     for (const n of flow.nodes) { const d = depth.get(n.id); if (!cols.has(d)) cols.set(d, []); cols.get(d).push(n); }
     for (const [d, list] of cols) { list.sort((a, b) => a.y - b.y); list.forEach((n, i) => { n.x = 40 + d * 280; n.y = 40 + i * 130; }); }
-    renderNodes(); scheduleSave();
+    renderNodes(); fitView(); scheduleSave();
   }
   $("autoLayout").addEventListener("click", autoLayout);
+  $("fitView").addEventListener("click", fitView);
+  $("zoomIn").addEventListener("click", () => setZoom(zoom + 0.15));
+  $("zoomOut").addEventListener("click", () => setZoom(zoom - 0.15));
 
   // -- inspector ------------------------------------------------------------------
   function renderInspector() {
@@ -343,7 +369,7 @@
     flow = f; selected = { node: null, edge: null };
     nextId = 1 + Math.max(0, ...flow.nodes.map((n) => Number(String(n.id).replace(/\D/g, "")) || 0));
     if (flow.ticket) ticketInput.value = flow.ticket;
-    renderNodes(); renderInspector(); scheduleValidate(); loadFlows(name); showTab("canvas");
+    renderNodes(); renderInspector(); scheduleValidate(); loadFlows(name); showTab("canvas"); fitView();
   }
   $("newFlow").addEventListener("click", () => { flow = blankFlow(); selected = { node: null, edge: null }; renderNodes(); renderInspector(); $("validation").replaceChildren(); loadFlows(null); $("flowName").focus(); });
 
@@ -535,6 +561,6 @@
   });
 
   // ---------------------------------------------------------------------------
-  fillTop(); renderPalette(); renderInspector(); renderNodes(); loadFlows(null); loadEvd();
+  fillTop(); renderPalette(); renderInspector(); renderNodes(); setZoom(1); loadFlows(null); loadEvd();
   $("chatMeta").textContent = ENGINES.find((e) => e.available) ? "ready" : "no engine available";
 })();
