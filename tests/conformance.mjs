@@ -1393,6 +1393,116 @@ for (const [label, cmd, args] of [
   check(buildStarter("nope", () => "x") === null, "an unknown starter id should return null, not throw");
 }
 
+
+// ---- "what this project has" -------------------------------------------------
+// The Steps tab asks for a click path, a role, an endpoint, a table and a
+// citation. Every one is an answer the project already holds, and the studio
+// used to show none of them. What matters most here is the HONESTY of the
+// states: a curated list and a file listing are different answers, and a blank
+// template is "nobody has said", never "here is your inventory".
+{
+  const { inventory, dossierTable, openapiPaths, prismaModels, sqlTables, codeRoutes } =
+    await import("../src/ui/studio/inventory.mjs");
+  const { get } = await import("../src/cli/config.mjs");
+
+  // -- the dossier's tables -------------------------------------------------
+  const filled = `## 3. Access\n\n| Role | Can | Account | Credentials |\n|---|---|---|---|\n| admin | everything | a@demo | .env |\n| staff | orders | s@demo | vault |\n\n## 4. Next`;
+  const t = dossierTable(filled, /^##\s*3\.\s/i);
+  check(t && t.rows.length === 2, `dossierTable read ${t ? t.rows.length : "no"} rows from a filled table`);
+  check(t && t.rows[0][0] === "admin", "dossierTable lost the first cell");
+
+  // The installed template ships one BLANK row. Counting it as data would turn
+  // "nobody has filled this in" into an inventory.
+  const blank = `## 3. Access\n\n| Role | Can | Account | Credentials |\n|---|---|---|---|\n| | | | |\n\n## 4. Next`;
+  const tb = dossierTable(blank, /^##\s*3\.\s/i);
+  check(tb && tb.rows.length === 0, `a blank template row was counted as data (${tb ? tb.rows.length : "?"} rows)`);
+  check(dossierTable(filled, /^##\s*9\.\s/i) === null, "a heading that does not exist should read as null");
+
+  // -- the contract ---------------------------------------------------------
+  const yaml = `openapi: 3.0.0\npaths:\n  /orders:\n    get:\n      summary: list\n    post:\n      summary: create\n  /orders/{id}:\n    delete:\n      summary: remove\ncomponents:\n  schemas:\n    Order:\n      type: object\n`;
+  const ops = openapiPaths(yaml, "openapi.yaml");
+  check(ops.length === 3, `openapiPaths(yaml) found ${ops.length} operations, expected 3`);
+  check(ops.some((o) => o.method === "GET" && o.path === "/orders"), "GET /orders not found");
+  check(ops.some((o) => o.method === "DELETE" && o.path === "/orders/{id}"), "DELETE /orders/{id} not found");
+  check(!ops.some((o) => o.path.includes("Order")), "a components schema was mistaken for a path");
+
+  const json = JSON.stringify({ openapi: "3.0.0", paths: { "/pets": { get: { summary: "list" } } } });
+  check(openapiPaths(json, "openapi.json").length === 1, "openapiPaths did not read JSON");
+  check(openapiPaths("", "x").length === 0, "an empty contract should yield nothing, not throw");
+
+  // -- the data model -------------------------------------------------------
+  const prisma = `model Order {\n  id Int @id\n  total Int\n  note String?\n}\n\nmodel User {\n  id Int @id\n}\n`;
+  const models = prismaModels(prisma);
+  check(models.length === 2, `prismaModels found ${models.length} models, expected 2`);
+  check(models[0].name === "Order" && models[0].fields.includes("total"), "prisma fields not read");
+  check(sqlTables("CREATE TABLE orders (id int);\ncreate table if not exists users (id int);").length === 2,
+    "sqlTables missed a CREATE TABLE");
+
+  // -- the states, end to end ----------------------------------------------
+  const os2 = await import("node:os");
+  const tmp = fs.mkdtempSync(path.join(os2.tmpdir(), "aiqa-inv-"));
+  const write = (rel, text) => { const abs = path.join(tmp, rel); fs.mkdirSync(path.dirname(abs), { recursive: true }); fs.writeFileSync(abs, text); };
+  const cfg = (extra = {}) => ({ paths: { qa: "docs/qa" }, accounts: {}, api: {}, database: {}, oracle: {}, ...extra });
+
+  // nothing at all: every answer is "missing", and every one names a fix.
+  {
+    const inv = inventory(tmp, cfg(), get);
+    for (const k of ["roles", "screens", "api", "data", "oracle"]) {
+      check(inv[k].state === "missing", `${k}: expected "missing" in an empty project, got ${inv[k].state}`);
+      check(inv[k].items.length === 0, `${k}: invented ${inv[k].items.length} item(s) out of an empty project`);
+      check(!!inv[k].next, `${k}: says nothing is known but names no way to fix it`);
+    }
+  }
+
+  // a dossier that is still the blank template is NOT an inventory.
+  {
+    write("docs/qa/onboarding.md", blank + "\n\n## 5. Surface inventory\n\n| Screen | For | Role | Rules |\n|---|---|---|---|\n| | | | |\n");
+    const inv = inventory(tmp, cfg(), get);
+    check(inv.dossier.exists, "the dossier was not found");
+    check(inv.roles.state === "missing", `a blank §3 reported as ${inv.roles.state}`);
+    check(/blank template/.test(inv.roles.source), "the blank template was not named as the reason");
+  }
+
+  // a filled dossier is curated.
+  {
+    write("docs/qa/onboarding.md", filled + "\n\n## 5. Surface inventory\n\n| Screen | For | Role | Rules |\n|---|---|---|---|\n| Orders | list orders | staff | spec 3.1 |\n");
+    const inv = inventory(tmp, cfg(), get);
+    check(inv.roles.state === "curated" && inv.roles.items.length === 2, `filled §3 reported as ${inv.roles.state}`);
+    check(inv.screens.state === "curated" && inv.screens.items[0].name === "Orders", "filled §5 not read");
+  }
+
+  // route files are a FILE LISTING and must say so — never promoted to curated.
+  {
+    const tmp2 = fs.mkdtempSync(path.join(os2.tmpdir(), "aiqa-inv2-"));
+    fs.mkdirSync(path.join(tmp2, "app", "orders"), { recursive: true });
+    fs.writeFileSync(path.join(tmp2, "app", "orders", "page.tsx"), "export default function P(){}");
+    const inv = inventory(tmp2, cfg(), get);
+    check(inv.screens.state === "from-code", `route files reported as ${inv.screens.state}`);
+    check(/FILE LISTING/i.test(inv.screens.next || ""), "a file listing was not labelled as one");
+    check(inv.screens.items.length >= 1, "codeRoutes found nothing in an app/ directory");
+    fs.rmSync(tmp2, { recursive: true, force: true });
+  }
+
+  // a configured contract that is not on disk is missing, not empty.
+  {
+    const inv = inventory(tmp, cfg({ api: { contract: "nope.yaml" } }), get);
+    check(inv.api.state === "missing", `a contract that does not exist reported as ${inv.api.state}`);
+    write("openapi.yaml", yaml);
+    const inv2 = inventory(tmp, cfg({ api: { contract: "openapi.yaml" } }), get);
+    check(inv2.api.state === "curated" && inv2.api.items.length === 3, `contract read as ${inv2.api.state}`);
+  }
+
+  // a spec listed but absent is "partial", and says why that is worse than none.
+  {
+    const inv = inventory(tmp, cfg({ oracle: { specs: ["docs/spec/gone.md"] } }), get);
+    check(inv.oracle.state === "partial", `a missing spec file reported as ${inv.oracle.state}`);
+    check(/pointing at nothing/.test(inv.oracle.next || ""), "the dangling-citation warning is missing");
+  }
+
+  check(typeof codeRoutes === "function", "codeRoutes is not exported");
+  fs.rmSync(tmp, { recursive: true, force: true });
+}
+
 // ---- report -------------------------------------------------------------------
 if (fails.length) {
   console.error(`conformance: ${fails.length} FAILED of ${checks} checks\n`);
