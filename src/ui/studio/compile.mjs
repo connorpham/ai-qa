@@ -29,7 +29,7 @@ export const KINDS = ["acceptance", "boundary", "whole-screen", "write-readback"
  * UI renders from this so the two never disagree about what a node holds. */
 export const NODE_TYPES = {
   actor: {
-    label: "As (who)", group: "who", color: "#0F766E",
+    label: "As (who)", group: "who", color: "#737373",
     hint: "Which account, which role. A verdict with no actor cannot be reproduced.",
     fields: [
       { key: "role", label: "Role", placeholder: "customer (gold tier)", required: true },
@@ -37,7 +37,7 @@ export const NODE_TYPES = {
     ],
   },
   precondition: {
-    label: "Precondition", group: "who", color: "#0F766E",
+    label: "Precondition", group: "who", color: "#737373",
     hint: "What must already be true, resolved read-only right now — never trusted from the ticket.",
     fields: [
       { key: "text", label: "What must be true", placeholder: "customer 1 exists and is tier gold", required: true },
@@ -48,7 +48,7 @@ export const NODE_TYPES = {
     ],
   },
   open: {
-    label: "Open (click path)", group: "web", color: "#1D4ED8",
+    label: "Open (click path)", group: "web", color: "#155dfc",
     hint: "Where the user starts and what they click to arrive. A typed URL proves the URL, not the product.",
     fields: [
       { key: "path", label: "Click path, one label per line", kind: "textarea", placeholder: "Orders\nNew order", required: true },
@@ -56,14 +56,14 @@ export const NODE_TYPES = {
     ],
   },
   click: {
-    label: "Click", group: "web", color: "#1D4ED8",
+    label: "Click", group: "web", color: "#155dfc",
     fields: [
       { key: "selector", label: "What to click (selector or text=…)", placeholder: "button:has-text('Place order')", required: true },
       { key: "why", label: "Why (shown in the log)", placeholder: "place the order" },
     ],
   },
   type: {
-    label: "Type into", group: "web", color: "#1D4ED8",
+    label: "Type into", group: "web", color: "#155dfc",
     fields: [
       { key: "selector", label: "Field (selector)", placeholder: "#amount", required: true },
       { key: "value", label: "Value", placeholder: "500000", required: true },
@@ -71,7 +71,7 @@ export const NODE_TYPES = {
     ],
   },
   expect: {
-    label: "Expect (cite the spec)", group: "check", color: "#B45309",
+    label: "Expect (cite the spec)", group: "check", color: "#dd7400",
     hint: "The whole verification. Without a citation this reports a difference, never a defect.",
     fields: [
       { key: "what", label: "What is read", placeholder: "the Discount line", required: true },
@@ -81,11 +81,11 @@ export const NODE_TYPES = {
     ],
   },
   screenshot: {
-    label: "Screenshot", group: "check", color: "#B45309",
+    label: "Screenshot", group: "check", color: "#dd7400",
     fields: [{ key: "what", label: "What it shows (becomes the filename)", placeholder: "order_priced_at_threshold", required: true }],
   },
   api: {
-    label: "API call", group: "api", color: "#7C3AED",
+    label: "API call", group: "api", color: "#7f22fe",
     hint: "Request and response are recorded as files; the body is checked, not just the status.",
     fields: [
       { key: "method", label: "Method", kind: "select", options: ["GET", "POST", "PUT", "PATCH", "DELETE"], default: "GET" },
@@ -97,7 +97,7 @@ export const NODE_TYPES = {
     ],
   },
   db: {
-    label: "DB read-back", group: "check", color: "#B45309",
+    label: "DB read-back", group: "check", color: "#dd7400",
     hint: "Read-only. The interface saying 'saved' is a claim about the interface, not about the data.",
     fields: [
       { key: "name", label: "What this proves", placeholder: "the stored discount", required: true },
@@ -106,17 +106,17 @@ export const NODE_TYPES = {
     ],
   },
   reload: {
-    label: "Reload check (AFTER)", group: "web", color: "#1D4ED8",
+    label: "Reload check (AFTER)", group: "web", color: "#155dfc",
     hint: "A save that dies on refresh is not a save.",
     fields: [{ key: "what", label: "What must survive a reload", placeholder: "the Discount line still reads 50,000", required: true }],
   },
   back: {
-    label: "Back / Cancel (BACK)", group: "web", color: "#1D4ED8",
+    label: "Back / Cancel (BACK)", group: "web", color: "#155dfc",
     hint: "Where 'it works' usually stops working.",
     fields: [{ key: "what", label: "What Back or Cancel must do", placeholder: "Back returns to Orders with the filter intact", required: true }],
   },
   cleanup: {
-    label: "Clean up (reverse flow)", group: "api", color: "#7C3AED",
+    label: "Clean up (reverse flow)", group: "api", color: "#7f22fe",
     hint: "Test data leaves the way a user removes it. No reverse flow → the case is BLOCKED, nothing is written.",
     fields: [
       { key: "how", label: "How the product removes it", placeholder: "withdraw the order", required: true },

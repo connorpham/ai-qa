@@ -15,6 +15,7 @@
     <label>Environment <select id="envSel"></select></label>
     <label>Engine <select id="engineSel"></select></label>
     <span class="writes" id="writesBadge" hidden>writes: forbidden</span>
+    <button class="theme ghost" id="themeBtn" title="Light / dark / follow the system">◐</button>
   </div>
 </header>
 
@@ -39,17 +40,19 @@
 
     <div class="tab on" id="tab-canvas">
       <div class="palette" id="palette"></div>
-      <div class="canvas" id="canvas">
-        <div class="stage" id="stage">
-          <svg class="edges" id="edges"></svg>
+      <div class="canvas-wrap">
+        <div class="canvas" id="canvas">
+          <div class="stage" id="stage">
+            <svg class="edges" id="edges"></svg>
+          </div>
         </div>
-      <div class="zoom" id="zoom">
-        <button id="zoomOut" title="Zoom out">−</button>
-        <span id="zoomLabel">100%</span>
-        <button id="zoomIn" title="Zoom in">+</button>
-        <button id="fitView" title="Fit the whole flow">Fit</button>
-      </div>
-        <div class="canvas-hint" id="canvasHint">Drag a step from the palette, wire steps by dragging from a right-hand port to a left-hand port, click a step to edit it. A step with several children is one step with several checks.</div>
+        <div class="zoom" id="zoom">
+          <button id="zoomOut" title="Zoom out">−</button>
+          <span id="zoomLabel">100%</span>
+          <button id="zoomIn" title="Zoom in">+</button>
+          <button id="fitView" title="Fit the whole flow">Fit</button>
+        </div>
+        <div class="canvas-hint" id="canvasHint">Drag a step in from the left. Wire two steps by dragging from the right-hand dot of one to the other. Click a step to fill it in.</div>
       </div>
       <div class="inspector" id="inspector">
         <div class="flow-meta">

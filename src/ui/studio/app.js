@@ -14,6 +14,23 @@
   let ENGINES = BOOT.engines;
 
   const $ = (id) => document.getElementById(id);
+
+  // Theme: follow the machine by default, and remember an explicit choice.
+  // Orca is a desktop app that switches with the OS; a browser page sitting
+  // beside it that stays white at midnight looks like a different product.
+  const THEMES = ["system", "light", "dark"];
+  const themeIcon = { system: "◐", light: "☀", dark: "☾" };
+  function applyTheme(mode) {
+    const sysDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+    const dark = mode === "dark" || (mode === "system" && sysDark);
+    document.documentElement.setAttribute("data-theme", dark ? "dark" : "light");
+    const b = document.getElementById("themeBtn");
+    if (b) { b.textContent = themeIcon[mode]; b.title = `Theme: ${mode} — click to change`; }
+    try { localStorage.setItem("aiqa.theme", mode); } catch { /* private window */ }
+  }
+  let themeMode = (() => { try { return localStorage.getItem("aiqa.theme") || "system"; } catch { return "system"; } })();
+  applyTheme(themeMode);
+  window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { if (themeMode === "system") applyTheme("system"); });
   const el = (tag, attrs = {}, ...kids) => {
     const n = document.createElement(tag);
     for (const [k, v] of Object.entries(attrs)) {
@@ -147,11 +164,15 @@
     const xs = flow.nodes.map((n) => n.x), ys = flow.nodes.map((n) => n.y);
     return { x: Math.min(...xs), y: Math.min(...ys), r: Math.max(...xs) + 230, b: Math.max(...ys) + 120 };
   }
-  function fitView() {
+  /** `min` is the floor the zoom will not go below. Opening a flow uses a
+   *  legible floor and lets the canvas scroll; the Fit button asks to see the
+   *  whole graph and accepts whatever size that takes. */
+  function fitView({ min = 0.35 } = {}) {
     const b = bbox(); if (!b) { setZoom(1); return; }
-    const pad = 32;
-    setZoom(Math.min(1, (canvas.clientWidth - pad) / (b.r + pad), (canvas.clientHeight - pad) / (b.b + pad)));
-    canvas.scrollTo({ left: Math.max(0, b.x * zoom - 16), top: Math.max(0, b.y * zoom - 16) });
+    const pad = 40;
+    const ideal = Math.min(1, (canvas.clientWidth - pad) / (b.r + pad), (canvas.clientHeight - pad) / (b.b + pad));
+    setZoom(Math.max(min, ideal));
+    canvas.scrollTo({ left: Math.max(0, b.x * zoom - 12), top: Math.max(0, b.y * zoom - 12) });
   }
 
   function summarize(n) {
@@ -302,10 +323,10 @@
     const cols = new Map();
     for (const n of flow.nodes) { const d = depth.get(n.id); if (!cols.has(d)) cols.set(d, []); cols.get(d).push(n); }
     for (const [d, list] of cols) { list.sort((a, b) => a.y - b.y); list.forEach((n, i) => { n.x = 40 + d * 280; n.y = 40 + i * 130; }); }
-    renderNodes(); fitView(); scheduleSave();
+    renderNodes(); fitView({ min: 0.6 }); scheduleSave();
   }
   $("autoLayout").addEventListener("click", autoLayout);
-  $("fitView").addEventListener("click", fitView);
+  $("fitView").addEventListener("click", () => fitView({ min: 0.35 }));
   $("zoomIn").addEventListener("click", () => setZoom(zoom + 0.15));
   $("zoomOut").addEventListener("click", () => setZoom(zoom - 0.15));
 
@@ -369,7 +390,7 @@
     flow = f; selected = { node: null, edge: null };
     nextId = 1 + Math.max(0, ...flow.nodes.map((n) => Number(String(n.id).replace(/\D/g, "")) || 0));
     if (flow.ticket) ticketInput.value = flow.ticket;
-    renderNodes(); renderInspector(); scheduleValidate(); loadFlows(name); showTab("canvas"); fitView();
+    renderNodes(); renderInspector(); scheduleValidate(); loadFlows(name); showTab("canvas"); fitView({ min: 0.6 });
   }
   $("newFlow").addEventListener("click", () => { flow = blankFlow(); selected = { node: null, edge: null }; renderNodes(); renderInspector(); $("validation").replaceChildren(); loadFlows(null); $("flowName").focus(); });
 
@@ -561,6 +582,7 @@
   });
 
   // ---------------------------------------------------------------------------
+  $("themeBtn").addEventListener("click", () => { themeMode = THEMES[(THEMES.indexOf(themeMode) + 1) % THEMES.length]; applyTheme(themeMode); });
   fillTop(); renderPalette(); renderInspector(); renderNodes(); setZoom(1); loadFlows(null); loadEvd();
   $("chatMeta").textContent = ENGINES.find((e) => e.available) ? "ready" : "no engine available";
 })();
