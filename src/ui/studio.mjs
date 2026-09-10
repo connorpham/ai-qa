@@ -29,6 +29,7 @@ import * as projects from "./studio/projects.mjs";
 import * as worktrees from "./studio/worktrees.mjs";
 import * as terminal from "./studio/terminal.mjs";
 import * as agents from "./studio/agents.mjs";
+import { inventory } from "./studio/inventory.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ASSETS = path.join(HERE, "studio");
@@ -426,6 +427,16 @@ export async function studio(flags = {}) {
         json(res, r.status === 0 ? 200 : r.status === 2 ? 424 : 404, { status: r.status, ticket, raw: r.out.slice(0, 4000) });
         return;
       }
+      // What this project consists of: who you can sign in as, what a user can
+      // reach, the contract, the tables, and where "correct" is written. The
+      // Steps tab asks for every one of these, so it is read here rather than
+      // left for the person to go and find in another window.
+      if (req.method === "GET" && route === "/api/inventory") {
+        const at = cwd();
+        json(res, 200, { inventory: inventory(at, config(at), get), root: at });
+        return;
+      }
+
       if (req.method === "GET" && route === "/api/spec") {
         const specs = [].concat(state().project.oracleSpecs || []).map((rel) => {
           const abs = inside(root, ".", rel);

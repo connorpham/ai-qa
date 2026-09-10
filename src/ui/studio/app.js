@@ -229,7 +229,54 @@
   }
   $("envSel").addEventListener("change", async (e) => { const r = await sendJSON("/env", { name: e.target.value }); STATE = r.state; renderBars(); });
 
+  /** "What this project has" — the answers the Steps tab will ask you for.
+   *
+   *  Five questions, each with an honest state. A curated list (someone wrote
+   *  it down), a file listing read out of the repository (useful, and NOT the
+   *  same thing), or missing — which is a real answer, and comes with the
+   *  command that fixes it. Nothing here is inferred. */
+  const INV_CARDS = [
+    { key: "roles",   title: "Who you can be",            q: "Sign in as the role that owns the task — half of all interface defects only appear for one role.",
+      line: (x) => [x.role, x.can].filter(Boolean).join(" — ") },
+    { key: "screens", title: "What a user can reach",     q: "The places a person can be. A step needs the click path that gets there.",
+      line: (x) => [x.name, x.purpose].filter(Boolean).join(" — ") },
+    { key: "api",     title: "The API",                   q: "What can be called, and what was promised back.",
+      line: (x) => `${x.method} ${x.path}${x.summary ? ` — ${x.summary}` : ""}` },
+    { key: "data",    title: "The data",                  q: "A write is verified by reading the row back, and that needs a table.",
+      line: (x) => `${x.name}${x.fields?.length ? ` (${x.fields.slice(0, 6).join(", ")}${x.fields.length > 6 ? ", …" : ""})` : ""}` },
+    { key: "oracle",  title: "Where 'correct' is written", q: "Without this, a verdict is an opinion — and the report has to say so.",
+      line: (x) => `${x.path}${x.exists ? "" : "  ← not on disk"}` },
+  ];
+
+  const INV_STATE_WORD = { curated: "written down", config: "from the config", "from-code": "read from the code",
+    partial: "incomplete", empty: "declares none", missing: "nobody has said" };
+
+  async function renderInventory() {
+    const host = $("inventory");
+    if (!host) return;
+    let inv = null;
+    try { inv = (await getJSON("/inventory")).inventory; } catch { /* offline, or no lane in this checkout */ }
+    if (!inv) { host.replaceChildren(); $("invSub").textContent = ""; return; }
+
+    const known = INV_CARDS.filter((c) => inv[c.key]?.items?.length).length;
+    $("invSub").textContent = `${known} of ${INV_CARDS.length} answered`;
+
+    host.replaceChildren(...INV_CARDS.map((c) => {
+      const sec = inv[c.key] || { state: "missing", items: [], source: "", next: "" };
+      const shown = sec.items.slice(0, 12);
+      return el("div", { class: "inv" },
+        el("h5", {}, c.title),
+        el("p", { class: "q" }, c.q),
+        el("span", { class: `tag ${sec.state}` }, INV_STATE_WORD[sec.state] || sec.state),
+        shown.length ? el("div", { class: "items" }, ...shown.map((x) => el("span", { title: c.line(x) }, c.line(x)))) : null,
+        sec.items.length > shown.length ? el("div", { class: "more" }, `… and ${sec.items.length - shown.length} more`) : null,
+        sec.source ? el("div", { class: "src" }, sec.source) : null,
+        sec.next ? el("div", { class: "next" }, sec.next) : null);
+    }));
+  }
+
   function renderProjectScreen() {
+    renderInventory();
     const p = activeProject(); if (!p) return;
     const main = (STATE.worktrees?.list || []).find((w) => w.isMain);
     $("pjTitle").textContent = p.name;
