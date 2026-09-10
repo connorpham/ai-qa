@@ -653,17 +653,57 @@
   }
 
   function renderPalette() {
-    const groups = { who: "Who & where", web: "On the screen", api: "Calls", check: "Checks" };
+    // The reason a step exists is printed UNDER its name, not hidden in a
+    // tooltip. Someone meeting this screen for the first time should not have
+    // to hover over twelve things to work out which four they need.
     const pal = $("palette"); pal.replaceChildren();
-    for (const [g, title] of Object.entries(groups)) {
-      pal.append(el("h4", {}, title));
-      for (const [type, spec] of Object.entries(TYPES)) {
-        if (spec.group !== g) continue;
-        const item = el("div", { class: "pal-item", title: spec.hint || "", "data-type": type }, el("span", { class: "sw", style: `background:${spec.color}` }), spec.label);
+    for (const g of (SCHEMA.groups || [])) {
+      const types = Object.entries(TYPES).filter(([, spec]) => spec.group === g.id);
+      if (!types.length) continue;
+      pal.append(el("h4", {}, g.title));
+      for (const [type, spec] of types) {
+        const item = el("div", { class: "pal-item", "data-type": type },
+          el("span", { class: "sw", style: `background:${spec.color}` }),
+          el("span", { class: "txt" },
+            el("b", {}, spec.label),
+            spec.hint ? el("em", {}, spec.hint) : null));
         item.addEventListener("pointerdown", (e) => startPaletteDrag(e, type));
         pal.append(item);
       }
     }
+  }
+
+  /** An empty canvas offers a shape to start from.
+   *
+   *  A blank canvas plus twelve step types asks you to already know what a
+   *  test case looks like — the exact knowledge someone new does not have.
+   *  Each shape arrives wired and already carrying the parts the gate insists
+   *  on; the words stay yours, because a starter that invented an expected
+   *  value would be the one thing this tool must never do. */
+  function renderStarters() {
+    const host = $("canvasHint");
+    if (!host) return;
+    host.replaceChildren(
+      el("h3", {}, "Start from a shape"),
+      el("p", {}, "Each one is already wired and already has the parts a case needs. You fill in the words — nothing here guesses a value for you."),
+      el("div", { class: "starters" }, ...(SCHEMA.starters || []).map((st) =>
+        el("button", { class: "starter", type: "button", onclick: () => applyStarter(st.id) },
+          el("b", {}, st.label),
+          el("em", {}, st.why)))),
+      el("p", { class: "or" }, "Or drag a step in from the left. Wire two steps by dragging from the right-hand dot of one to the other, and click a step to fill it in."));
+  }
+
+  function applyStarter(id) {
+    const st = (SCHEMA.starters || []).find((x) => x.id === id);
+    if (!st) return;
+    // The server built the shape once; the page only gives it fresh ids.
+    const ids = new Map(st.nodes.map((n) => [n.id, newId()]));
+    // Only ever ADDS — someone who has already drawn something keeps it.
+    for (const n of st.nodes) flow.nodes.push({ ...n, id: ids.get(n.id), data: { ...n.data } });
+    for (const e of st.edges) flow.edges.push({ from: ids.get(e.from), to: ids.get(e.to) });
+    if (st.kind && !flow.kind) flow.kind = st.kind;
+    select(ids.get(st.nodes[0]?.id) || null, null);   // select() redraws
+    scheduleValidate(); scheduleSave();
   }
 
   function renderNodes() {
@@ -685,6 +725,7 @@
     }
     drawEdges();
     $("canvasHint").hidden = flow.nodes.length > 0;
+    if (!flow.nodes.length) renderStarters();
   }
 
   function nodeRect(id) {
