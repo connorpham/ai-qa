@@ -13,10 +13,15 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 
-export const REGISTRY_DIR = path.join(os.homedir(), ".ai-qa");
+// AIQA_HOME exists so a test can point the studio at a throwaway home instead
+// of writing its fixture repositories into the registry on the developer's
+// machine — which the first version of the e2e suite did, silently.
+export const REGISTRY_DIR = process.env.AIQA_HOME || path.join(os.homedir(), ".ai-qa");
 export const REGISTRY_FILE = path.join(REGISTRY_DIR, "studio.json");
+/** Where `clone from a URL` puts repositories unless told otherwise. */
+export const CLONES_DIR = path.join(REGISTRY_DIR, "projects");
 
 /** The agent CLIs the studio knows about, with the command that proves each one
  *  is installed. The list and the detect commands are Orca's (src/shared/
@@ -169,12 +174,16 @@ export function update(reg, id, patch) {
 
 /** The agent a project will actually use, and whether that is a real choice or
  *  a fallback. Said out loud so nobody discovers later that "the project's
- *  agent" was whatever happened to be installed. */
-export function resolveAgent(project, detected = detectAgents()) {
+ *  agent" was whatever happened to be installed.
+ *
+ *  `override` is a flow's own choice: a flow is created with an agent, and
+ *  that wins over the project's default for everything that flow runs. */
+export function resolveAgent(project, detected = detectAgents(), override = null) {
   const byId = new Map(detected.map((d) => [d.id, d]));
-  if (project?.agent) {
-    const d = byId.get(project.agent);
-    if (!d) return { id: project.agent, chosen: true, installed: false, reason: `${project.agent} is not an agent the studio knows` };
+  const want = override || project?.agent || null;
+  if (want) {
+    const d = byId.get(want);
+    if (!d) return { id: want, chosen: true, installed: false, reason: `${want} is not an agent the studio knows` };
     if (!d.installed) return { ...d, chosen: true, reason: d.id === "anthropic" ? "ANTHROPIC_API_KEY is not set in the studio's shell" : `\`${d.cmd}\` is not on PATH` };
     if (d.drive === "custom" && !project.customCommand) {
       return { ...d, chosen: true, reason: "the studio has no adapter for this agent — give the exact command in the project's settings" };
@@ -184,4 +193,83 @@ export function resolveAgent(project, detected = detectAgents()) {
   const fallback = detected.find((d) => d.installed && d.drive === "stream");
   if (!fallback) return { id: null, chosen: false, installed: false, reason: "no agent is installed that the studio can drive" };
   return { ...fallback, chosen: false, reason: "no agent chosen for this project — using the first one the studio can drive" };
+}
+
+/** Which chat engine runs a resolved agent: the two the studio has adapters
+ *  for by their own id, everything else through the custom-command engine. */
+export function engineFor(resolved) {
+  if (!resolved || !resolved.id) return null;
+  return resolved.drive === "stream" ? resolved.id : "custom";
+}
+
+// ---------------------------------------------------------------------------
+// choosing a project: a folder on this machine, or a URL to clone
+// ---------------------------------------------------------------------------
+
+/** One level of the file system, for the folder picker. Directories only, and
+ *  for each whether it is a git repository (a `.git` entry — cheap, no spawn)
+ *  and whether the lane is installed in it. Hidden folders are skipped except
+ *  when the user is already inside one. */
+export function browse(rawPath) {
+  const abs = path.resolve(String(rawPath || "~").replace(/^~(?=$|\/)/, os.homedir()));
+  const out = { path: abs, parent: path.dirname(abs) === abs ? null : path.dirname(abs), home: os.homedir(), entries: [], isRepo: false, hasLane: false, error: null };
+  let entries;
+  try { entries = fs.readdirSync(abs, { withFileTypes: true }); }
+  catch (e) { out.error = e.code === "ENOENT" ? "no such folder" : e.code === "EACCES" ? "no permission to read this folder" : e.message; return out; }
+  out.isRepo = fs.existsSync(path.join(abs, ".git"));
+  out.hasLane = fs.existsSync(path.join(abs, "aiqa.config.yaml"));
+  for (const e of entries) {
+    if (!e.isDirectory() && !e.isSymbolicLink()) continue;
+    if (e.name.startsWith(".")) continue;
+    const full = path.join(abs, e.name);
+    let isDir = e.isDirectory();
+    if (e.isSymbolicLink()) { try { isDir = fs.statSync(full).isDirectory(); } catch { isDir = false; } }
+    if (!isDir) continue;
+    out.entries.push({ name: e.name, path: full, isRepo: fs.existsSync(path.join(full, ".git")), hasLane: fs.existsSync(path.join(full, "aiqa.config.yaml")) });
+    if (out.entries.length >= 400) break;
+  }
+  out.entries.sort((a, b) => (b.isRepo - a.isRepo) || a.name.localeCompare(b.name));
+  return out;
+}
+
+/** The URL shapes git itself accepts as a remote. `file://` is here for local
+ *  mirrors and for the test suite, which must not reach the network. */
+export const CLONE_URL_RE = /^(https?:\/\/[^\s]+|ssh:\/\/[^\s]+|git:\/\/[^\s]+|file:\/\/\/[^\s]+|[A-Za-z0-9._-]+@[A-Za-z0-9._-]+:[^\s]+)$/;
+
+export function repoNameFromUrl(url) {
+  const tail = String(url).replace(/[\/:]+$/, "").split(/[\/:]/).pop() || "repo";
+  return tail.replace(/\.git$/i, "").replace(/[^A-Za-z0-9._-]/g, "-").slice(0, 80) || "repo";
+}
+
+/** `git clone --progress <url> <dest>` by argv, never through a shell. Progress
+ *  lines go to `onLine` as git writes them; the promise resolves with the
+ *  destination or an error message a person can act on. Refuses a destination
+ *  that already has anything in it: cloning over someone's folder is not ours
+ *  to decide. */
+export function clone(url, rawDest, { onLine = () => {}, signal = null, timeout = 600_000 } = {}) {
+  return new Promise((resolve) => {
+    const u = String(url || "").trim();
+    if (!CLONE_URL_RE.test(u)) { resolve({ ok: false, error: "that is not a git URL the studio recognises — https://…, ssh://…, git@host:path or file:///…" }); return; }
+    const dest = path.resolve(String(rawDest || path.join(CLONES_DIR, repoNameFromUrl(u))).replace(/^~(?=$|\/)/, os.homedir()));
+    try {
+      if (fs.existsSync(dest) && fs.readdirSync(dest).length) { resolve({ ok: false, error: `${dest} already exists and is not empty — pick another folder, or add it as a project if it is the same repository` }); return; }
+    } catch (e) { resolve({ ok: false, error: e.message }); return; }
+    fs.mkdirSync(path.dirname(dest), { recursive: true });
+    const child = spawn("git", ["clone", "--progress", "--", u, dest], { env: { ...process.env, GIT_TERMINAL_PROMPT: "0" }, stdio: ["ignore", "pipe", "pipe"] });
+    let tail = "";
+    const feed = (chunk) => {
+      for (const line of String(chunk).split(/\r|\n/)) { if (line.trim()) { tail = line.trim(); onLine(tail); } }
+    };
+    child.stdout.on("data", feed);
+    child.stderr.on("data", feed);
+    const timer = setTimeout(() => { try { child.kill("SIGTERM"); } catch { /* gone */ } }, timeout);
+    if (signal) signal.addEventListener("abort", () => { try { child.kill("SIGTERM"); } catch { /* gone */ } }, { once: true });
+    child.on("error", (e) => { clearTimeout(timer); resolve({ ok: false, error: `could not start git: ${e.message}` }); });
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      if (code === 0) { resolve({ ok: true, dest }); return; }
+      try { fs.rmSync(dest, { recursive: true, force: true }); } catch { /* partial clone left behind; git says so */ }
+      resolve({ ok: false, error: tail ? `git clone failed: ${tail}` : `git clone exited with ${code}` });
+    });
+  });
 }

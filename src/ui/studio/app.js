@@ -1,9 +1,16 @@
 /* ai-qa studio — the page. Vanilla JS, no build, no dependency: it has to run
    on a client's laptop with nothing installed, and it has to keep running when
-   that laptop is offline. Three parts share one small state object:
-     canvas   — nodes + edges drawn on a scrollable stage, edited in an inspector
-     run      — compile a flow into evd/ and execute it, streaming the log
-     chat     — talk to the engine; the server relays engine events over SSE      */
+   that laptop is offline.
+
+   The shape is Orca's. One sidebar lists PROJECTS and, under each, its FLOWS
+   as cards. The main area is one of three screens:
+
+     home      no project yet → add a folder from this machine, or clone a URL
+     project   the project's flows; "+ New flow" asks which AI agent does it
+     flow      the work: Agent (chat) · Steps (canvas) · Run · Evidence · Spec
+
+   A flow carries its own agent and its own worktree, so opening one is what
+   decides which AI answers and which checkout everything runs in.            */
 (() => {
   "use strict";
   const BOOT = window.STUDIO;
@@ -15,22 +22,23 @@
 
   const $ = (id) => document.getElementById(id);
 
-  // Theme: follow the machine by default, and remember an explicit choice.
-  // Orca is a desktop app that switches with the OS; a browser page sitting
-  // beside it that stays white at midnight looks like a different product.
+  // ---- theme: follow the machine by default, remember an explicit choice -------
   const THEMES = ["system", "light", "dark"];
   const themeIcon = { system: "◐", light: "☀", dark: "☾" };
   function applyTheme(mode) {
     const sysDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
     const dark = mode === "dark" || (mode === "system" && sysDark);
     document.documentElement.setAttribute("data-theme", dark ? "dark" : "light");
-    const b = document.getElementById("themeBtn");
+    const b = $("themeBtn");
     if (b) { b.textContent = themeIcon[mode]; b.title = `Theme: ${mode} — click to change`; }
     try { localStorage.setItem("aiqa.theme", mode); } catch { /* private window */ }
   }
   let themeMode = (() => { try { return localStorage.getItem("aiqa.theme") || "system"; } catch { return "system"; } })();
   applyTheme(themeMode);
   window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { if (themeMode === "system") applyTheme("system"); });
+  $("themeBtn").addEventListener("click", () => { themeMode = THEMES[(THEMES.indexOf(themeMode) + 1) % THEMES.length]; applyTheme(themeMode); });
+
+  // ---- small helpers --------------------------------------------------------------
   const el = (tag, attrs = {}, ...kids) => {
     const n = document.createElement(tag);
     for (const [k, v] of Object.entries(attrs)) {
@@ -66,8 +74,17 @@
       }
     }
   }
+  const short = (p) => String(p || "").replace(STATE.home || /^\/Users\/[^/]+/, "~");
+  const ago = (iso) => {
+    if (!iso) return "";
+    const s = (Date.now() - new Date(iso).getTime()) / 1000;
+    if (!isFinite(s)) return "";
+    if (s < 60) return "just now"; if (s < 3600) return `${Math.round(s / 60)}m ago`; if (s < 86400) return `${Math.round(s / 3600)}h ago`; return `${Math.round(s / 86400)}d ago`;
+  };
+  const agentById = (id) => (STATE.agents || []).find((a) => a.id === id) || null;
+  const agentLabel = (id) => agentById(id)?.label || id || "no agent";
 
-  // ---- a small markdown renderer: enough for REPORT.md, manifests and chat -----
+  // ---- a small markdown renderer: enough for REPORT.md, manifests and chat ------
   function md(src) {
     const lines = String(src || "").replace(/\r/g, "").split("\n");
     const out = []; let i = 0; let para = [];
@@ -108,211 +125,417 @@
   }
 
   // ---------------------------------------------------------------------------
-  // top bar
+  // app state
   // ---------------------------------------------------------------------------
+  let FLOWS = [];                 // summaries of the active project's flows
+  let flow = blankFlow();         // the open flow document
+  let AGENT = null;               // the resolved agent for the open flow
+  let openName = null;            // the open flow's name (null on home/project screens)
+  let runningFlow = null;         // a flow whose run is streaming right now
+  let specLoadedFor = null;
   const ticketInput = $("ticket");
-  function fillTop() {
-    $("projName").textContent = `${STATE.project.name} · ${STATE.project.key}-nnn`;
-    $("ticketList").replaceChildren(...STATE.tickets.map((t) => el("option", { value: t })));
+
+  function blankFlow() { return { version: 1, name: "", title: "", ticket: "", kind: "acceptance", case: 1, agent: null, worktree: null, nodes: [], edges: [] }; }
+  const activeProject = () => STATE.projects?.active || null;
+
+  // ---- screens -----------------------------------------------------------------
+  function showScreen(name) {
+    for (const s of ["home", "project", "flow"]) $(`scr-${s}`).hidden = s !== name;
+    if (name !== "flow") openName = null;
+    renderTree();
+  }
+
+  async function refreshState() {
+    const r = await getJSON("/state");
+    STATE = r.state; ENGINES = r.engines;
+    renderTree(); renderBars();
+    return STATE;
+  }
+  async function loadFlows() {
+    const r = await getJSON("/flows").catch(() => ({ flows: [] }));
+    FLOWS = r.flows || [];
+    renderTree(); renderProjectScreen();
+    return FLOWS;
+  }
+
+  // ---------------------------------------------------------------------------
+  // sidebar: projects, and under each its flows as cards
+  // ---------------------------------------------------------------------------
+  function flowCard(f, { big = false } = {}) {
+    const a = agentById(f.agent || activeProject()?.agent);
+    const agentId = f.agent || activeProject()?.agent || STATE.projects?.active?.agentResolved?.id;
+    const mainBranch = (STATE.worktrees?.list || []).find((w) => w.isMain)?.branch || "";
+    const live = runningFlow === f.name;
+    const card = el("div", { class: `card${f.name === openName ? " on" : ""}`, title: f.title || f.name, onclick: () => openFlow(f.name) },
+      el("div", { class: "l1" },
+        el("span", { class: `dot ${live ? "live" : (f.result || "")}` }),
+        el("span", { class: "name" }, f.name),
+        big ? el("button", { class: "ghost del", title: "Delete this flow (evidence already in evd/ stays)", onclick: async (e) => {
+          e.stopPropagation();
+          if (!confirm(`Delete flow "${f.name}"?\n\nCompiled evidence in evd/ stays.`)) return;
+          await sendJSON(`/flows/${f.name}`, {}, "DELETE"); await loadFlows();
+        } }, "✕") : null),
+      el("div", { class: "l2" },
+        f.ticket ? el("span", { class: "chip ticket" }, f.ticket) : el("span", { class: "chip" }, "no ticket"),
+        el("span", { class: "branch" }, f.worktree ? `worktree ${f.worktree}${f.worktreeExists ? "" : " (missing)"}` : (mainBranch || "the project checkout"))),
+      el("div", { class: "l3" },
+        el("span", { class: `agent ${agentId || ""}${a && !a.installed ? " missing" : ""}` }, a ? a.label : (agentId || "agent: project default")),
+        el("span", { class: "when" }, live ? "running…" : f.result ? `${f.result}${f.ranAt ? ` · ${ago(f.ranAt)}` : ""}` : f.steps ? `${f.steps} steps · not run` : "empty")));
+    return card;
+  }
+
+  function renderTree() {
+    const tree = $("projectTree"); tree.replaceChildren();
+    const P = STATE.projects || { list: [], activeId: null };
+    for (const p of P.list) {
+      const on = p.id === P.activeId;
+      const group = el("div", { class: `pj-group${on ? " on open" : ""}` });
+      const row = el("div", { class: "pj-row", title: p.path, onclick: () => selectProject(p.id) },
+        el("span", { class: "caret" }, on ? "▾" : "▸"),
+        el("span", { class: "name" }, p.name),
+        el("span", { class: "badge", title: "this project's default AI" }, p.agent ? agentLabel(p.agent) : "AI: auto"),
+        el("button", { class: "ghost gear", title: "Project settings", onclick: (e) => { e.stopPropagation(); selectProject(p.id).then(openSettings); } }, "⚙"));
+      group.append(row);
+      if (on) {
+        const flows = el("div", { class: "flows" });
+        for (const f of FLOWS) flows.append(flowCard(f));
+        flows.append(el("button", { class: "ghost add-flow", onclick: openNewFlow }, "+ New flow"));
+        group.append(flows);
+      }
+      tree.append(group);
+    }
+    if (!P.list.length) tree.append(el("div", { class: "none" }, "No projects yet. Press + Add, or use the two buttons on the right."));
+    const installed = (STATE.agents || []).filter((a) => a.installed);
+    $("agentsLine").textContent = installed.length ? `Agents on this machine: ${installed.map((a) => a.label).join(" · ")}` : "No agent CLI found on PATH — install Claude Code, or set ANTHROPIC_API_KEY.";
+  }
+
+  async function selectProject(id) {
+    if (id !== STATE.projects?.activeId) await sendJSON("/projects/active", { id });
+    await refreshState(); await loadFlows(); specLoadedFor = null; $("specDoc").dataset.loaded = "";
+    showScreen("project");
+  }
+
+  // ---------------------------------------------------------------------------
+  // bars: things both the project and the flow screen show
+  // ---------------------------------------------------------------------------
+  function renderBars() {
+    $("ticketList").replaceChildren(...(STATE.tickets || []).map((t) => el("option", { value: t })));
     const envSel = $("envSel");
     envSel.replaceChildren(...(STATE.environments.names.length ? STATE.environments.names : [""]).map((n) => el("option", { value: n, selected: n === STATE.environments.active }, n || "(app.url)")));
     $("writesBadge").hidden = STATE.environments.writes !== "forbidden";
-    const engSel = $("engineSel");
-    engSel.replaceChildren(...ENGINES.map((e) => el("option", { value: e.id, disabled: !e.available, title: e.reason }, `${e.available ? "" : "· "}${e.label}`)));
-    const firstOk = ENGINES.find((e) => e.available);
-    if (firstOk && !ENGINES.find((e) => e.id === engSel.value && e.available)) engSel.value = firstOk.id;
+    $("laneChip").hidden = STATE.hasLane !== false;
+    renderProjectScreen(); renderFlowBar();
   }
-  $("envSel").addEventListener("change", async (e) => { const r = await sendJSON("/env", { name: e.target.value }); STATE = r.state; fillTop(); });
-  ticketInput.addEventListener("change", () => { flow.ticket = ticketInput.value.trim(); scheduleValidate(); scheduleSave(); loadSpecTab(); });
+  $("envSel").addEventListener("change", async (e) => { const r = await sendJSON("/env", { name: e.target.value }); STATE = r.state; renderBars(); });
+
+  function renderProjectScreen() {
+    const p = activeProject(); if (!p) return;
+    const main = (STATE.worktrees?.list || []).find((w) => w.isMain);
+    $("pjTitle").textContent = p.name;
+    $("pjSub").textContent = `${short(p.path)}${main?.branch ? ` · ${main.branch}` : ""}`;
+    const r = p.agentResolved || {};
+    $("pjAgentChip").textContent = r.id ? `default AI: ${agentLabel(r.id)}${r.chosen ? "" : " (auto)"}` : "no AI available";
+    $("pjAgentChip").className = `chip${r.reason && (!r.installed || r.drive === "custom") ? " warnchip" : ""}`;
+    $("laneNotice").hidden = STATE.hasLane !== false || !!STATE.worktrees?.activePath;
+    $("flowCount").textContent = FLOWS.length ? `(${FLOWS.length})` : "";
+    const cards = $("flowCards"); cards.replaceChildren();
+    for (const f of FLOWS) cards.append(flowCard(f, { big: true }));
+    $("flowsEmpty").hidden = FLOWS.length > 0;
+    $("homeLead").textContent = STATE.projects?.list?.length ? "Select a project from the sidebar to begin." : "Add a project to get started.";
+  }
+
+  function renderFlowBar() {
+    const p = activeProject(); if (!p || !openName) return;
+    $("crumbProject").textContent = p.name;
+    $("flowCrumb").textContent = flow.name || "(unnamed)";
+    $("flowTicketChip").textContent = flow.ticket || ""; $("flowTicketChip").hidden = !flow.ticket;
+    const a = AGENT || {};
+    $("flowAgentChip").textContent = a.id ? `${agentLabel(a.id)}${a.chosen ? "" : " (project default)"}` : "no agent";
+    $("flowAgentChip").className = `chip${a.reason && (!a.installed || a.drive === "custom") ? " warnchip" : ""}`;
+    $("flowAgentChip").title = a.reason || `this flow uses ${agentLabel(a.id)}`;
+    const W = STATE.worktrees || {};
+    $("flowWtChip").textContent = W.activeName ? `worktree ${W.activeName}` : `${(W.list || []).find((w) => w.isMain)?.branch || "checkout"} · ${short(STATE.cwd)}`;
+    const sum = FLOWS.find((f) => f.name === openName);
+    $("flowResult").textContent = sum?.result ? `RESULT: ${sum.result}` : "";
+    $("flowResult").className = `result ${sum?.result || ""}`;
+  }
+  $("crumbProject").addEventListener("click", (e) => { e.preventDefault(); showScreen("project"); loadFlows(); });
 
   // ---------------------------------------------------------------------------
-  // projects · the agent choice · worktrees
+  // dialogs
   // ---------------------------------------------------------------------------
-  let specLoadedFor = null;
-  const dialogs = ["dlgProject", "dlgSettings", "dlgWorktree"];
-  function openDialog(id) {
-    for (const d of dialogs) $(d).hidden = d !== id;
-    $("scrim").hidden = false;
-  }
+  const dialogs = ["dlgProject", "dlgFlow", "dlgSettings"];
+  function openDialog(id) { for (const d of dialogs) $(d).hidden = d !== id; $("scrim").hidden = false; }
   function closeDialogs() { for (const d of dialogs) $(d).hidden = true; $("scrim").hidden = true; }
   $("scrim").addEventListener("click", closeDialogs);
   document.querySelectorAll("[data-close]").forEach((b) => b.addEventListener("click", closeDialogs));
   document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeDialogs(); });
 
-  async function refreshState() {
-    const r = await getJSON("/state");
-    STATE = r.state; ENGINES = r.engines;
-    fillTop(); renderProjects(); renderWorktrees();
-    return STATE;
+  // -- add a project: a folder here, or a URL to clone -----------------------------
+  let pjMode = "folder";
+  function setPjMode(mode) {
+    pjMode = mode;
+    $("pjSource").querySelectorAll("button").forEach((b) => b.classList.toggle("on", b.dataset.src === mode));
+    $("pjFolder").hidden = mode !== "folder"; $("pjUrl").hidden = mode !== "url";
+    $("pjAdd").textContent = mode === "folder" ? "Add project" : "Clone and add";
   }
-
-  function renderProjects() {
-    const ul = $("projectList"); ul.replaceChildren();
-    const P = STATE.projects || { list: [], activeId: null };
-    for (const p of P.list) {
-      const on = p.id === P.activeId;
-      ul.append(el("li", { class: on ? "on" : "", title: p.path, onclick: async () => {
-        if (p.id === P.activeId) { openSettings(); return; }
-        await sendJSON("/projects/active", { id: p.id });
-        await refreshState(); await loadFlows(null); await loadEvd(); specLoadedFor = null;
-      } },
-        el("div", { class: "col" }, el("span", {}, p.name), el("span", { class: "sub" }, p.path.replace(/^\/Users\/[^/]+/, "~"))),
-        p.agent ? el("span", { class: "badge" }, p.agent) : el("span", { class: "badge", title: "no AI chosen for this project" }, "AI?")));
-    }
-    if (!P.list.length) ul.append(el("li", { class: "muted" }, "no projects — press + add"));
+  $("pjSource").addEventListener("click", (e) => { const m = e.target.closest("button")?.dataset.src; if (m) setPjMode(m); });
+  function openAddProject(mode = "folder", { url = "" } = {}) {
+    setPjMode(mode);
+    $("pjProbe").replaceChildren(); $("cloneProbe").replaceChildren(); $("cloneLog").hidden = true; $("cloneLog").textContent = "";
+    $("pjCloneUrl").value = url; suggestCloneInto();
+    openDialog("dlgProject");
+    if (mode === "folder") loadFs($("pjPath").value || STATE.home || "~"); else $("pjCloneUrl").focus();
   }
+  $("addProject").addEventListener("click", () => openAddProject("folder"));
+  $("homeBrowse").addEventListener("click", () => openAddProject("folder"));
+  $("homeCloneForm").addEventListener("submit", (e) => { e.preventDefault(); const u = $("homeCloneUrl").value.trim(); openAddProject("url", { url: u }); if (u) startClone(); });
 
-  function renderWorktrees() {
-    const W = STATE.worktrees || { list: [], activePath: null };
-    const ul = $("wtList"); ul.replaceChildren();
-    const sel = $("wtSel"); sel.replaceChildren();
-    const main = W.list.find((w) => w.isMain);
-    sel.append(el("option", { value: "", selected: !W.activePath }, main ? `${main.branch || main.head || "the checkout"} (project)` : "the project"));
-    for (const w of W.list) {
-      if (w.isMain) continue;
-      sel.append(el("option", { value: w.path, selected: W.activePath === w.path }, `${w.name}${w.branch ? ` · ${w.branch}` : ""}`));
+  async function loadFs(p) {
+    const r = await getJSON(`/fs?path=${encodeURIComponent(p)}`);
+    $("pjPath").value = r.path;
+    const ul = $("fsList"); ul.replaceChildren();
+    if (r.error) ul.append(el("li", { class: "muted" }, r.error));
+    for (const e of r.entries) {
+      ul.append(el("li", { class: e.isRepo ? "repo" : "", title: e.path, onclick: () => loadFs(e.path) },
+        el("span", { class: "ico" }, e.isRepo ? "◆" : "▸"), el("span", {}, e.name),
+        e.isRepo ? el("span", { class: "badge" }, e.hasLane ? "repo · lane installed" : "git repository") : null));
     }
-    for (const w of W.list) {
-      const on = w.isMain ? !W.activePath : W.activePath === w.path;
-      ul.append(el("li", { class: on ? "on" : "", title: w.path, onclick: async () => {
-        await sendJSON("/worktrees/active", { path: w.isMain ? null : w.path });
-        await refreshState(); await loadFlows(null); await loadEvd(); specLoadedFor = null;
-      } },
-        el("div", { class: "col" },
-          el("span", {}, w.isMain ? "the project checkout" : w.name),
-          el("span", { class: "sub" }, `${w.branch || w.head || "detached"}${w.hasLane ? "" : " · no lane"}`)),
-        w.isMain ? null : el("span", { class: "del muted", title: "Remove this worktree", onclick: async (e) => {
-          e.stopPropagation();
-          try { await sendJSON(`/worktrees/${encodeURIComponent(w.name)}`, {}, "DELETE"); }
-          catch (err) {
-            if (!confirm(`${err.message}\n\nRemove it anyway?`)) return;
-            await fetch(API(`/worktrees/${encodeURIComponent(w.name)}?force=1`), { method: "DELETE" });
-          }
-          await refreshState(); await loadEvd();
-        } }, "✕")));
-    }
-    $("laneChip").hidden = STATE.hasLane !== false;
-  }
-  $("wtSel").addEventListener("change", async (e) => {
-    await sendJSON("/worktrees/active", { path: e.target.value || null });
-    await refreshState(); await loadFlows(null); await loadEvd(); specLoadedFor = null;
-  });
-
-  // -- add a project ------------------------------------------------------------
-  $("addProject").addEventListener("click", () => { $("pjPath").value = ""; $("pjProbe").replaceChildren(); openDialog("dlgProject"); $("pjPath").focus(); });
-  const probePath = debounce(async () => {
-    const v = $("pjPath").value.trim();
+    if (!r.entries.length && !r.error) ul.append(el("li", { class: "muted" }, "no folders inside"));
+    $("fsUp").disabled = !r.parent;
     const box = $("pjProbe");
-    if (!v) { box.className = "probe"; box.replaceChildren(); return; }
-    const i = await sendJSON("/inspect", { path: v });
-    if (!i.exists) { box.className = "probe bad"; box.textContent = "no such folder"; return; }
-    if (!i.isRepo) { box.className = "probe bad"; box.textContent = "not a git repository — run `git init` there first"; return; }
-    box.className = i.hasLane ? "probe ok" : "probe warn";
-    box.textContent = i.hasLane
-      ? `${i.name} · branch ${i.branch || "?"} · the lane is installed`
-      : `${i.name} · branch ${i.branch || "?"} · no aiqa.config.yaml — add it anyway, then run \`ai-qa init\` in that folder. The studio will not install it for you.`;
-  }, 250);
-  $("pjPath").addEventListener("input", probePath);
+    if (r.isRepo) { box.className = r.hasLane ? "probe ok" : "probe warn"; box.textContent = r.hasLane ? "This folder is a git repository with the lane installed — press Add project." : "This folder is a git repository, but it has no aiqa.config.yaml. Add it anyway, then run `ai-qa init` in that folder; the studio will not install it for you."; }
+    else { box.className = "probe"; box.textContent = "Open the repository you want to test — repositories are marked ◆ — then press Add project."; }
+  }
+  $("fsUp").addEventListener("click", async () => { const r = await getJSON(`/fs?path=${encodeURIComponent($("pjPath").value)}`); if (r.parent) loadFs(r.parent); });
+  $("fsHome").addEventListener("click", () => loadFs(STATE.home || "~"));
+  $("pjPath").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); loadFs($("pjPath").value.trim() || "~"); } });
+  $("pjPath").addEventListener("change", () => loadFs($("pjPath").value.trim() || "~"));
+
+  function suggestCloneInto() {
+    const u = $("pjCloneUrl").value.trim();
+    const name = (u.replace(/[\/:]+$/, "").split(/[\/:]/).pop() || "repo").replace(/\.git$/i, "").replace(/[^A-Za-z0-9._-]/g, "-") || "repo";
+    if (!$("pjCloneInto").dataset.edited) $("pjCloneInto").value = u ? `${short(STATE.clonesDir || "~/.ai-qa/projects")}/${name}` : "";
+    $("pjCloneInto").placeholder = `${short(STATE.clonesDir || "~/.ai-qa/projects")}/${name}`;
+  }
+  $("pjCloneUrl").addEventListener("input", suggestCloneInto);
+  $("pjCloneInto").addEventListener("input", () => { $("pjCloneInto").dataset.edited = $("pjCloneInto").value ? "1" : ""; });
+
+  async function startClone() {
+    const url = $("pjCloneUrl").value.trim(); const into = $("pjCloneInto").value.trim();
+    const log = $("cloneLog"); const box = $("cloneProbe");
+    if (!url) { box.className = "probe bad"; box.textContent = "Paste the repository's URL first."; return; }
+    log.hidden = false; log.textContent = ""; box.className = "probe"; box.textContent = "cloning…"; $("pjAdd").disabled = true;
+    try {
+      await stream("/clone", { url, into: into || null }, (ev) => {
+        if (ev.type === "progress") { log.textContent += ev.text + "\n"; log.scrollTop = log.scrollHeight; }
+        else if (ev.type === "done") {
+          if (!ev.ok) { box.className = "probe bad"; box.textContent = ev.error; return; }
+          box.className = "probe ok"; box.textContent = `Cloned into ${short(ev.dest)}${ev.info?.hasLane ? " — the lane is installed." : " — no aiqa.config.yaml yet: run `ai-qa init` there."}`;
+          STATE = ev.state;
+          setTimeout(async () => { closeDialogs(); await refreshState(); await loadFlows(); showScreen("project"); }, 900);
+        }
+      });
+    } catch (e) { box.className = "probe bad"; box.textContent = e.message; }
+    $("pjAdd").disabled = false;
+  }
   $("pjAdd").addEventListener("click", async () => {
+    if (pjMode === "url") return startClone();
+    const box = $("pjProbe");
     try {
       await sendJSON("/projects", { path: $("pjPath").value.trim() });
-      closeDialogs();
-      await refreshState(); await loadFlows(null); await loadEvd(); specLoadedFor = null;
-    } catch (e) { const b = $("pjProbe"); b.className = "probe bad"; b.textContent = e.message; }
+      closeDialogs(); await refreshState(); await loadFlows(); specLoadedFor = null; showScreen("project");
+    } catch (e) { box.className = "probe bad"; box.textContent = e.message; }
   });
 
-  // -- which AI this project uses ----------------------------------------------
-  function openSettings() {
-    const p = STATE.projects?.active;
-    if (!p) return;
-    $("stPath").textContent = `${p.name} — ${p.path}`;
-    const sel = $("stAgent"); sel.replaceChildren();
-    sel.append(el("option", { value: "" }, "— not chosen: use the first one the studio can drive —"));
-    for (const a of STATE.agents || []) {
-      const bits = [a.installed ? "installed" : "not installed", a.drive === "stream" ? "drivable" : "needs a command"];
-      sel.append(el("option", { value: a.id, selected: p.agent === a.id }, `${a.label} · ${bits.join(" · ")}`));
+  // -- new flow: ticket, name, the AI agent, where it runs ---------------------------
+  function agentNote(a, project) {
+    if (!a) return { cls: "probe", text: "" };
+    if (!a.installed) return { cls: "probe bad", text: a.cmd ? `\`${a.cmd}\` is not on PATH — install it, or pick another agent.` : "ANTHROPIC_API_KEY is not set in the studio's shell." };
+    if (a.drive === "custom") return project?.customCommand
+      ? { cls: "probe ok", text: `${a.label} runs through the command in this project's settings: ${project.customCommand}` }
+      : { cls: "probe warn", text: `${a.label} is installed, but the studio has no adapter for its flags. Give the exact command in Project settings first, and it will be run as-is — nothing is guessed.` };
+    // nothing to warn about: the radio row already carries the agent's note
+    return { cls: "probe ok", text: "" };
+  }
+  function renderAgentRadios(container, name, chosenId, { project = null, note = null } = {}) {
+    container.replaceChildren();
+    const agents = STATE.agents || [];
+    const usable = (a) => a.installed && (a.drive === "stream" || project?.customCommand);
+    const first = agents.filter(usable); const rest = agents.filter((a) => !usable(a));
+    const pick = chosenId && agents.some((a) => a.id === chosenId) ? chosenId : (first[0]?.id || agents[0]?.id);
+    const row = (a) => el("label", { class: `radio${usable(a) ? "" : " dim"}` },
+      el("input", { type: "radio", name, value: a.id, checked: a.id === pick, onchange: () => { if (note) { const n = agentNote(a, project); note.className = n.cls; note.textContent = n.text; } } }),
+      el("span", {}, el("b", {}, a.label, el("span", { class: "badge" }, !a.installed ? "not installed" : a.drive === "stream" ? "ready" : project?.customCommand ? "via your command" : "needs a command")),
+        el("small", {}, a.note || (a.cmd ? `looks for \`${a.cmd}\` on PATH` : ""))));
+    for (const a of first) container.append(row(a));
+    if (rest.length) {
+      const more = el("div", { class: "radios", hidden: true }); for (const a of rest) more.append(row(a));
+      const tog = el("button", { class: "ghost mini", style: "align-self:flex-start", onclick: (e) => { e.preventDefault(); more.hidden = !more.hidden; tog.textContent = more.hidden ? `Show ${rest.length} more (not installed, or no adapter)` : "Show fewer"; } }, `Show ${rest.length} more (not installed, or no adapter)`);
+      container.append(tog, more);
     }
-    $("stCustom").value = p.customCommand || "";
-    $("stModel").value = p.model || "";
-    describeAgent();
-    openDialog("dlgSettings");
+    if (note) { const n = agentNote(agents.find((a) => a.id === pick), project); note.className = n.cls; note.textContent = n.text; }
+    return pick;
   }
-  function describeAgent() {
-    const id = $("stAgent").value;
-    const a = (STATE.agents || []).find((x) => x.id === id);
-    const box = $("stAgentNote");
-    $("stCustomWrap").hidden = !(a && a.drive === "custom");
-    if (!id) { box.className = "probe"; box.textContent = "The studio will use the first installed agent it knows how to drive. It says which, in the terminal and here."; return; }
-    if (!a) { box.className = "probe bad"; box.textContent = "unknown agent"; return; }
-    if (!a.installed) { box.className = "probe bad"; box.textContent = a.cmd ? `\`${a.cmd}\` is not on PATH — install it, or pick another.` : "ANTHROPIC_API_KEY is not set in the studio's shell."; return; }
-    if (a.drive === "custom") { box.className = "probe warn"; box.textContent = `${a.label} is installed, but the studio has no adapter for its flags. Give the exact command below and it will be run as-is — nothing is guessed.`; return; }
-    box.className = "probe ok"; box.textContent = a.note || `${a.label} is installed and the studio can drive it.`;
-  }
-  $("stAgent").addEventListener("change", describeAgent);
-  $("settingsBtn").addEventListener("click", openSettings);
-  $("stSave").addEventListener("click", async () => {
-    const p = STATE.projects?.active; if (!p) return;
-    await sendJSON(`/projects/${p.id}`, { agent: $("stAgent").value, customCommand: $("stCustom").value.trim(), model: $("stModel").value.trim() });
-    closeDialogs(); await refreshState();
-  });
-  $("stForget").addEventListener("click", async () => {
-    const p = STATE.projects?.active; if (!p) return;
-    if (!confirm(`Forget "${p.name}"?\n\nIt is removed from the studio only — nothing on disk is touched.`)) return;
-    await sendJSON(`/projects/${p.id}`, {}, "DELETE");
-    closeDialogs(); await refreshState(); await loadFlows(null); await loadEvd();
-  });
+  const flowNameFor = (ticket, kind) => `${String(ticket || "flow").toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "") || "flow"}_${kind}`;
+  let knownBranches = [];
 
-  // -- a worktree to verify in --------------------------------------------------
-  $("newWorktree").addEventListener("click", async () => {
-    const box = $("wtProbe"); box.className = "probe"; box.replaceChildren();
-    $("wtName").value = ""; $("wtNewBranch").checked = false;
-    const sel = $("wtBase"); sel.replaceChildren(el("option", { value: "" }, "loading branches…"));
-    openDialog("dlgWorktree"); $("wtName").focus();
+  async function openNewFlow() {
+    const p = activeProject(); if (!p) { openAddProject("folder"); return; }
+    $("nfProject").textContent = `in ${p.name}`;
+    $("nfTicket").value = ""; $("nfName").value = ""; $("nfName").dataset.edited = "";
+    const k = $("nfKind"); if (!k.options.length) k.replaceChildren(...SCHEMA.kinds.map((x) => el("option", { value: x }, x)));
+    k.value = "acceptance";
+    renderAgentRadios($("nfAgents"), "nfAgent", p.agentResolved?.id || p.agent, { project: p, note: $("nfAgentNote") });
+    document.querySelector('input[name="nfWhere"][value="project"]').checked = true; $("nfWtFields").hidden = true;
+    const main = (STATE.worktrees?.list || []).find((w) => w.isMain);
+    $("nfMainBranch").textContent = `${main?.branch || "the current branch"} · ${short(p.path)}. Fine when the change under test is already merged there.`;
+    $("nfWtName").value = ""; $("nfWtNewBranch").checked = false;
+    const box = $("nfProbe"); box.className = "probe"; box.replaceChildren();
+    if (STATE.hasLane === false) { box.className = "probe warn"; box.textContent = "This project has no aiqa.config.yaml. The flow can be created, but nothing will run until `ai-qa init` has been run in that folder."; }
+    openDialog("dlgFlow"); $("nfTicket").focus();
+    const sel = $("nfWtBase"); sel.replaceChildren(el("option", { value: "" }, "loading branches…"));
+    knownBranches = [];
     try {
-      const w = await getJSON("/worktrees");
-      sel.replaceChildren();
+      const w = await getJSON("/worktrees"); sel.replaceChildren();
+      knownBranches = w.branches.local || [];
       if (w.branches.current) sel.append(el("option", { value: "HEAD", selected: true }, `HEAD · ${w.branches.current} (this checkout)`));
       for (const b of w.branches.local) sel.append(el("option", { value: b }, b));
       for (const b of w.branches.remoteOnly) sel.append(el("option", { value: `origin/${b}` }, `origin/${b} — not checked out here yet`));
     } catch (e) { sel.replaceChildren(el("option", { value: "" }, e.message)); }
-  });
-  $("wtCreate").addEventListener("click", async () => {
-    const box = $("wtProbe");
+  }
+  $("newFlowBtn").addEventListener("click", openNewFlow);
+  $("newFlowBtn2").addEventListener("click", openNewFlow);
+  $("nfTicket").addEventListener("input", () => { if (!$("nfName").dataset.edited) $("nfName").value = flowNameFor($("nfTicket").value.trim(), $("nfKind").value); if (!$("nfWtName").dataset.edited) $("nfWtName").value = `verify-${$("nfTicket").value.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-")}`.replace(/-+$/, ""); });
+  $("nfKind").addEventListener("change", () => { if (!$("nfName").dataset.edited) $("nfName").value = flowNameFor($("nfTicket").value.trim(), $("nfKind").value); });
+  $("nfName").addEventListener("input", () => { $("nfName").dataset.edited = $("nfName").value ? "1" : ""; });
+  $("nfWtName").addEventListener("input", () => { $("nfWtName").dataset.edited = $("nfWtName").value ? "1" : ""; });
+  document.querySelectorAll('input[name="nfWhere"]').forEach((r) => r.addEventListener("change", () => { $("nfWtFields").hidden = document.querySelector('input[name="nfWhere"]:checked').value !== "worktree"; }));
+
+  $("nfCreate").addEventListener("click", async () => {
+    const box = $("nfProbe");
+    const name = $("nfName").value.trim() || flowNameFor($("nfTicket").value.trim(), $("nfKind").value);
+    if (!/^[a-z0-9][a-z0-9_-]{0,59}$/.test(name)) { box.className = "probe bad"; box.textContent = "Name: lower-case letters, digits, _ and -, up to 60 characters."; return; }
+    if (FLOWS.some((f) => f.name === name)) { box.className = "probe bad"; box.textContent = `A flow named ${name} already exists in this project.`; return; }
+    const agent = document.querySelector('input[name="nfAgent"]:checked')?.value || null;
+    const where = document.querySelector('input[name="nfWhere"]:checked').value;
+    let worktree = null;
+    box.className = "probe"; box.textContent = "creating…"; $("nfCreate").disabled = true;
     try {
-      const r = await sendJSON("/worktrees", { name: $("wtName").value.trim(), base: $("wtBase").value, newBranch: $("wtNewBranch").checked });
-      closeDialogs();
-      await refreshState(); await loadFlows(null); await loadEvd(); specLoadedFor = null;
-      if (STATE.hasLane === false) alert("The worktree is ready, but it has no aiqa.config.yaml — that commit predates the install.\n\nRun `ai-qa init` inside it, or pick a base that has the lane.");
+      if (where === "worktree") {
+        const wtName = $("nfWtName").value.trim();
+        if (!wtName) throw new Error("Give the worktree a name.");
+        // "new branch" with a name that already exists is git's most common
+        // refusal here; the dialog knows the branches, so check the branch out
+        // instead and say so, rather than bouncing the person off a fatal.
+        const exists = knownBranches.includes(wtName);
+        const r = await sendJSON("/worktrees", { name: wtName, base: exists ? wtName : $("nfWtBase").value, newBranch: $("nfWtNewBranch").checked && !exists, activate: false });
+        worktree = r.worktree.name || wtName;
+        if (exists && $("nfWtNewBranch").checked) box.textContent = `branch ${wtName} already existed — the worktree checks it out`;
+      }
+      const f = { ...blankFlow(), name, ticket: $("nfTicket").value.trim(), kind: $("nfKind").value, agent, worktree, created: new Date().toISOString() };
+      await sendJSON(`/flows/${name}`, f, "PUT");
+      closeDialogs(); await loadFlows(); await openFlow(name);
     } catch (e) { box.className = "probe bad"; box.textContent = e.body?.error || e.message; }
+    $("nfCreate").disabled = false;
+  });
+
+  // -- project settings: default AI, model, worktrees -------------------------------
+  function openSettings() {
+    const p = activeProject(); if (!p) return;
+    $("stPath").textContent = `${p.name} — ${p.path}`;
+    const sel = $("stAgent"); sel.replaceChildren();
+    sel.append(el("option", { value: "" }, "— not chosen: use the first one the studio can drive —"));
+    for (const a of STATE.agents || []) {
+      const bits = [a.installed ? "installed" : "not installed", a.drive === "stream" ? "ready" : "needs a command"];
+      sel.append(el("option", { value: a.id, selected: p.agent === a.id }, `${a.label} · ${bits.join(" · ")}`));
+    }
+    $("stCustom").value = p.customCommand || ""; $("stModel").value = p.model || "";
+    describeAgent();
+    const ul = $("stWorktrees"); ul.replaceChildren();
+    for (const w of STATE.worktrees?.list || []) {
+      ul.append(el("li", { title: w.path },
+        el("div", { class: "col" }, el("span", {}, w.isMain ? "the project checkout" : w.name), el("span", { class: "sub" }, `${w.branch || w.head || "detached"}${w.hasLane ? "" : " · no lane"}`)),
+        w.isMain ? el("span", { class: "badge" }, "main") : el("button", { class: "ghost mini", title: "Remove this worktree", onclick: async () => {
+          try { await sendJSON(`/worktrees/${encodeURIComponent(w.name)}`, {}, "DELETE"); }
+          catch (err) { if (!confirm(`${err.message}\n\nRemove it anyway?`)) return; await fetch(API(`/worktrees/${encodeURIComponent(w.name)}?force=1`), { method: "DELETE" }); }
+          await refreshState(); await loadFlows(); openSettings();
+        } }, "✕")));
+    }
+    openDialog("dlgSettings");
+  }
+  function describeAgent() {
+    const id = $("stAgent").value; const a = agentById(id); const box = $("stAgentNote");
+    $("stCustomWrap").hidden = !(a && a.drive === "custom");
+    if (!id) { box.className = "probe"; box.textContent = "The studio will use the first installed agent it knows how to drive, and say which."; return; }
+    if (!a) { box.className = "probe bad"; box.textContent = "unknown agent"; return; }
+    const n = agentNote(a, { customCommand: $("stCustom").value.trim() }); box.className = n.cls; box.textContent = n.text;
+  }
+  $("stAgent").addEventListener("change", describeAgent);
+  $("stCustom").addEventListener("input", describeAgent);
+  $("settingsBtn").addEventListener("click", openSettings);
+  $("stSave").addEventListener("click", async () => {
+    const p = activeProject(); if (!p) return;
+    await sendJSON(`/projects/${p.id}`, { agent: $("stAgent").value, customCommand: $("stCustom").value.trim(), model: $("stModel").value.trim() });
+    closeDialogs(); await refreshState(); await loadFlows();
+  });
+  $("stForget").addEventListener("click", async () => {
+    const p = activeProject(); if (!p) return;
+    if (!confirm(`Forget "${p.name}"?\n\nIt is removed from the studio only — nothing on disk is touched.`)) return;
+    await sendJSON(`/projects/${p.id}`, {}, "DELETE");
+    closeDialogs(); await refreshState();
+    if (STATE.projects.list.length) { await loadFlows(); showScreen("project"); } else { FLOWS = []; showScreen("home"); }
   });
 
   // ---------------------------------------------------------------------------
-  // tabs
+  // the flow screen
   // ---------------------------------------------------------------------------
   document.querySelectorAll(".tabs button").forEach((b) => b.addEventListener("click", () => showTab(b.dataset.tab)));
   function showTab(name) {
     document.querySelectorAll(".tabs button").forEach((b) => b.classList.toggle("on", b.dataset.tab === name));
     document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("on", t.id === `tab-${name}`));
-    if (name === "canvas") drawEdges();
+    if (name === "canvas") { drawEdges(); requestAnimationFrame(() => fitView({ min: 0.6 })); }
     if (name === "spec") loadSpecTab();
+    if (name === "evidence") loadEvd();
+  }
+
+  async function openFlow(name) {
+    const r = await sendJSON(`/flows/${name}/open`, {});
+    flow = r.flow; STATE = r.state; AGENT = r.agent; openName = name;
+    selected = { node: null, edge: null };
+    nextId = 1 + Math.max(0, ...(flow.nodes || []).map((n) => Number(String(n.id).replace(/\D/g, "")) || 0));
+    ticketInput.value = flow.ticket || "";
+    showScreen("flow"); renderBars(); renderNodes(); renderInspector(); scheduleValidate();
+    messages.replaceChildren(); sessionsNote();
+    if (r.worktreeMissing) addMsg("studio", "assistant").textContent = `This flow was made for worktree "${flow.worktree}", which no longer exists. It is running in the project checkout instead. Create the worktree again from Project settings if that matters here.`;
+    showTab("agent");
+    $("chatInput").focus();
+  }
+  function sessionsNote() {
+    const p = activeProject(); const a = AGENT || {}; const W = STATE.worktrees || {};
+    const where = W.activeName ? `worktree ${W.activeName}` : `${short(STATE.cwd)} (${(W.list || []).find((w) => w.isMain)?.branch || "checkout"})`;
+    const intro = el("div", { class: "intro" });
+    if (a.id && !(a.reason && (!a.installed || a.drive === "custom"))) {
+      intro.append(`This flow talks to `, el("b", {}, agentLabel(a.id)), ` in ${where}.`,
+        flow.ticket ? ` Start with /qa ${flow.ticket}, or ask what the specification says.` : " Give it a ticket in Steps → Ticket, then start with /qa.");
+    } else {
+      intro.className = "intro"; intro.append(el("span", { class: "warnchip" }, "no agent"), ` ${a.reason || "no agent is available for this flow"}. `, el("a", { href: "#", onclick: (e) => { e.preventDefault(); openSettings(); } }, "Project settings"));
+    }
+    if (STATE.hasLane === false) intro.append(el("div", { class: "notice warn", style: "margin-top:8px" }, el("b", {}, `No aiqa.config.yaml in ${short(STATE.cwd)}.`), el("span", {}, ` Run \`ai-qa init\` there before asking the agent to verify anything; the workflows it needs are installed by init.`)));
+    messages.append(intro);
+    $("chatMeta").textContent = a.id ? `${agentLabel(a.id)} · new session` : "no agent";
+    if (p) $("crumbProject").textContent = p.name;
   }
 
   // ---------------------------------------------------------------------------
   // canvas model
   // ---------------------------------------------------------------------------
-  let flow = blankFlow();
   let selected = { node: null, edge: null };
   let nextId = 1;
-  function blankFlow() { return { version: 1, name: "", title: "", ticket: ticketInput?.value?.trim() || "", kind: "acceptance", case: 1, nodes: [], edges: [] }; }
   const newId = () => { let id; do { id = `n${nextId++}`; } while (flow.nodes.some((n) => n.id === id)); return id; };
-
   const stage = $("stage"); const canvas = $("canvas"); const svg = $("edges");
   const TYPES = SCHEMA.nodeTypes;
 
-  // A five-step flow is wider than the viewport between the palette and the
-  // inspector, and a canvas you can only see two steps of hides the rest —
-  // the opposite of why it exists. So the stage scales, and opening a flow
-  // fits it. Every pointer coordinate is divided by this, or dragging drifts.
   let zoom = 1;
   function setZoom(z) {
     zoom = Math.min(1, Math.max(0.35, z));
@@ -325,12 +548,10 @@
     const xs = flow.nodes.map((n) => n.x), ys = flow.nodes.map((n) => n.y);
     return { x: Math.min(...xs), y: Math.min(...ys), r: Math.max(...xs) + 230, b: Math.max(...ys) + 120 };
   }
-  /** `min` is the floor the zoom will not go below. Opening a flow uses a
-   *  legible floor and lets the canvas scroll; the Fit button asks to see the
-   *  whole graph and accepts whatever size that takes. */
   function fitView({ min = 0.35 } = {}) {
     const b = bbox(); if (!b) { setZoom(1); return; }
     const pad = 40;
+    if (!canvas.clientWidth) return;
     const ideal = Math.min(1, (canvas.clientWidth - pad) / (b.r + pad), (canvas.clientHeight - pad) / (b.b + pad));
     setZoom(Math.max(min, ideal));
     canvas.scrollTo({ left: Math.max(0, b.x * zoom - 12), top: Math.max(0, b.y * zoom - 12) });
@@ -428,13 +649,13 @@
   }
   document.addEventListener("keydown", (e) => {
     if (["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement?.tagName)) return;
+    if (!openName || !$("tab-canvas").classList.contains("on")) return;
     if (e.key === "Delete" || e.key === "Backspace") {
       if (selected.node) removeNode(selected.node);
       else if (selected.edge) { flow.edges = flow.edges.filter((x) => !(x.from === selected.edge.from && x.to === selected.edge.to)); selected.edge = null; drawEdges(); scheduleValidate(); scheduleSave(); }
     }
   });
 
-  // -- pointer interactions ------------------------------------------------------
   const stagePoint = (e) => { const r = stage.getBoundingClientRect(); return { x: (e.clientX - r.left) / zoom, y: (e.clientY - r.top) / zoom }; };
   function startNodeDrag(e, n) {
     if (e.button !== 0) return;
@@ -448,7 +669,7 @@
   function startPaletteDrag(e, type) {
     if (e.button !== 0) return;
     e.preventDefault();
-    const ghost = el("div", { class: "pal-item", style: `position:fixed;left:${e.clientX + 6}px;top:${e.clientY + 6}px;pointer-events:none;opacity:.85;z-index:50;width:180px` }, el("span", { class: "sw", style: `background:${TYPES[type].color}` }), TYPES[type].label);
+    const ghost = el("div", { class: "pal-item", style: `position:fixed;left:${e.clientX + 6}px;top:${e.clientY + 6}px;pointer-events:none;opacity:.85;z-index:50;width:180px;background:var(--popover);border:1px solid var(--border)` }, el("span", { class: "sw", style: `background:${TYPES[type].color}` }), TYPES[type].label);
     document.body.append(ghost); let moved = false;
     const move = (ev) => { moved = true; ghost.style.left = `${ev.clientX + 6}px`; ghost.style.top = `${ev.clientY + 6}px`; };
     const up = (ev) => {
@@ -474,7 +695,6 @@
     document.addEventListener("pointermove", move); document.addEventListener("pointerup", up);
   }
 
-  // -- layout -------------------------------------------------------------------
   function autoLayout() {
     const ids = flow.nodes.map((n) => n.id); const depth = new Map(ids.map((i) => [i, 0]));
     const kids = new Map(ids.map((i) => [i, []])); const indeg = new Map(ids.map((i) => [i, 0]));
@@ -491,7 +711,6 @@
   $("zoomIn").addEventListener("click", () => setZoom(zoom + 0.15));
   $("zoomOut").addEventListener("click", () => setZoom(zoom - 0.15));
 
-  // -- inspector ------------------------------------------------------------------
   function renderInspector() {
     const form = $("nodeForm"); form.replaceChildren();
     $("flowName").value = flow.name || ""; $("flowTitle").value = flow.title || ""; $("flowCase").value = flow.case || 1;
@@ -522,9 +741,10 @@
     $(id).addEventListener("input", (e) => { flow[key] = key === "case" ? Number(e.target.value) || 1 : e.target.value.trim(); scheduleValidate(); if (key !== "name") scheduleSave(); });
     if (key === "name") $(id).addEventListener("change", () => scheduleSave());
   }
+  ticketInput.addEventListener("change", () => { flow.ticket = ticketInput.value.trim(); renderFlowBar(); scheduleValidate(); scheduleSave(); specLoadedFor = null; });
 
-  // -- validation + save -----------------------------------------------------------
   const scheduleValidate = debounce(async () => {
+    if (!openName) return;
     const v = await sendJSON("/validate", flow).catch((e) => ({ errors: [e.message], warnings: [] }));
     const box = $("validation"); box.replaceChildren();
     if (!v.errors.length && !v.warnings.length && flow.nodes.length) box.append(el("div", { class: "ok" }, "Compiles. Every check that has a citation can become a defect; the rest report differences."));
@@ -532,28 +752,14 @@
     for (const w of v.warnings) box.append(el("div", { class: "warn" }, w));
   }, 250);
   const scheduleSave = debounce(async () => {
-    if (!/^[a-z0-9][a-z0-9_-]{0,59}$/.test(flow.name || "")) return;
-    try { await sendJSON(`/flows/${flow.name}`, flow, "PUT"); await loadFlows(flow.name); } catch { /* shown on next validate */ }
+    if (!openName || !/^[a-z0-9][a-z0-9_-]{0,59}$/.test(flow.name || "")) return;
+    try {
+      await sendJSON(`/flows/${flow.name}`, flow, "PUT");
+      if (flow.name !== openName) { await sendJSON(`/flows/${openName}`, {}, "DELETE"); openName = flow.name; }
+      await loadFlows(); renderFlowBar();
+    } catch { /* shown on next validate */ }
   }, 600);
   $("saveFlow").addEventListener("click", () => { flow.name = $("flowName").value.trim(); scheduleSave(); scheduleValidate(); });
-
-  async function loadFlows(activeName) {
-    const { flows } = await getJSON("/flows");
-    const ul = $("flowList"); ul.replaceChildren();
-    for (const name of flows) {
-      ul.append(el("li", { class: name === activeName ? "on" : "", onclick: () => openFlow(name) }, el("span", {}, name),
-        el("span", { class: "del muted", title: "Delete flow", onclick: async (e) => { e.stopPropagation(); if (confirm(`Delete flow "${name}"? Compiled evidence in evd/ stays.`)) { await sendJSON(`/flows/${name}`, {}, "DELETE"); loadFlows(flow.name); } } }, "✕")));
-    }
-    if (!flows.length) ul.append(el("li", { class: "muted" }, "no flows yet — press + new"));
-  }
-  async function openFlow(name) {
-    const { flow: f } = await getJSON(`/flows/${name}`);
-    flow = f; selected = { node: null, edge: null };
-    nextId = 1 + Math.max(0, ...flow.nodes.map((n) => Number(String(n.id).replace(/\D/g, "")) || 0));
-    if (flow.ticket) ticketInput.value = flow.ticket;
-    renderNodes(); renderInspector(); scheduleValidate(); loadFlows(name); showTab("canvas"); fitView({ min: 0.6 });
-  }
-  $("newFlow").addEventListener("click", () => { flow = blankFlow(); selected = { node: null, edge: null }; renderNodes(); renderInspector(); $("validation").replaceChildren(); loadFlows(null); $("flowName").focus(); });
 
   // ---------------------------------------------------------------------------
   // compile & run
@@ -584,7 +790,7 @@
       for (const w of r.warnings || []) logLine(`! ${w}\n`, "amber");
       logLine(`\n${r.gate.text}\n`, r.gate.ok ? "ok" : "");
       setRunStatus(`compiled into ${r.caseDir} — RESULT: BLOCKED until it runs`, "blocked");
-      loadEvd();
+      loadFlows(); loadEvd();
     } catch (e) {
       setRunStatus("does not compile", "fail");
       for (const m of (e.body?.errors || [e.message])) logLine(`x ${m}\n`, "bad");
@@ -595,7 +801,7 @@
     showTab("run"); $("runLog").replaceChildren(); $("runFiles").replaceChildren();
     const statuses = {}; let steps = [];
     runAbort = new AbortController(); $("stopBtn").disabled = false; $("runBtn").disabled = true;
-    setRunStatus("running…");
+    runningFlow = openName; renderTree(); setRunStatus("running…");
     try {
       await stream("/run", { flow, caseNo: flow.case }, (ev) => {
         if (ev.type === "compiled") { steps = ev.steps; renderSteps(steps); logLine(`compiled → ${ev.caseDir}\n`, "head"); for (const w of ev.warnings || []) logLine(`! ${w}\n`, "amber"); }
@@ -606,7 +812,8 @@
         else if (ev.type === "done") { setRunStatus(`RESULT: ${ev.result}${ev.caseDir ? ` · ${ev.caseDir}` : ""}`, ev.result === "PASS" ? "pass" : ev.result === "FAIL" ? "fail" : "blocked"); }
       }, runAbort.signal);
     } catch (e) { if (e.name !== "AbortError") { logLine(`x ${e.message}\n`, "bad"); setRunStatus("run failed to start", "fail"); } else setRunStatus("stopped", "blocked"); }
-    $("stopBtn").disabled = true; $("runBtn").disabled = false; runAbort = null; loadEvd();
+    $("stopBtn").disabled = true; $("runBtn").disabled = false; runAbort = null; runningFlow = null;
+    await loadFlows(); renderFlowBar(); loadEvd();
   });
   $("stopBtn").addEventListener("click", () => runAbort?.abort());
 
@@ -618,12 +825,12 @@
     const ul = $("evdTree"); ul.replaceChildren();
     const walk = (items, depth) => {
       for (const it of items) {
-        if (it.dir) { ul.append(el("li", { class: `dir${depth ? " indent" : ""}`, style: `padding-left:${8 + depth * 12}px` }, it.name)); walk(it.children, depth + 1); }
+        if (it.dir) { ul.append(el("li", { class: "dir", style: `padding-left:${8 + depth * 12}px` }, it.name)); walk(it.children, depth + 1); }
         else ul.append(el("li", { style: `padding-left:${8 + depth * 12}px`, onclick: () => openEvidence(it.path) }, el("span", {}, it.name), el("span", { class: "size" }, it.size > 1024 ? `${Math.round(it.size / 1024)}k` : `${it.size}`)));
       }
     };
     walk(tree, 0);
-    if (!tree.length) ul.append(el("li", { class: "muted" }, "no evidence yet"));
+    if (!tree.length) ul.append(el("li", { class: "muted" }, "no evidence yet — compile or run a flow, or ask the agent to /qa"));
   }
   async function openEvidence(rel) {
     showTab("evidence");
@@ -637,15 +844,15 @@
   }
   $("refreshEvd").addEventListener("click", loadEvd);
   $("gateBtn").addEventListener("click", async () => {
-    const ticket = ticketInput.value.trim(); if (!ticket) return alert("Type a ticket key first.");
-    showTab("evidence"); $("evdStatus").textContent = "running evd_check…";
+    const ticket = (flow.ticket || ticketInput.value).trim(); if (!ticket) return alert("Give the flow a ticket first (Steps → Ticket).");
+    $("evdStatus").textContent = "running evd_check…";
     const g = await sendJSON("/gate", { ticket }).catch((e) => ({ ok: false, text: e.message }));
     $("evdStatus").textContent = g.ok ? "EVIDENCE: GREEN" : "EVIDENCE: RED"; $("evdStatus").className = `run-status ${g.ok ? "pass" : "fail"}`;
     $("evdView").replaceChildren(el("h3", {}, `evd_check — evd/${ticket}`), el("pre", { class: "log" }, g.text));
   });
   $("exportBtn").addEventListener("click", async () => {
-    const ticket = ticketInput.value.trim(); if (!ticket) return alert("Type a ticket key first.");
-    showTab("evidence"); $("evdStatus").textContent = "exporting…";
+    const ticket = (flow.ticket || ticketInput.value).trim(); if (!ticket) return alert("Give the flow a ticket first (Steps → Ticket).");
+    $("evdStatus").textContent = "exporting…";
     try {
       const r = await sendJSON("/export", { ticket });
       $("evdStatus").textContent = r.file ? "spreadsheet written" : "export finished"; $("evdStatus").className = "run-status";
@@ -658,7 +865,7 @@
   // ticket & spec tab
   // ---------------------------------------------------------------------------
   async function loadSpecTab() {
-    const key = ticketInput.value.trim();
+    const key = (flow.ticket || ticketInput.value).trim();
     $("ticketKeyLabel").textContent = key;
     if (key && key !== specLoadedFor) {
       $("ticketDoc").textContent = "fetching from the tracker…";
@@ -679,22 +886,23 @@
   }
 
   // ---------------------------------------------------------------------------
-  // chat
+  // chat — with the flow's agent, in the flow's worktree
   // ---------------------------------------------------------------------------
   const sessions = {};
   let chatAbort = null;
   const messages = $("messages");
   function addMsg(who, cls) { const m = el("div", { class: `msg ${cls}` }, el("div", { class: "who" }, who), el("div", { class: "bubble" })); messages.append(m); messages.scrollTop = messages.scrollHeight; return m.querySelector(".bubble"); }
   async function sendChat(text, opts = {}) {
-    const engine = $("engineSel").value;
-    if (!ENGINES.find((e) => e.id === engine && e.available)) { addMsg("studio", "assistant").textContent = "No engine is available on this machine — install Claude Code, or set ANTHROPIC_API_KEY, then restart the studio."; return; }
+    const a = AGENT || {};
+    if (!a.id || (a.reason && (!a.installed || a.drive === "custom"))) { addMsg("studio", "assistant").textContent = a.reason ? `${agentLabel(a.id)}: ${a.reason}` : "No agent is available for this flow — pick one in Project settings, or create the flow again with a different agent."; return; }
     if (!opts.silentUser) addMsg("you", "user").textContent = text;
-    const bubble = addMsg(opts.label || ENGINES.find((e) => e.id === engine).label.split(" (")[0], "assistant");
+    const bubble = addMsg(opts.label || agentLabel(a.id), "assistant");
     let acc = ""; const live = el("div", { style: "white-space:pre-wrap" }); bubble.append(live);
     chatAbort = new AbortController(); $("abortBtn").hidden = false; $("sendBtn").disabled = true;
+    const key = `${openName}:${a.id}`;
     let drafted = null;
     try {
-      await stream(opts.route || "/chat", { engine, message: text, sessionId: sessions[engine] || null, ...(opts.body || {}) }, (ev) => {
+      await stream(opts.route || "/chat", { agent: flow.agent || null, message: text, sessionId: sessions[key] || null, ...(opts.body || {}) }, (ev) => {
         if (ev.type === "text") { acc += ev.text; live.textContent = acc; messages.scrollTop = messages.scrollHeight; }
         else if (ev.type === "tool") bubble.append(el("div", { class: "tool" }, `▸ ${ev.name}  ${ev.input || ""}`));
         else if (ev.type === "tool_result") bubble.append(el("div", { class: `tool res${ev.error ? " err" : ""}` }, ev.text));
@@ -702,47 +910,53 @@
         else if (ev.type === "error") bubble.append(el("div", { class: "tool err" }, ev.message));
         else if (ev.type === "flow") drafted = ev;
         else if (ev.type === "done") {
-          if (ev.sessionId && !opts.route) sessions[engine] = ev.sessionId;
+          if (ev.sessionId && !opts.route) sessions[key] = ev.sessionId;
           const cost = ev.cost != null ? ` · $${Number(ev.cost).toFixed(3)}` : ev.usage ? ` · ${ev.usage.input}+${ev.usage.output} tokens` : "";
-          $("chatMeta").textContent = `${engine}${sessions[engine] ? ` · session ${String(sessions[engine]).slice(0, 8)}` : ""}${cost}`;
+          $("chatMeta").textContent = `${agentLabel(a.id)}${sessions[key] ? ` · session ${String(sessions[key]).slice(0, 8)}` : ""}${cost}`;
         }
       }, chatAbort.signal);
       if (acc) { live.remove(); bubble.insertAdjacentHTML("afterbegin", md(acc)); }
     } catch (e) { bubble.append(el("div", { class: "tool err" }, e.name === "AbortError" ? "stopped" : e.message)); }
     $("abortBtn").hidden = true; $("sendBtn").disabled = false; chatAbort = null;
-    loadEvd();
+    loadFlows(); loadEvd();
     return drafted;
   }
   $("composer").addEventListener("submit", (e) => { e.preventDefault(); const t = $("chatInput").value.trim(); if (!t) return; $("chatInput").value = ""; sendChat(t); });
   $("chatInput").addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); $("composer").requestSubmit(); } });
   $("abortBtn").addEventListener("click", () => chatAbort?.abort());
-  $("newChat").addEventListener("click", () => { delete sessions[$("engineSel").value]; messages.replaceChildren(); $("chatMeta").textContent = "new session"; });
+  $("newChat").addEventListener("click", () => { delete sessions[`${openName}:${AGENT?.id}`]; messages.replaceChildren(); sessionsNote(); });
   $("quick").addEventListener("click", (e) => {
     const q = e.target.closest("button")?.dataset.q; if (!q) return;
-    const t = ticketInput.value.trim();
+    const t = (flow.ticket || ticketInput.value).trim();
     const text = q.replace("{ticket}", t || "<ticket>");
-    if (q.includes("{ticket}") && !t) { $("chatInput").value = text; ticketInput.focus(); return; }
+    if (q.includes("{ticket}") && !t) { $("chatInput").value = text; showTab("canvas"); ticketInput.focus(); return; }
     if (q.endsWith(" ")) { $("chatInput").value = text; $("chatInput").focus(); return; }
     sendChat(text);
   });
 
   $("draftFlow").addEventListener("click", async () => {
-    const ticket = ticketInput.value.trim(); if (!ticket) { ticketInput.focus(); return alert("Type a ticket key first — the draft is built from the ticket and the spec."); }
-    const name = $("flowName").value.trim() || `${ticket.toLowerCase().replace(/[^a-z0-9]+/g, "_")}_${flow.kind}`;
+    const ticket = (flow.ticket || ticketInput.value).trim(); if (!ticket) { ticketInput.focus(); return alert("Give the flow a ticket first — the draft is built from the ticket and the spec."); }
+    const name = flow.name || flowNameFor(ticket, flow.kind);
     const surface = [].concat(STATE.project.surfaces).includes("web") ? "web" : "api";
+    showTab("agent");
     const drafted = await sendChat(`Draft a ${flow.kind} flow for ${ticket} from the ticket and the specification.`, {
       route: "/draft", body: { ticket, kind: flow.kind, name, surface }, label: "drafting" });
     if (drafted && drafted.flow) {
       const f = drafted.flow; f.nodes = (f.nodes || []).map((n, i) => ({ id: n.id || `n${i + 1}`, type: n.type, x: Number(n.x) || 40, y: Number(n.y) || 40 + i * 130, data: n.data || {} })).filter((n) => TYPES[n.type]);
       f.edges = (f.edges || []).filter((e) => f.nodes.some((n) => n.id === e.from) && f.nodes.some((n) => n.id === e.to));
-      f.case = flow.case; flow = f; selected = { node: null, edge: null };
-      nextId = 1 + f.nodes.length; autoLayout(); renderInspector(); scheduleValidate(); scheduleSave(); showTab("canvas");
+      flow = { ...flow, ...f, name: flow.name, agent: flow.agent, worktree: flow.worktree, case: flow.case }; selected = { node: null, edge: null };
+      nextId = 1 + f.nodes.length; showTab("canvas"); autoLayout(); renderInspector(); scheduleValidate(); scheduleSave();
       if (f.notes) addMsg("drafting", "assistant").textContent = `Notes from the draft: ${f.notes}`;
     } else if (drafted) addMsg("studio", "assistant").textContent = "The engine did not return a flow I could read — try again, or build it by hand.";
   });
 
   // ---------------------------------------------------------------------------
-  $("themeBtn").addEventListener("click", () => { themeMode = THEMES[(THEMES.indexOf(themeMode) + 1) % THEMES.length]; applyTheme(themeMode); });
-  fillTop(); renderProjects(); renderWorktrees(); renderPalette(); renderInspector(); renderNodes(); setZoom(1); loadFlows(null); loadEvd();
-  $("chatMeta").textContent = ENGINES.find((e) => e.available) ? "ready" : "no engine available";
+  // boot
+  // ---------------------------------------------------------------------------
+  (async () => {
+    renderPalette(); renderInspector(); renderNodes(); setZoom(1); renderBars(); renderTree();
+    if (!STATE.projects?.list?.length) { showScreen("home"); return; }
+    await loadFlows();
+    showScreen("project");
+  })();
 })();

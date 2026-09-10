@@ -348,6 +348,8 @@ export async function studio(flags = {}) {
       const here = activeWorktree();
       st.cwd = at;
       st.hasLane = fs.existsSync(configPath(at));
+      st.home = os.homedir();
+      st.clonesDir = projects.CLONES_DIR;
       st.projects = {
         list: reg.projects.map((x) => ({ id: x.id, name: x.name, path: x.path, agent: x.agent })),
         activeId: p?.id || null,
@@ -406,11 +408,57 @@ export async function studio(flags = {}) {
       }
 
       // ---- flows -------------------------------------------------------------
-      const flowsDir = path.join(root, state().flowsDir);
+      // A flow belongs to the PROJECT, not to whichever worktree happens to be
+      // active: it is the unit a person creates ("verify SHOP-142 with Claude,
+      // on a fresh checkout of main"), and it carries its own agent and its own
+      // worktree. So the files live under the project checkout, and opening a
+      // flow is what moves the studio into that flow's worktree.
+      const projectRoot = activeProject()?.path || root;
+      const flowsDir = path.join(projectRoot, state().flowsDir);
+      const flowCwd = (flow) => (flow?.worktree ? path.join(projectRoot, worktrees.WORKTREE_SUBDIR, flow.worktree) : projectRoot);
+      /** What the sidebar shows for a flow without opening it: its choices,
+       *  and the RESULT of its compiled case if one has been run. */
+      const flowSummary = (name) => {
+        let flow;
+        try { flow = JSON.parse(fs.readFileSync(path.join(flowsDir, `${name}.json`), "utf8")); } catch { return { name, broken: true }; }
+        const at = flowCwd(flow);
+        let result = null, ranAt = null;
+        if (flow.ticket && NAME_RE.test(flow.name || "")) {
+          const evd = path.join(at, "evd", flow.ticket);
+          try {
+            const dir = fs.readdirSync(evd).find((d) => new RegExp(`^TC_\\d+_${flow.name}$`).test(d));
+            if (dir) {
+              const m = fs.readFileSync(path.join(evd, dir, "manifest.md"), "utf8");
+              result = (m.match(/^RESULT:\s*(\S+)/m) || [])[1] || null;
+              ranAt = (m.match(/^RAN-AT:\s*(\S+)/m) || [])[1] || null;
+            }
+          } catch { /* not compiled yet */ }
+        }
+        let updated = null;
+        try { updated = fs.statSync(path.join(flowsDir, `${name}.json`)).mtime.toISOString(); } catch { /* gone */ }
+        return { name, ticket: flow.ticket || "", title: flow.title || "", kind: flow.kind || "acceptance", agent: flow.agent || null,
+          worktree: flow.worktree || null, worktreeExists: !flow.worktree || fs.existsSync(at), steps: (flow.nodes || []).length, result, ranAt, updated };
+      };
       if (req.method === "GET" && route === "/api/flows") {
         let names = [];
         try { names = fs.readdirSync(flowsDir).filter((f) => f.endsWith(".json")).map((f) => f.replace(/\.json$/, "")).sort(); } catch { names = []; }
-        json(res, 200, { flows: names });
+        json(res, 200, { flows: names.map(flowSummary), projectId: activeProject()?.id || null });
+        return;
+      }
+      const fo = route.match(/^\/api\/flows\/([a-z0-9][a-z0-9_-]{0,59})\/open$/);
+      if (fo && req.method === "POST") {
+        const abs = path.join(flowsDir, `${fo[1]}.json`);
+        if (!fs.existsSync(abs)) { json(res, 404, { error: "no such flow" }); return; }
+        const flow = JSON.parse(fs.readFileSync(abs, "utf8"));
+        const p = activeProject();
+        let worktreeMissing = false;
+        if (p) {
+          if (flow.worktree && fs.existsSync(flowCwd(flow))) wtByProject.set(p.id, flowCwd(flow));
+          else { wtByProject.delete(p.id); worktreeMissing = !!flow.worktree; }
+        }
+        const st = state();
+        json(res, 200, { flow, state: st, worktreeMissing,
+          agent: projects.resolveAgent(p, st.agents, flow.agent || null) });
         return;
       }
       const fm = route.match(/^\/api\/flows\/([a-z0-9][a-z0-9_-]{0,59})$/);
@@ -420,9 +468,11 @@ export async function studio(flags = {}) {
         if (req.method === "PUT") {
           const flow = JSON.parse((await readBody(req)) || "{}");
           if (flow.name !== fm[1] || !NAME_RE.test(fm[1])) { json(res, 400, { error: "the flow's name must match the URL" }); return; }
+          if (flow.agent && !projects.AGENTS.some((a) => a.id === flow.agent)) { json(res, 400, { error: `unknown agent: ${flow.agent}` }); return; }
+          if (flow.worktree && !worktrees.NAME_RE.test(flow.worktree)) { json(res, 400, { error: "bad worktree name" }); return; }
           fs.mkdirSync(flowsDir, { recursive: true });
           fs.writeFileSync(abs, JSON.stringify(flow, null, 2) + "\n");
-          json(res, 200, { saved: fm[1], validation: validate(flow) });
+          json(res, 200, { saved: fm[1], validation: validate(flow), summary: flowSummary(fm[1]) });
           return;
         }
         if (req.method === "DELETE") { try { fs.unlinkSync(abs); } catch { /* gone */ } json(res, 200, { deleted: fm[1] }); return; }
@@ -520,11 +570,15 @@ export async function studio(flags = {}) {
         // the custom engine's command is a per-project setting, so refresh it
         const custom = engines.find((e) => e.id === "custom");
         if (custom) custom.template = activeProject()?.customCommand || null;
-        const chosen = body.engine || projects.resolveAgent(activeProject()).id;
-        const engine = engines.find((e) => e.id === chosen)
-          || engines.find((e) => e.id === "custom" && activeProject()?.customCommand)
-          || engines[0];
+        // The flow's agent wins over the project's default; an explicit
+        // `engine` in the body (the old top-bar selector, tests) wins over both.
+        const resolved = projects.resolveAgent(activeProject(), st.agents, body.agent || null);
+        const chosen = body.engine || projects.engineFor(resolved) || "claude";
+        const engine = engines.find((e) => e.id === chosen) || engines[0];
         const avail = engine.availability();
+        if (!body.engine && resolved.reason && (!resolved.installed || resolved.drive === "custom")) {
+          json(res, 424, { error: `${resolved.label || resolved.id}: ${resolved.reason}` }); return;
+        }
         if (!avail.available) { json(res, 424, { error: `${engine.label}: ${avail.reason}` }); return; }
         const send = sseStart(res);
         const ac = new AbortController();
@@ -562,6 +616,32 @@ export async function studio(flags = {}) {
       if (req.method === "POST" && route === "/api/inspect") {
         const body = JSON.parse((await readBody(req)) || "{}");
         json(res, 200, projects.inspect(path.resolve(String(body.path || "").replace(/^~(?=$|\/)/, os.homedir()))));
+        return;
+      }
+      // The folder picker. A browser page cannot ask the OS for a folder and
+      // learn its absolute path, so the studio lists one level at a time and
+      // the person clicks down to the repository they mean.
+      if (req.method === "GET" && route === "/api/fs") {
+        json(res, 200, projects.browse(url.searchParams.get("path") || "~"));
+        return;
+      }
+      // Clone from a URL, streaming git's own progress lines; on success the
+      // clone is registered as a project. Nothing here reads a credential —
+      // git uses whatever the machine already has, and GIT_TERMINAL_PROMPT=0
+      // means it fails rather than waits on a password nobody can type.
+      if (req.method === "POST" && route === "/api/clone") {
+        const body = JSON.parse((await readBody(req)) || "{}");
+        const send = sseStart(res);
+        const ac = new AbortController();
+        req.on("close", () => ac.abort());
+        send({ type: "progress", text: `git clone ${String(body.url || "").trim()}` });
+        const r = await projects.clone(body.url, body.into || null, { onLine: (text) => send({ type: "progress", text }), signal: ac.signal });
+        if (!r.ok) { send({ type: "done", ok: false, error: r.error }); res.end(); return; }
+        let project = null, info = null;
+        try { ({ project, info } = projects.add(reg, r.dest, { agent: body.agent || null })); projects.save(reg); }
+        catch (e) { send({ type: "done", ok: false, error: `cloned to ${r.dest}, but it could not be registered: ${e.message}` }); res.end(); return; }
+        send({ type: "done", ok: true, dest: r.dest, project, info, state: state() });
+        res.end();
         return;
       }
       if (req.method === "POST" && route === "/api/projects") {

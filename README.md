@@ -513,14 +513,34 @@ build step, nothing leaves the machine.** It exists because the people a verdict
 is *for* — a QA who does not live in a terminal, a product owner, a client — can
 read a report but were never going to run one.
 
-Four panels, and each maps onto something the lane already does:
+The shape is the [Orca](https://github.com/stablyai/orca) desktop app's, because
+its users already have that vocabulary: a sidebar of **projects**, under each
+project its **flows** as cards, and the work itself in the main pane. Three
+steps, in the order a first-time user meets them:
 
-| Panel | What it is |
+1. **Add a project** — a folder on this machine (a picker that marks the
+   repositories ◆), or a git URL the studio clones with the credentials the
+   machine already has. The registry is `~/.ai-qa/studio.json`: paths and
+   choices, never a token.
+2. **Create a flow** — one ticket, **the AI agent that will verify it** (the
+   agents found on `PATH`, each marked *ready* / *not installed* / *needs a
+   command*), and where it runs: the project checkout, or a fresh **worktree**
+   under `.ai-qa/worktrees/` so the branch you are working on is left alone.
+3. **Work inside the flow** — five tabs, each mapping onto something the lane
+   already does:
+
+| Tab | What it is |
 |---|---|
-| **Chat** | The agent that has *these* workflows installed. `/onboard`, `/qa SHOP-142`, `/triage`, `/regress` are one click; tool calls and their output stream into the page as they happen. |
-| **Canvas** | Drag the steps of a test onto a graph and wire them: *as* whom, what must already be true, the click path, what is typed, **what must be read and which spec section says so**, the read-back, the clean-up. |
-| **Compile & run** | The drawing becomes the files the gate already reads, then runs for real — streaming `APP: UP`, `API: FAIL  x discount: expected "50000", got 0`, `DB: OK`, and the gate's verdict. |
+| **Agent** | The chosen agent, in the flow's checkout, with *these* workflows installed. `/qa SHOP-142`, `/triage`, `/regress`, `/onboard` are one click; tool calls and their output stream into the page as they happen. |
+| **Steps** | Drag the steps of a test onto a graph and wire them: *as* whom, what must already be true, the click path, what is typed, **what must be read and which spec section says so**, the read-back, the clean-up. Or ask the agent to draft the graph from the ticket and the spec. |
+| **Run** | The drawing becomes the files the gate already reads, then runs for real — streaming `APP: UP`, `API: FAIL  x discount: expected "50000", got 0`, `DB: OK`, and the gate's verdict. |
 | **Evidence** | `evd/` as a tree: the report rendered, screenshots, the recorded request and response, `evd_check` green or red, and the spreadsheet export. |
+| **Ticket & spec** | The ticket as the tracker holds it, beside the specification that is the oracle. |
+
+Each flow card shows its verdict (a green, red or amber dot from the compiled
+case's `RESULT:`), its ticket, where it runs, and which agent. A project with no
+`aiqa.config.yaml` is added and **reported** — the studio never runs `init` on
+someone's codebase by itself.
 
 ### What the canvas compiles into
 

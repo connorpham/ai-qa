@@ -457,8 +457,11 @@ for (const [label, cmd, args] of [
 
 // ---- 12. the studio boots, is fenced by its token, and reads this repo --------
 {
+  // AIQA_HOME: the studio's registry goes into the fixture's temp dir, not
+  // into ~/.ai-qa on whoever runs the suite. (It used to. Quietly.)
+  const aiqaHome = path.join(tmp, "aiqa-home");
   const studio = spawn(process.execPath, [CLI, "studio", "--port", "0", "--no-open"],
-    { cwd: repo, env: { ...process.env, NO_COLOR: "1", AIQA_NO_OPEN: "1" } });
+    { cwd: repo, env: { ...process.env, NO_COLOR: "1", AIQA_NO_OPEN: "1", AIQA_HOME: aiqaHome } });
   let out = "";
   const url = await new Promise((resolve) => {
     const t = setTimeout(() => resolve(null), 25_000);
@@ -485,6 +488,55 @@ for (const [label, cmd, args] of [
     check(trav.status === 404, "the evidence viewer served a file outside evd/");
     const bad = await fetch(`${url.base}/${url.token}/api/compile`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ flow: { name: "x", nodes: [] } }) });
     check(bad.status === 422, `an invalid flow compiled anyway (${bad.status})`);
+
+    // -- the registry landed in AIQA_HOME, and the fixture registered itself as a project
+    check(fs.existsSync(path.join(aiqaHome, "studio.json")), "the studio did not write its registry under AIQA_HOME");
+    check(!fs.readFileSync(path.join(aiqaHome, "studio.json"), "utf8").includes(os.homedir() + "/.ai-qa"), "the registry under AIQA_HOME still points at the real home");
+    check(st.state.projects.list.some((p) => p.path === fs.realpathSync(repo)), "the folder the studio started in was not registered as a project");
+
+    // -- choosing a project: the folder picker lists one level, marks repositories
+    const fsList = JSON.parse((await get(`/${url.token}/api/fs?path=${encodeURIComponent(tmp)}`)).text);
+    const shopEntry = fsList.entries.find((e) => e.name === "shop");
+    check(!!shopEntry && shopEntry.isRepo === true && shopEntry.hasLane === true, `the folder picker did not mark shop as a repository with the lane: ${JSON.stringify(shopEntry)}`);
+    check(fsList.parent === path.dirname(tmp), "the folder picker did not report the parent folder");
+    const fsBad = JSON.parse((await get(`/${url.token}/api/fs?path=${encodeURIComponent(path.join(tmp, "nope"))}`)).text);
+    check(fsBad.error === "no such folder" && fsBad.entries.length === 0, `a missing folder was not reported as such: ${JSON.stringify(fsBad).slice(0, 120)}`);
+
+    // -- choosing a project: clone from a URL, streamed. file:// keeps the suite off the network.
+    const sse = async (p, body) => {
+      const r = await fetch(`${url.base}/${url.token}${p}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+      const text = await r.text();
+      const events = text.split("\n\n").filter((c) => c.startsWith("data:")).map((c) => JSON.parse(c.slice(5).trim()));
+      return { status: r.status, events, done: events.find((e) => e.type === "done") };
+    };
+    const badClone = await sse("/api/clone", { url: "not a url at all" });
+    check(badClone.done && badClone.done.ok === false && /not a git URL/.test(badClone.done.error), `a non-URL was accepted for cloning: ${JSON.stringify(badClone.done)}`);
+    const cloneDest = path.join(tmp, "cloned-shop");
+    const goodClone = await sse("/api/clone", { url: `file://${repo}`, into: cloneDest });
+    check(goodClone.done && goodClone.done.ok === true, `cloning a local file:// repository failed: ${JSON.stringify(goodClone.done).slice(0, 300)}`);
+    check(goodClone.events.some((e) => e.type === "progress"), "the clone streamed no progress lines");
+    // the fixture committed before `init` ran, so the clone has package.json but no lane — and says so
+    check(fs.existsSync(path.join(cloneDest, ".git")) && fs.existsSync(path.join(cloneDest, "package.json")), "the clone did not land where it was asked to");
+    check(goodClone.done?.info?.hasLane === false, "the clone claimed a lane it does not have (aiqa.config.yaml was never committed)");
+    check(goodClone.done?.state?.projects?.list?.some((p) => p.path === fs.realpathSync(cloneDest)), "the clone was not registered as a project");
+    const twice = await sse("/api/clone", { url: `file://${repo}`, into: cloneDest });
+    check(twice.done && twice.done.ok === false && /already exists/.test(twice.done.error), "cloning over a non-empty folder was allowed");
+    // back to the fixture project for the rest
+    const fixtureId = goodClone.done.state.projects.list.find((p) => p.path === fs.realpathSync(repo)).id;
+    await fetch(`${url.base}/${url.token}/api/projects/active`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ id: fixtureId }) });
+
+    // -- a flow carries its own agent; the studio refuses one it does not know
+    const put = (name, flow) => fetch(`${url.base}/${url.token}/api/flows/${name}`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(flow) });
+    const okFlow = await put("shop_1_acceptance", { version: 1, name: "shop_1_acceptance", ticket: "SHOP-1", kind: "acceptance", agent: "claude", worktree: null, nodes: [], edges: [] });
+    check(okFlow.status === 200, `saving a flow with an agent failed (${okFlow.status})`);
+    const badAgent = await put("shop_2_acceptance", { version: 1, name: "shop_2_acceptance", ticket: "SHOP-2", kind: "acceptance", agent: "hal9000", nodes: [], edges: [] });
+    check(badAgent.status === 400, `a flow with an unknown agent was saved (${badAgent.status})`);
+    const flows = JSON.parse((await get(`/${url.token}/api/flows`)).text).flows;
+    const f1 = flows.find((f) => f.name === "shop_1_acceptance");
+    check(!!f1 && f1.agent === "claude" && f1.ticket === "SHOP-1" && f1.result === null, `the flow list did not carry the flow's agent/ticket/result: ${JSON.stringify(f1)}`);
+    const opened = await fetch(`${url.base}/${url.token}/api/flows/shop_1_acceptance/open`, { method: "POST" }).then((r) => r.json());
+    check(opened.agent && opened.agent.id === "claude" && opened.agent.chosen === true, `opening the flow did not resolve its own agent: ${JSON.stringify(opened.agent)}`);
+    check(opened.state.cwd === fs.realpathSync(repo), "opening a flow with no worktree moved the cwd somewhere else");
   }
   studio.kill("SIGTERM");
 }
