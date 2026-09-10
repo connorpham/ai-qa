@@ -1281,6 +1281,66 @@ for (const [label, cmd, args] of [
   }
 }
 
+
+// ---- CSS: a rule that never reaches the browser ------------------------------
+// A deletion once removed two selector LINES and left their declaration bodies
+// behind. CSS error recovery then hunted for the next `{` — and found the one
+// belonging to `#tab-canvas`, swallowing the rule that makes the Steps tab a
+// three-column grid. Nothing threw. The stylesheet still loaded. The tab just
+// silently became one column, palette full width and canvas 16px tall.
+//
+// The tell is precise: a top-level prelude containing `;` means declarations
+// leaked out of a block. Brace balance alone would not have caught it either,
+// because the stray `}` characters kept the count plausible.
+{
+  const cssFiles = ["src/ui/studio/app.css"];   // vendor CSS is not ours to police
+  for (const rel of cssFiles) {
+    const raw = fs.readFileSync(path.join(pkgRoot, rel), "utf8");
+    const css = raw.replace(/\/\*[\s\S]*?\*\//g, " ");   // comments out
+
+    let depth = 0, prelude = "", opens = 0, closes = 0;
+    const orphans = [];
+    const selectors = [];
+    for (let i = 0; i < css.length; i++) {
+      const ch = css[i];
+      if (ch === "{") {
+        opens++;
+        if (depth === 0) {
+          const sel = prelude.trim();
+          if (!sel) orphans.push("(empty prelude)");
+          else if (sel.includes(";")) orphans.push(sel.replace(/\s+/g, " ").slice(0, 90));
+          else selectors.push(sel.replace(/\s+/g, " "));
+          prelude = "";
+        }
+        depth++;
+        continue;
+      }
+      if (ch === "}") { closes++; depth = Math.max(0, depth - 1); if (depth === 0) prelude = ""; continue; }
+      if (depth === 0) prelude += ch;
+    }
+
+    check(opens === closes, `${rel}: ${opens} '{' vs ${closes} '}' — the stylesheet does not balance`);
+    check(orphans.length === 0,
+      `${rel}: ${orphans.length} block(s) whose selector was lost, so the browser drops the NEXT rule too: ${JSON.stringify(orphans.slice(0, 2))}`);
+    check(depth === 0, `${rel}: a block is never closed`);
+
+    // The layout the Steps tab depends on must actually survive parsing.
+    const has = (sel) => selectors.some((s) => s === sel || s.split(",").map((x) => x.trim()).includes(sel));
+    for (const sel of ["#tab-canvas", "#tab-canvas.on", ".palette", ".canvas-wrap", ".inspector"]) {
+      check(has(sel), `${rel}: the rule for ${sel} is missing — the Steps tab needs it to lay out`);
+    }
+    const gridRule = /#tab-canvas\s*\{[^}]*grid-template-columns\s*:[^}]*\}/.test(css);
+    check(gridRule, `${rel}: #tab-canvas has no grid-template-columns — the Steps tab collapses to one column without it`);
+
+    // Every custom property the file uses must be one the file defines.
+    const defined = new Set([...css.matchAll(/(--[a-z0-9-]+)\s*:/g)].map((m) => m[1]));
+    const used = new Set([...css.matchAll(/var\((--[a-z0-9-]+)/g)].map((m) => m[1]));
+    const undef = [...used].filter((v) => !defined.has(v));
+    check(undef.length === 0,
+      `${rel}: uses custom properties it never defines: ${JSON.stringify(undef)} — a var() that resolves to nothing drops the whole declaration`);
+  }
+}
+
 // ---- report -------------------------------------------------------------------
 if (fails.length) {
   console.error(`conformance: ${fails.length} FAILED of ${checks} checks\n`);
