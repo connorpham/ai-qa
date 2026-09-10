@@ -23,7 +23,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { c, gitRoot, readIfExists } from "../cli/util.mjs";
 import { CONFIG_NAME, configPath, loadConfig, get } from "../cli/config.mjs";
-import { compile, validate, NODE_TYPES, KINDS, NAME_RE, TICKET_RE } from "./studio/compile.mjs";
+import { compile, validate, NODE_TYPES, KINDS, NAME_RE, TICKET_RE, GROUPS, STARTERS, buildStarter } from "./studio/compile.mjs";
 import { makeEngines, describeEngines } from "./studio/engines.mjs";
 import * as projects from "./studio/projects.mjs";
 import * as worktrees from "./studio/worktrees.mjs";
@@ -389,7 +389,11 @@ export async function studio(flags = {}) {
       // ---- page + assets -----------------------------------------------------
       if (req.method === "GET" && (route === "/" || route === "")) {
         const html = fs.readFileSync(path.join(ASSETS, "index.html"), "utf8")
-          .replace("__STUDIO_BOOT__", JSON.stringify({ token, state: state(), engines: describeEngines(engines), schema: { nodeTypes: NODE_TYPES, kinds: KINDS } }).replace(/</g, "\\u003c"));
+          .replace("__STUDIO_BOOT__", JSON.stringify({ token, state: state(), engines: describeEngines(engines), schema: { nodeTypes: NODE_TYPES, kinds: KINDS, groups: GROUPS,
+              // Built here so the shape and its layout have ONE definition.
+              // The page only swaps the placeholder ids for real ones.
+              starters: STARTERS.map((st) => { let i = 0; const b = buildStarter(st.id, () => String(i++));
+                return { id: st.id, label: st.label, why: st.why, kind: st.kind, nodes: b.nodes, edges: b.edges }; }) } }).replace(/</g, "\\u003c"));
         res.writeHead(200, { "content-type": MIME[".html"], "cache-control": "no-store" }).end(html);
         return;
       }

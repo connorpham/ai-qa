@@ -957,7 +957,7 @@ for (const [label, cmd, args] of [
 // contract is the same one every other producer answers to: compile a flow, put
 // the result in front of evd_check, and let the gate say whether it is a case.
 {
-  const { compile, validate, toposort, NODE_TYPES, parseExpects } =
+  const { compile, validate, toposort, NODE_TYPES, parseExpects, GROUPS, STARTERS, buildStarter } =
     await import("../src/ui/studio/compile.mjs");
   const { argvAllowed, safeRel, ALLOWED_TOOLS } = await import("../src/ui/studio/engines.mjs");
 
@@ -1099,7 +1099,15 @@ for (const [label, cmd, args] of [
   // reads but the palette never offers is a field nobody can fill in.
   for (const [type, spec] of Object.entries(NODE_TYPES)) {
     check(typeof spec.label === "string" && spec.label.length > 2, `${type}: no label for the palette`);
-    check(["who", "web", "api", "check"].includes(spec.group), `${type}: unknown palette group ${spec.group}`);
+    check(GROUPS.some((g) => g.id === spec.group), `${type}: palette group ${JSON.stringify(spec.group)} is not one of GROUPS`);
+    // The redesign's whole point: the reason a step exists is printed under
+    // its name. A type with no hint is a type someone has to guess at.
+    check(typeof spec.hint === "string" && spec.hint.length > 30,
+      `${type}: no hint — the palette prints this under the label, and without it the step is a name with no reason`);
+    // The gate's field names (AFTER, BACK, "cite the spec") mean something
+    // once you know the manifest format, and nothing before that.
+    check(!/\((?:AFTER|BACK|ENTRY|AS)\)/.test(spec.label),
+      `${type}: the label ${JSON.stringify(spec.label)} leaks a manifest field name`);
     for (const f of spec.fields) check(/^[a-z_]+$/.test(f.key), `${type}.${f.key}: field keys are lowercase identifiers`);
   }
 
@@ -1339,6 +1347,50 @@ for (const [label, cmd, args] of [
     check(undef.length === 0,
       `${rel}: uses custom properties it never defines: ${JSON.stringify(undef)} — a var() that resolves to nothing drops the whole declaration`);
   }
+}
+
+
+// ---- the palette reads as an order, and no shape starts blank ----------------
+{
+  const { GROUPS, STARTERS, NODE_TYPES, buildStarter, validate } =
+    await import("../src/ui/studio/compile.mjs");
+
+  // A heading with nothing under it is a heading that teaches nothing.
+  for (const g of GROUPS) {
+    const n = Object.values(NODE_TYPES).filter((t) => t.group === g.id).length;
+    check(n > 0, `palette group ${g.id} ("${g.title}") has no step types under it`);
+    check(/^\d+ · /.test(g.title), `palette group ${g.id}: the title should be numbered so the palette reads as an order (got ${JSON.stringify(g.title)})`);
+  }
+
+  // Every starter must be a SHAPE that already satisfies the structure the
+  // gate insists on — so the only thing left is the words. If a starter
+  // shipped with a structural hole, it would teach the wrong shape to exactly
+  // the person least able to notice.
+  check(STARTERS.length >= 3, "too few starter shapes to cover the usual cases");
+  for (const st of STARTERS) {
+    check(typeof st.why === "string" && st.why.length > 30, `starter ${st.id}: no explanation of when to reach for it`);
+    let i = 0;
+    const built = buildStarter(st.id, () => `s${i++}`);
+    check(!!built, `starter ${st.id}: buildStarter returned nothing`);
+    check(built.nodes.length >= 4, `starter ${st.id}: too few steps to be a case`);
+    check(built.edges.length === built.nodes.length - 1, `starter ${st.id}: the chain is not fully wired`);
+
+    const res = validate({ name: "demo_case", ticket: "SHOP-142", kind: built.kind, nodes: built.nodes, edges: built.edges });
+    // Empty required fields are EXPECTED — the starter deliberately fills in
+    // nothing. Anything else is a hole in the shape itself.
+    const structural = res.errors.filter((e) => !/ is empty$/.test(e) && !/click path is empty/.test(e));
+    check(structural.length === 0,
+      `starter ${st.id} has a structural hole, not just unfilled fields: ${JSON.stringify(structural)}`);
+
+    // And it must genuinely be blank — a starter that guessed a value would be
+    // the one thing this tool must never do.
+    const invented = built.nodes.flatMap((n) => Object.entries(n.data || {})
+      .filter(([k, v]) => String(v).trim() && !(NODE_TYPES[n.type].fields.find((f) => f.key === k)?.default !== undefined))
+      .map(([k, v]) => `${n.type}.${k}=${v}`));
+    check(invented.length === 0, `starter ${st.id} pre-filled values it cannot know: ${JSON.stringify(invented)}`);
+  }
+
+  check(buildStarter("nope", () => "x") === null, "an unknown starter id should return null, not throw");
 }
 
 // ---- report -------------------------------------------------------------------

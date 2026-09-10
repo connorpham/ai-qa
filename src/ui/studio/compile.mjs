@@ -27,18 +27,41 @@ export const KINDS = ["acceptance", "boundary", "whole-screen", "write-readback"
 
 /** The palette. `fields` drives both the inspector form and validation; the
  * UI renders from this so the two never disagree about what a node holds. */
+/** The palette, in the order a case is actually built.
+ *
+ * Two things changed here after watching someone meet this screen for the
+ * first time. The labels used to carry the gate's own field names — "Reload
+ * check (AFTER)", "Back / Cancel (BACK)", "Expect (cite the spec)" — which
+ * mean something once you know the manifest format and nothing before that.
+ * And the reason a step exists lived in a `title` tooltip, so it was invisible
+ * unless you hovered and waited.
+ *
+ * Now every type says what it is in the words a tester would use, every one
+ * carries a `hint` the palette shows on the line beneath, and the groups are
+ * numbered so the palette reads top to bottom the way the case gets built.
+ *
+ * `label` is human-facing ONLY — the manifest keys (AS:, ENTRY:, AFTER:, …)
+ * are literals in the compiler, so renaming here can never move a gate. */
+export const GROUPS = [
+  { id: "who", title: "1 · Who, and what is already true" },
+  { id: "web", title: "2 · What the person does" },
+  { id: "api", title: "3 · Behind the screen" },
+  { id: "check", title: "4 · What proves it" },
+  { id: "end", title: "5 · Put things back" },
+];
+
 export const NODE_TYPES = {
   actor: {
-    label: "As (who)", group: "who", color: "#737373",
-    hint: "Which account, which role. A verdict with no actor cannot be reproduced.",
+    label: "Who is doing this", group: "who", color: "#737373",
+    hint: "Which account, and which role. Half of all interface defects only appear for one role, and a verdict with no actor cannot be reproduced.",
     fields: [
       { key: "role", label: "Role", placeholder: "customer (gold tier)", required: true },
       { key: "account", label: "Account / how to sign in", placeholder: "zztest.anh@demo — password in .env" },
     ],
   },
   precondition: {
-    label: "Precondition", group: "who", color: "#737373",
-    hint: "What must already be true, resolved read-only right now — never trusted from the ticket.",
+    label: "What must already be true", group: "who", color: "#737373",
+    hint: "The record that has to exist, and in which state. Resolve it now, read-only — an id from the ticket may not exist any more.",
     fields: [
       { key: "text", label: "What must be true", placeholder: "customer 1 exists and is tier gold", required: true },
       { key: "check", label: "Check it how", kind: "select", options: ["none", "api", "db"], default: "none" },
@@ -47,46 +70,36 @@ export const NODE_TYPES = {
       { key: "sql", label: "Read-only SQL", placeholder: "SELECT tier FROM customers WHERE id = 1", kind: "textarea", when: { check: "db" } },
     ],
   },
+
   open: {
-    label: "Open (click path)", group: "web", color: "#155dfc",
-    hint: "Where the user starts and what they click to arrive. A typed URL proves the URL, not the product.",
+    label: "Get to the screen", group: "web", color: "#155dfc",
+    hint: "The menu, the list, the row, the button — the way a person actually arrives. A typed address proves the address, not the product.",
     fields: [
       { key: "path", label: "Click path, one label per line", kind: "textarea", placeholder: "Orders\nNew order", required: true },
       { key: "url", label: "Deep link (secondary, optional)", placeholder: "/orders/new" },
     ],
   },
   click: {
-    label: "Click", group: "web", color: "#155dfc",
+    label: "Click something", group: "web", color: "#155dfc",
+    hint: "One click, named for what it is for. The name is what the run announces and what the log will say afterwards.",
     fields: [
       { key: "selector", label: "What to click (selector or text=…)", placeholder: "button:has-text('Place order')", required: true },
       { key: "why", label: "Why (shown in the log)", placeholder: "place the order" },
     ],
   },
   type: {
-    label: "Type into", group: "web", color: "#155dfc",
+    label: "Type a value", group: "web", color: "#155dfc",
+    hint: "The field and what goes in it. Boundaries live here: the amount exactly at the threshold, the empty field, the duplicate.",
     fields: [
       { key: "selector", label: "Field (selector)", placeholder: "#amount", required: true },
       { key: "value", label: "Value", placeholder: "500000", required: true },
       { key: "why", label: "Why", placeholder: "an order exactly at the threshold" },
     ],
   },
-  expect: {
-    label: "Expect (cite the spec)", group: "check", color: "#dd7400",
-    hint: "The whole verification. Without a citation this reports a difference, never a defect.",
-    fields: [
-      { key: "what", label: "What is read", placeholder: "the Discount line", required: true },
-      { key: "selector", label: "Where on screen (selector)", placeholder: "#discount", required: true },
-      { key: "value", label: "Must read", placeholder: "50,000", required: true },
-      { key: "cite", label: "Cited from", placeholder: "spec §3.2 R1", required: false },
-    ],
-  },
-  screenshot: {
-    label: "Screenshot", group: "check", color: "#dd7400",
-    fields: [{ key: "what", label: "What it shows (becomes the filename)", placeholder: "order_priced_at_threshold", required: true }],
-  },
+
   api: {
-    label: "API call", group: "api", color: "#7f22fe",
-    hint: "Request and response are recorded as files; the body is checked, not just the status.",
+    label: "Call the API", group: "api", color: "#7f22fe",
+    hint: "The request and the response are both written to files. A status code is not a verdict — the body is checked against what was promised.",
     fields: [
       { key: "method", label: "Method", kind: "select", options: ["GET", "POST", "PUT", "PATCH", "DELETE"], default: "GET" },
       { key: "path", label: "Path", placeholder: "/orders", required: true },
@@ -96,8 +109,24 @@ export const NODE_TYPES = {
       { key: "auth_env", label: "Bearer token env var (NAME only)", placeholder: "AUTH_TOKEN" },
     ],
   },
+
+  expect: {
+    label: "What must be true on screen", group: "check", color: "#dd7400",
+    hint: "The whole verification. Write what the screen shows, not a judgement — and say where it is written down, or this reports a difference rather than a defect.",
+    fields: [
+      { key: "what", label: "What is read", placeholder: "the Discount line", required: true },
+      { key: "selector", label: "Where on screen (selector)", placeholder: "#discount", required: true },
+      { key: "value", label: "Must read", placeholder: "50,000", required: true },
+      { key: "cite", label: "Cited from", placeholder: "spec §3.2 R1", required: false },
+    ],
+  },
+  screenshot: {
+    label: "Take a screenshot", group: "check", color: "#dd7400",
+    hint: "Named for what it shows — the filename is the first thing a stranger reads, and a folder of numbers makes them open every one.",
+    fields: [{ key: "what", label: "What it shows (becomes the filename)", placeholder: "order_priced_at_threshold", required: true }],
+  },
   db: {
-    label: "DB read-back", group: "check", color: "#dd7400",
+    label: "Read the row back", group: "check", color: "#dd7400",
     hint: "Read-only. The interface saying 'saved' is a claim about the interface, not about the data.",
     fields: [
       { key: "name", label: "What this proves", placeholder: "the stored discount", required: true },
@@ -106,18 +135,19 @@ export const NODE_TYPES = {
     ],
   },
   reload: {
-    label: "Reload check (AFTER)", group: "web", color: "#155dfc",
-    hint: "A save that dies on refresh is not a save.",
+    label: "Still there after a reload", group: "check", color: "#dd7400",
+    hint: "A save that dies on refresh is not a save. One of the cheapest checks there is, and it catches a class of defect nothing else does.",
     fields: [{ key: "what", label: "What must survive a reload", placeholder: "the Discount line still reads 50,000", required: true }],
   },
   back: {
-    label: "Back / Cancel (BACK)", group: "web", color: "#155dfc",
-    hint: "Where 'it works' usually stops working.",
+    label: "Back and Cancel behave", group: "check", color: "#dd7400",
+    hint: "Press Back and expect to land where you were, filter intact. Press Cancel and expect nothing to have happened. This is where 'it works' usually stops working.",
     fields: [{ key: "what", label: "What Back or Cancel must do", placeholder: "Back returns to Orders with the filter intact", required: true }],
   },
+
   cleanup: {
-    label: "Clean up (reverse flow)", group: "api", color: "#7f22fe",
-    hint: "Test data leaves the way a user removes it. No reverse flow → the case is BLOCKED, nothing is written.",
+    label: "Remove the test data", group: "end", color: "#0e7490",
+    hint: "Test data leaves the way a user removes it. If the product has no reverse action, the case is BLOCKED and nothing is written in the first place.",
     fields: [
       { key: "how", label: "How the product removes it", placeholder: "withdraw the order", required: true },
       { key: "method", label: "Method", kind: "select", options: ["", "DELETE", "POST", "PUT"], default: "" },
@@ -125,6 +155,67 @@ export const NODE_TYPES = {
     ],
   },
 };
+
+/** Ready-wired shapes, so nobody meets this screen as a blank canvas.
+ *
+ * A blank canvas plus twelve step types asks you to already know what a test
+ * case looks like — which is exactly the knowledge someone new does not have,
+ * and the reason they close the tab. Each shape below is a chain that already
+ * satisfies what `validate()` demands of its kind, so it compiles the moment
+ * the fields are filled in. Nothing here is filled in FOR you: a starter that
+ * invented an expected value would be the one thing this tool must never do.
+ *
+ * Ordered by how often a case actually looks like this. */
+export const STARTERS = [
+  {
+    id: "screen",
+    label: "A journey through a screen",
+    why: "Someone signs in, gets to a screen the way a person gets there, does the thing, and checks it held.",
+    kind: "acceptance",
+    steps: ["actor", "precondition", "open", "click", "expect", "screenshot", "reload", "back"],
+  },
+  {
+    id: "boundary",
+    label: "A boundary — the value that must behave the other way",
+    why: "The same journey, aimed at the edge: the amount exactly at the threshold, the empty field, the duplicate.",
+    kind: "boundary",
+    steps: ["actor", "precondition", "open", "type", "click", "expect", "reload", "back"],
+  },
+  {
+    id: "write",
+    label: "A write, checked end to end",
+    why: "It writes something, so the row gets read back, and the test data leaves the way a user removes it.",
+    kind: "write-readback",
+    steps: ["actor", "open", "type", "click", "expect", "reload", "db", "back", "cleanup"],
+  },
+  {
+    id: "api",
+    label: "An API check, no screen",
+    why: "A call, what the body must contain, the row it wrote, and the cleanup. No browser involved.",
+    kind: "acceptance",
+    steps: ["actor", "precondition", "api", "db", "cleanup"],
+  },
+];
+
+/** Turn a starter into nodes and edges: a straight chain, laid out left to
+ *  right and wrapped, wired in the order the case runs. `newId` is passed in
+ *  so the ids come from the same generator the canvas already uses. */
+export function buildStarter(starterId, newId) {
+  const starter = STARTERS.find((s) => s.id === starterId);
+  if (!starter) return null;
+  const PER_ROW = 4, DX = 250, DY = 170, X0 = 40, Y0 = 40;
+  const nodes = starter.steps.map((type, i) => {
+    const spec = NODE_TYPES[type];
+    const data = {};
+    for (const f of spec.fields) if (f.default !== undefined) data[f.key] = f.default;
+    const row = Math.floor(i / PER_ROW), col = i % PER_ROW;
+    // Serpentine, so the wire between rows is short and the reading order is obvious.
+    const x = X0 + (row % 2 === 0 ? col : PER_ROW - 1 - col) * DX;
+    return { id: newId(), type, x, y: Y0 + row * DY, data };
+  });
+  const edges = nodes.slice(1).map((n, i) => ({ from: nodes[i].id, to: n.id }));
+  return { nodes, edges, kind: starter.kind };
+}
 
 const WEB_TYPES = new Set(["open", "click", "type", "expect", "screenshot", "reload", "back"]);
 const VAGUE = /^\W*(?:it\s+|this\s+)?(?:should\s+|must\s+)?(?:be\s+|is\s+|was\s+)?(?:works?|working|correct(?:ly)?|ok(?:ay)?|fine|good|as expected|properly|success(?:ful(?:ly)?)?|displayed|shown|pass(?:es|ed)?)\W*$/i;
