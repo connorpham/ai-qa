@@ -28,6 +28,11 @@ const USAGE = `
                 by hash and left alone — never silently clobbered.
                 ${c.gray("--dry-run")}
 
+  ${c.bold("ai-qa studio")}   open the lane in a browser on 127.0.0.1: chat with the agent
+                that has these workflows installed, draw a test flow and run it,
+                read the evidence. Local only, single-use token, no dependencies.
+                ${c.gray("--port <n> --no-open")}
+
   ${c.gray("ai-qa --version · ai-qa help")}
 `;
 
@@ -49,6 +54,12 @@ try {
     case "doctor": {
       const { doctor } = await import("../src/cli/doctor.mjs");
       await doctor(flags);
+      break;
+    }
+    case "studio": {
+      const { studio } = await import("../src/ui/studio.mjs");
+      await studio(flags);
+      await new Promise(() => {});   // serve until Ctrl+C
       break;
     }
     case "update": {

