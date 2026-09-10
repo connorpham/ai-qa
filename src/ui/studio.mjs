@@ -1,0 +1,527 @@
+// studio.mjs — `ai-qa studio`: the lane for people who do not live in a terminal.
+//
+// A local web app on 127.0.0.1 behind a random path token, like the setup
+// wizard, and with the same rules: no dependencies, no build step, nothing
+// leaves the machine. It adds three things a QA or a product owner can use
+// without ever typing a command:
+//
+//   chat      talk to the agent that has the four workflows installed here
+//   canvas    draw a test flow — drag steps, wire them, cite the spec — then
+//             compile it into the case files the gate already reads, and run it
+//   evidence  open evd/, read the report, see the gate go green or red
+//
+// What it will not do is the same list the CLI will not do. The chat engine is
+// fenced to the lane's own tools; the canvas compiles into evd/ and nowhere
+// else; the runner spawns the gates by argv, never a shell; the evidence viewer
+// serves evd/ and refuses everything outside it.
+import http from "node:http";
+import crypto from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
+import { spawn, spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
+import { c, gitRoot, readIfExists } from "../cli/util.mjs";
+import { CONFIG_NAME, configPath, loadConfig, get } from "../cli/config.mjs";
+import { compile, validate, NODE_TYPES, KINDS, NAME_RE, TICKET_RE } from "./studio/compile.mjs";
+import { makeEngines, describeEngines } from "./studio/engines.mjs";
+
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+const ASSETS = path.join(HERE, "studio");
+const MAX_BODY = 2 * 1024 * 1024;
+
+// ---------------------------------------------------------------------------
+// project facts the page needs
+// ---------------------------------------------------------------------------
+function projectState(root, cfg, activeEnv) {
+  const envs = get(cfg, "environments", null);
+  const names = envs && typeof envs === "object" ? Object.keys(envs).filter((k) => k !== "default") : [];
+  const chosen = activeEnv || get(cfg, "environments.default", "") || names[0] || "";
+  const envUrl = (chosen && String(get(cfg, `environments.${chosen}.url`, "") || "")) || String(get(cfg, "app.url", "") || "");
+  const tracker = String(get(cfg, "tracker.provider", "markdown") || "markdown");
+  const qaDir = String(get(cfg, "paths.qa", "docs/qa") || "docs/qa");
+  let tickets = [];
+  if (tracker === "markdown") {
+    const dir = path.join(root, qaDir, "tickets");
+    try { tickets = fs.readdirSync(dir).filter((f) => f.endsWith(".md")).map((f) => f.replace(/\.md$/, "")).sort(); } catch { tickets = []; }
+  }
+  const evdDir = path.join(root, String(get(cfg, "paths.evidence", "evd") || "evd"));
+  let evd = [];
+  try { evd = fs.readdirSync(evdDir, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name).sort(); } catch { evd = []; }
+  return {
+    root,
+    project: {
+      name: String(get(cfg, "project.name", path.basename(root)) || ""),
+      key: String(get(cfg, "project.key", "QA") || "QA"),
+      language: String(get(cfg, "project.language", "en") || "en"),
+      surfaces: get(cfg, "surfaces", []),
+      appUrl: String(get(cfg, "app.url", "") || ""),
+      apiBase: String(get(cfg, "api.base_url", "") || ""),
+      oracleSpecs: get(cfg, "oracle.specs", []) || [],
+      tracker,
+      writeGate: String(get(cfg, "autonomy.write_gate", "ask") || "ask"),
+      autonomy: String(get(cfg, "autonomy.level", "assisted") || "assisted"),
+      accounts: get(cfg, "accounts.roles", []) || [],
+    },
+    environments: { names, active: chosen, url: envUrl, writes: chosen ? String(get(cfg, `environments.${chosen}.writes`, "allowed") || "allowed") : "allowed" },
+    tickets, evd,
+    flowsDir: path.posix.join(qaDir, "flows"),
+  };
+}
+
+function envFor(root, cfg, envName) {
+  const out = {};
+  if (envName) out.AIQA_ENV = envName;
+  return out;
+}
+
+function ctxFor(state) {
+  return { appUrl: state.project.appUrl, apiBase: state.project.apiBase, envName: state.environments.active, envUrl: state.environments.url };
+}
+
+// ---------------------------------------------------------------------------
+// helpers
+// ---------------------------------------------------------------------------
+function readBody(req) {
+  return new Promise((resolve, reject) => {
+    let body = "";
+    req.on("data", (chunk) => { body += chunk; if (body.length > MAX_BODY) { req.destroy(); reject(new Error("body too large")); } });
+    req.on("end", () => resolve(body));
+    req.on("error", reject);
+  });
+}
+
+function json(res, code, obj) {
+  res.writeHead(code, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
+  res.end(JSON.stringify(obj));
+}
+
+function sseStart(res) {
+  res.writeHead(200, { "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-store", connection: "keep-alive", "x-accel-buffering": "no" });
+  res.write(": studio\n\n");
+  return (obj) => { try { res.write(`data: ${JSON.stringify(obj)}\n\n`); } catch { /* client gone */ } };
+}
+
+const MIME = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8",
+  ".md": "text/markdown; charset=utf-8", ".json": "application/json; charset=utf-8", ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+  ".svg": "image/svg+xml", ".txt": "text/plain; charset=utf-8", ".http": "text/plain; charset=utf-8", ".sql": "text/plain; charset=utf-8",
+  ".mjs": "text/plain; charset=utf-8", ".sh": "text/plain; charset=utf-8", ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" };
+
+/** Resolve a repo-relative path and refuse anything outside `within`. */
+function inside(root, within, rel) {
+  const abs = path.resolve(root, String(rel || ""));
+  const base = path.resolve(root, within);
+  const r = path.relative(base, abs);
+  if (r.startsWith("..") || path.isAbsolute(r)) return null;
+  if (/(^|\/)\.env(\.|$)/.test(r)) return null;
+  return abs;
+}
+
+function runSync(root, argv, env = {}, timeout = 300_000) {
+  const r = spawnSync(argv[0], argv.slice(1), { cwd: root, env: { ...process.env, ...env }, encoding: "utf8", timeout, maxBuffer: 16 * 1024 * 1024 });
+  return { status: r.status, out: `${r.stdout || ""}${r.stderr || ""}`.trim() };
+}
+
+function tree(dir, rel = "") {
+  const out = [];
+  let entries;
+  try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return out; }
+  for (const e of entries.sort((a, b) => a.name.localeCompare(b.name))) {
+    if (e.name.startsWith(".")) continue;
+    const r = rel ? `${rel}/${e.name}` : e.name;
+    if (e.isDirectory()) out.push({ name: e.name, path: r, dir: true, children: tree(path.join(dir, e.name), r) });
+    else { let size = 0; try { size = fs.statSync(path.join(dir, e.name)).size; } catch { /* gone */ } out.push({ name: e.name, path: r, size }); }
+  }
+  return out;
+}
+
+/** evd/<T>/manifest.md: seed one that says what it does not yet know. */
+function seedRootManifest(root, ticket) {
+  const dir = path.join(root, "evd", ticket);
+  const file = path.join(dir, "manifest.md");
+  if (fs.existsSync(file)) return false;
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(file, [
+    `# ${ticket} — what was checked`,
+    "",
+    "Cases below were drawn in ai-qa studio and compiled into this folder. A case",
+    "is evidence only once it has run; until then its RESULT is BLOCKED and says so.",
+    "",
+    "COVERAGE:",
+    "- security: (decide — the TC_n that covered it, or \"n/a — <why it does not apply here>\")",
+    "- accessibility: (decide — the TC_n that covered it, or \"n/a — <why it does not apply here>\")",
+    "",
+    "<!-- ai-qa:index -->",
+    "<!-- /ai-qa:index -->",
+    "",
+  ].join("\n"));
+  return true;
+}
+
+function refreshIndex(root, ticket, env) {
+  if (!fs.existsSync(path.join(root, ".ai-qa/scripts/evd_index.py"))) return;
+  runSync(root, ["python3", ".ai-qa/scripts/evd_index.py", "--evd", path.posix.join("evd", ticket)], env, 60_000);
+}
+
+function gate(root, ticket, env) {
+  const r = runSync(root, ["python3", ".ai-qa/scripts/evd_check.py", "--evd", path.posix.join("evd", ticket)], env, 120_000);
+  return { ok: r.status === 0, text: r.out };
+}
+
+/** Rewrite the RESULT/ACTUAL block of a compiled case manifest after a run. */
+function recordRun(root, caseDir, outcome) {
+  const file = path.join(root, caseDir, "manifest.md");
+  if (!fs.existsSync(file)) return;
+  let lines = fs.readFileSync(file, "utf8").split("\n").filter((l) => !/^(REASON|UNBLOCK|RAN-AT):/.test(l));
+  const set = (key, value) => {
+    const i = lines.findIndex((l) => l.startsWith(key + ":"));
+    if (i >= 0) lines[i] = `${key}: ${value}`; else lines.splice(1, 0, `${key}: ${value}`);
+  };
+  set("RESULT", outcome.result);
+  set("ACTUAL", outcome.actual || "(no output recorded)");
+  const ri = lines.findIndex((l) => l.startsWith("RESULT:"));
+  const extra = [`RAN-AT: ${new Date().toISOString()}${outcome.env ? ` · env ${outcome.env}` : ""}`];
+  if (outcome.result === "BLOCKED") extra.push(`REASON: ${outcome.reason || "a step could not start"}`, `UNBLOCK: ${outcome.unblock || "bring the environment up and run again"}`);
+  lines.splice(ri + 1, 0, ...extra);
+  fs.writeFileSync(file, lines.join("\n"));
+}
+
+const PLACEHOLDER = /\{\{\s*last\.([A-Za-z0-9_]+)\s*\}\}/g;
+function fillPlaceholders(str, last) {
+  return String(str).replace(PLACEHOLDER, (_, f) => (last && last[f] !== undefined ? String(last[f]) : ""));
+}
+
+/** Run compiled steps one by one, streaming output; FAIL continues (evidence
+ * and clean-up still happen), BLOCKED stops. */
+async function runSteps(root, plan, env, send, signal) {
+  const outcomes = [];
+  let last = null;
+  let blocked = false;
+  for (const step of plan.steps) {
+    if (signal.aborted) break;
+    if (blocked && step.kind !== "cleanup") { outcomes.push({ id: step.id, kind: step.kind, label: step.label, status: "skipped" }); continue; }
+    let argv = step.argv.slice();
+    if (step.placeholders) {
+      argv = argv.map((a) => fillPlaceholders(a, last));
+      if (step.bodyFile) {
+        const abs = path.join(root, step.bodyFile);
+        try { fs.writeFileSync(abs, fillPlaceholders(fs.readFileSync(abs, "utf8"), last)); } catch { /* keep the template */ }
+      }
+    }
+    send({ type: "step", id: step.id, label: step.label, status: "start", argv });
+    const code = await new Promise((resolve) => {
+      const child = spawn(argv[0], argv.slice(1), { cwd: root, env: { ...process.env, ...env, ...(step.env || {}) }, stdio: ["ignore", "pipe", "pipe"] });
+      let text = "";
+      const onData = (chunk) => { const s = String(chunk); text += s; send({ type: "out", id: step.id, text: s }); };
+      child.stdout.on("data", onData);
+      child.stderr.on("data", onData);
+      child.on("error", (e) => { send({ type: "out", id: step.id, text: `could not start: ${e.message}\n` }); resolve({ code: 2, text }); });
+      child.on("close", (code) => resolve({ code, text }));
+      signal.addEventListener("abort", () => { try { child.kill("SIGTERM"); } catch { /* gone */ } }, { once: true });
+    });
+    const status = code.code === 0 ? "ok" : code.code === 2 ? "blocked" : "fail";
+    outcomes.push({ id: step.id, kind: step.kind, label: step.label, status, code: code.code, text: code.text });
+    send({ type: "step", id: step.id, label: step.label, status, code: code.code });
+    if ((step.kind === "api" || step.kind === "cleanup") && step.outDir) {
+      try { const r = JSON.parse(fs.readFileSync(path.join(root, step.outDir, "response.json"), "utf8")); if (r && r.body && typeof r.body === "object") last = r.body; } catch { /* no body */ }
+    }
+    if (status === "blocked") { blocked = true; if (step.kind === "preflight") break; }
+  }
+  const failed = outcomes.some((o) => o.status === "fail");
+  const anyBlocked = outcomes.some((o) => o.status === "blocked");
+  const result = anyBlocked && !failed ? "BLOCKED" : failed ? "FAIL" : signal.aborted ? "BLOCKED" : "PASS";
+  const actual = outcomes.filter((o) => o.text).map((o) => {
+    const keep = o.text.split("\n").filter((l) => /^(API:|DB:|APP:|EVIDENCE:|EXPECT:|\s+x |BROWSER:|TRACKER:)/.test(l)).map((l) => l.trim());
+    return `${o.label}: ${keep.join(" · ") || (o.status === "ok" ? "ok" : o.status)}`;
+  }).join(" | ");
+  const blockedStep = outcomes.find((o) => o.status === "blocked");
+  return { result, actual: actual.slice(0, 1800), outcomes,
+    reason: blockedStep ? `${blockedStep.label} — ${blockedStep.text.split("\n").find((l) => l.trim()) || "could not start"}`.slice(0, 300) : (signal.aborted ? "the run was stopped from the studio" : ""),
+    unblock: blockedStep && blockedStep.kind === "preflight" ? "start the app (app.start) or correct app.url, then run again" : "fix the environment named in REASON and run again" };
+}
+
+// ---------------------------------------------------------------------------
+// prompts for the engines
+// ---------------------------------------------------------------------------
+function studioSystemNote(state) {
+  return [
+    "You are running inside ai-qa studio, a local web page. The person talking to you may be a QA engineer or a product owner who does not read code.",
+    `Project: ${state.project.name} (${state.project.key}-nnn). Surfaces: ${[].concat(state.project.surfaces).join(", ")}. Environment: ${state.environments.active || "(default)"} → ${state.environments.url || "(app.url unset)"}. Working language: ${state.project.language}.`,
+    "Use the installed workflows (/onboard, /qa, /triage, /regress) exactly as written. Your tools are the lane's gates under .ai-qa/scripts, reading the repo, and writing under evd/ and docs/qa/ — nothing else, by design. Never change product code. Never print a secret.",
+    "Answer in the working language, plainly, and say what you ran. When a step could not run, say BLOCKED and why.",
+  ].join("\n");
+}
+
+function fullSystemPrompt(root, state) {
+  const parts = [studioSystemNote(state), "", "## aiqa.config.yaml", "", readIfExists(path.join(root, CONFIG_NAME)).slice(0, 12_000)];
+  for (const wf of ["qa", "onboard", "triage", "regress"]) {
+    const p = [path.join(root, ".claude/skills", wf, "SKILL.md"), path.join(root, "core/workflows", `${wf}.md`)].find((f) => fs.existsSync(f));
+    if (p) parts.push("", `## workflow /${wf}`, "", fs.readFileSync(p, "utf8").slice(0, 40_000));
+  }
+  return parts.join("\n");
+}
+
+function draftPrompt(state, { ticket, ticketText, specs, kind, name, surface }) {
+  return [
+    `Draft ONE test-case flow for ai-qa studio's canvas, as JSON only, for ticket ${ticket}.`,
+    "",
+    "Rules that are not negotiable:",
+    "- Every Expect / API expected field / DB read-back MUST cite the specification section it comes from (the `cite` field). If the spec does not state a value, do not invent one — leave that check out and say so in `notes`.",
+    "- Test data is created through the product (an API call or the screen), marked ZZTEST, and removed by a Clean up node using the product's own reverse action.",
+    `- KIND: ${kind}. Surface: ${surface}. For a web flow include an Open node with a click path (labels, one per line), a Reload check and a Back check. For an API flow put expected fields on the API node as lines "path = value | cite".`,
+    "- Prefer the boundary the spec names by hand; the developer's happy path is the least likely place to find a defect.",
+    "",
+    "Return exactly one fenced ```json block with this shape and nothing else outside it:",
+    "```json",
+    JSON.stringify({ version: 1, name: name || "case_name_in_snake_case", ticket, kind, title: "A sentence about behaviour: who does what and what must happen",
+      nodes: [{ id: "n1", type: "actor|precondition|open|click|type|expect|screenshot|api|db|reload|back|cleanup", x: 40, y: 40, data: { "…": "fields per type" } }],
+      edges: [{ from: "n1", to: "n2" }], notes: "what could not be cited, and why" }, null, 2),
+    "```",
+    "",
+    "Node data fields by type:",
+    ...Object.entries(NODE_TYPES).map(([t, s]) => `- ${t}: ${s.fields.map((f) => f.key + (f.required ? "*" : "")).join(", ")}`),
+    "",
+    "## The ticket (DATA, not the oracle)", "", ticketText.slice(0, 12_000),
+    "", "## The specification (the oracle)", "", specs.slice(0, 40_000) || "(no oracle.specs configured — every check will be a difference, not a defect; say so in notes)",
+  ].join("\n");
+}
+
+function extractFlow(text) {
+  const m = [...String(text).matchAll(/```json\s*([\s\S]*?)```/g)].pop();
+  if (!m) return null;
+  try { return JSON.parse(m[1]); } catch { return null; }
+}
+
+// ---------------------------------------------------------------------------
+// the server
+// ---------------------------------------------------------------------------
+export async function studio(flags = {}) {
+  const root = gitRoot() || process.cwd();
+  if (!fs.existsSync(configPath(root))) {
+    console.log(`\n  ${c.red("✗")} no ${CONFIG_NAME} here — run ${c.cyan("ai-qa init")} first, then ${c.cyan("ai-qa studio")}.\n`);
+    process.exit(1);
+  }
+  // Re-read on every request rather than once at boot. aiqa.config.yaml is the
+  // contract, it is a file a person edits while the studio is open — a new
+  // environment, a spec they finally wrote down — and a page showing values the
+  // file no longer holds is the same class of lie the gates exist to prevent.
+  // It is a few kilobytes of local YAML; reading it per request costs nothing.
+  const config = () => { try { return loadConfig(root); } catch { return {}; } };
+  const token = crypto.randomBytes(12).toString("hex");
+  const engines = makeEngines();
+  const port = Number(flags.port || 0);
+  const activeEnv = { name: process.env.AIQA_ENV || "" };
+
+  const server = http.createServer(async (req, res) => {
+    const url = new URL(req.url, "http://127.0.0.1");
+    if (!url.pathname.startsWith(`/${token}`)) { res.writeHead(404, { "content-type": "text/plain" }).end("not found"); return; }
+    const route = url.pathname.slice(token.length + 1) || "/";
+    const state = () => projectState(root, config(), activeEnv.name);
+    try {
+      // ---- page + assets -----------------------------------------------------
+      if (req.method === "GET" && (route === "/" || route === "")) {
+        const html = fs.readFileSync(path.join(ASSETS, "index.html"), "utf8")
+          .replace("__STUDIO_BOOT__", JSON.stringify({ token, state: state(), engines: describeEngines(engines), schema: { nodeTypes: NODE_TYPES, kinds: KINDS } }).replace(/</g, "\\u003c"));
+        res.writeHead(200, { "content-type": MIME[".html"], "cache-control": "no-store" }).end(html);
+        return;
+      }
+      if (req.method === "GET" && route.startsWith("/assets/")) {
+        const name = path.basename(route);
+        const abs = path.join(ASSETS, name);
+        if (!fs.existsSync(abs) || !/^[a-z0-9._-]+$/i.test(name)) { res.writeHead(404).end(); return; }
+        res.writeHead(200, { "content-type": MIME[path.extname(name)] || "application/octet-stream", "cache-control": "no-store" }).end(fs.readFileSync(abs));
+        return;
+      }
+
+      // ---- state -------------------------------------------------------------
+      if (req.method === "GET" && route === "/api/state") { json(res, 200, { state: state(), engines: describeEngines(engines) }); return; }
+      if (req.method === "POST" && route === "/api/env") {
+        const body = JSON.parse((await readBody(req)) || "{}");
+        const st = state();
+        if (body.name && !st.environments.names.includes(body.name)) { json(res, 400, { error: "unknown environment" }); return; }
+        activeEnv.name = body.name || "";
+        json(res, 200, { state: state() });
+        return;
+      }
+      if (req.method === "GET" && route === "/api/ticket") {
+        const key = String(url.searchParams.get("key") || "");
+        if (!TICKET_RE.test(key)) { json(res, 400, { error: "ticket key like SHOP-142" }); return; }
+        const r = runSync(root, ["python3", ".ai-qa/scripts/tracker.py", "get", key, "--json"], envFor(root, config(), activeEnv.name), 60_000);
+        let ticket = null;
+        try { ticket = JSON.parse(r.out.slice(r.out.indexOf("{"))); } catch { /* not json */ }
+        json(res, r.status === 0 ? 200 : r.status === 2 ? 424 : 404, { status: r.status, ticket, raw: r.out.slice(0, 4000) });
+        return;
+      }
+      if (req.method === "GET" && route === "/api/spec") {
+        const specs = [].concat(state().project.oracleSpecs || []).map((rel) => {
+          const abs = inside(root, ".", rel);
+          return { path: rel, text: abs && fs.existsSync(abs) ? fs.readFileSync(abs, "utf8").slice(0, 60_000) : null };
+        });
+        json(res, 200, { specs });
+        return;
+      }
+
+      // ---- flows -------------------------------------------------------------
+      const flowsDir = path.join(root, state().flowsDir);
+      if (req.method === "GET" && route === "/api/flows") {
+        let names = [];
+        try { names = fs.readdirSync(flowsDir).filter((f) => f.endsWith(".json")).map((f) => f.replace(/\.json$/, "")).sort(); } catch { names = []; }
+        json(res, 200, { flows: names });
+        return;
+      }
+      const fm = route.match(/^\/api\/flows\/([a-z0-9][a-z0-9_-]{0,59})$/);
+      if (fm) {
+        const abs = path.join(flowsDir, `${fm[1]}.json`);
+        if (req.method === "GET") { if (!fs.existsSync(abs)) { json(res, 404, { error: "no such flow" }); return; } json(res, 200, { flow: JSON.parse(fs.readFileSync(abs, "utf8")) }); return; }
+        if (req.method === "PUT") {
+          const flow = JSON.parse((await readBody(req)) || "{}");
+          if (flow.name !== fm[1] || !NAME_RE.test(fm[1])) { json(res, 400, { error: "the flow's name must match the URL" }); return; }
+          fs.mkdirSync(flowsDir, { recursive: true });
+          fs.writeFileSync(abs, JSON.stringify(flow, null, 2) + "\n");
+          json(res, 200, { saved: fm[1], validation: validate(flow) });
+          return;
+        }
+        if (req.method === "DELETE") { try { fs.unlinkSync(abs); } catch { /* gone */ } json(res, 200, { deleted: fm[1] }); return; }
+      }
+      if (req.method === "POST" && route === "/api/validate") {
+        const flow = JSON.parse((await readBody(req)) || "{}");
+        json(res, 200, validate(flow));
+        return;
+      }
+      if (req.method === "POST" && route === "/api/compile") {
+        const body = JSON.parse((await readBody(req)) || "{}");
+        const st = state();
+        let out;
+        try { out = compile(body.flow, { ...ctxFor(st), caseNo: body.caseNo }); }
+        catch (e) { json(res, 422, { error: e.message, errors: e.errors || [], warnings: e.warnings || [] }); return; }
+        for (const [rel, text] of Object.entries(out.files)) {
+          const abs = inside(root, "evd", rel);
+          if (!abs) continue;
+          fs.mkdirSync(path.dirname(abs), { recursive: true });
+          fs.writeFileSync(abs, text);
+          if (rel.endsWith(".sh")) fs.chmodSync(abs, 0o755);
+        }
+        seedRootManifest(root, body.flow.ticket);
+        refreshIndex(root, body.flow.ticket, envFor(root, config(), activeEnv.name));
+        json(res, 200, { caseDir: out.caseDir, files: out.files, steps: out.steps, surface: out.surface, warnings: out.warnings, gate: gate(root, body.flow.ticket, envFor(root, config(), activeEnv.name)) });
+        return;
+      }
+      if (req.method === "POST" && route === "/api/run") {
+        const body = JSON.parse((await readBody(req)) || "{}");
+        const st = state();
+        const send = sseStart(res);
+        const ac = new AbortController();
+        req.on("close", () => ac.abort());
+        let out;
+        try { out = compile(body.flow, { ...ctxFor(st), caseNo: body.caseNo }); }
+        catch (e) { send({ type: "error", message: e.message }); send({ type: "done", result: "INVALID" }); res.end(); return; }
+        for (const [rel, text] of Object.entries(out.files)) {
+          const abs = inside(root, "evd", rel); if (!abs) continue;
+          fs.mkdirSync(path.dirname(abs), { recursive: true }); fs.writeFileSync(abs, text);
+          if (rel.endsWith(".sh")) fs.chmodSync(abs, 0o755);
+        }
+        seedRootManifest(root, body.flow.ticket);
+        send({ type: "compiled", caseDir: out.caseDir, steps: out.steps.map((s) => ({ id: s.id, kind: s.kind, label: s.label })), warnings: out.warnings });
+        if (st.environments.writes === "forbidden" && out.steps.some((s) => s.kind === "api" && /^(POST|PUT|PATCH|DELETE)$/i.test(s.argv[2] || ""))) {
+          send({ type: "error", message: `environment ${st.environments.active} is writes: forbidden — a flow that creates data is BLOCKED there, not attempted` });
+          recordRun(root, out.caseDir, { result: "BLOCKED", actual: "not run", reason: `environment ${st.environments.active} forbids writes`, unblock: "run against an environment where test data may be created", env: st.environments.active });
+          refreshIndex(root, body.flow.ticket, envFor(root, config(), activeEnv.name));
+          send({ type: "gate", ...gate(root, body.flow.ticket, envFor(root, config(), activeEnv.name)) });
+          send({ type: "done", result: "BLOCKED" }); res.end(); return;
+        }
+        const env = envFor(root, config(), activeEnv.name);
+        const outcome = await runSteps(root, out, env, send, ac.signal);
+        recordRun(root, out.caseDir, { ...outcome, env: st.environments.active });
+        refreshIndex(root, body.flow.ticket, env);
+        send({ type: "gate", ...gate(root, body.flow.ticket, env) });
+        send({ type: "done", result: outcome.result, caseDir: out.caseDir });
+        res.end();
+        return;
+      }
+
+      // ---- evidence ------------------------------------------------------------
+      if (req.method === "GET" && route === "/api/evd") {
+        json(res, 200, { tree: tree(path.join(root, "evd")) });
+        return;
+      }
+      if (req.method === "GET" && route === "/api/evd/file") {
+        const rel = String(url.searchParams.get("path") || "");
+        const abs = inside(root, "evd", path.posix.join("evd", rel));
+        if (!abs || !fs.existsSync(abs) || fs.statSync(abs).isDirectory()) { res.writeHead(404).end("not found"); return; }
+        const ext = path.extname(abs).toLowerCase();
+        const headers = { "content-type": MIME[ext] || "application/octet-stream", "cache-control": "no-store" };
+        if (ext === ".xlsx") headers["content-disposition"] = `attachment; filename="${path.basename(abs)}"`;
+        res.writeHead(200, headers).end(fs.readFileSync(abs));
+        return;
+      }
+      if (req.method === "POST" && route === "/api/gate") {
+        const body = JSON.parse((await readBody(req)) || "{}");
+        if (!TICKET_RE.test(String(body.ticket || ""))) { json(res, 400, { error: "ticket key like SHOP-142" }); return; }
+        json(res, 200, gate(root, body.ticket, envFor(root, config(), activeEnv.name)));
+        return;
+      }
+      if (req.method === "POST" && route === "/api/export") {
+        const body = JSON.parse((await readBody(req)) || "{}");
+        if (!TICKET_RE.test(String(body.ticket || ""))) { json(res, 400, { error: "ticket key like SHOP-142" }); return; }
+        const r = runSync(root, ["python3", ".ai-qa/scripts/xlsx_export.py", "--evd", path.posix.join("evd", body.ticket)], envFor(root, config(), activeEnv.name), 120_000);
+        const m = r.out.match(/(evd\/[^\s]+\.xlsx)/);
+        json(res, r.status === 2 ? 424 : 200, { status: r.status, text: r.out, file: m ? m[1].replace(/^evd\//, "") : null });
+        return;
+      }
+
+      // ---- chat ----------------------------------------------------------------
+      if (req.method === "POST" && (route === "/api/chat" || route === "/api/draft")) {
+        const body = JSON.parse((await readBody(req)) || "{}");
+        const st = state();
+        const engine = engines.find((e) => e.id === body.engine) || engines[0];
+        const avail = engine.availability();
+        if (!avail.available) { json(res, 424, { error: `${engine.label}: ${avail.reason}` }); return; }
+        const send = sseStart(res);
+        const ac = new AbortController();
+        req.on("close", () => ac.abort());
+        const env = envFor(root, config(), activeEnv.name);
+        let message = String(body.message || "");
+        if (route === "/api/draft") {
+          const key = String(body.ticket || "");
+          if (!TICKET_RE.test(key)) { send({ type: "error", message: "ticket key like SHOP-142" }); send({ type: "done" }); res.end(); return; }
+          const t = runSync(root, ["python3", ".ai-qa/scripts/tracker.py", "get", key], env, 60_000);
+          const specs = [].concat(st.project.oracleSpecs || []).map((rel) => { const abs = inside(root, ".", rel); return abs && fs.existsSync(abs) ? `### ${rel}\n\n${fs.readFileSync(abs, "utf8")}` : ""; }).join("\n\n");
+          message = draftPrompt(st, { ticket: key, ticketText: t.out, specs, kind: body.kind || "acceptance", name: body.name, surface: body.surface || (st.project.surfaces.includes("web") ? "web" : "api") });
+        }
+        const systemPrompt = engine.id === "anthropic" ? fullSystemPrompt(root, st) : studioSystemNote(st);
+        let collected = "";
+        const result = await engine.chat({
+          message, sessionId: route === "/api/draft" ? null : (body.sessionId || null), cwd: root, env, signal: ac.signal, systemPrompt,
+          onEvent: (ev) => { if (ev.type === "text") collected += ev.text; if (ev.type !== "done") send(ev); },
+        });
+        if (route === "/api/draft") {
+          const flow = extractFlow(collected);
+          if (flow) { flow.version = 1; flow.ticket = flow.ticket || body.ticket; flow.kind = KINDS.includes(flow.kind) ? flow.kind : (body.kind || "acceptance"); flow.name = NAME_RE.test(String(flow.name || "")) ? flow.name : (body.name || "drafted_case"); }
+          send({ type: "flow", flow, validation: flow ? validate(flow) : null });
+        }
+        send({ type: "done", sessionId: result.sessionId, cost: result.cost, usage: result.usage || null });
+        res.end();
+        return;
+      }
+
+      json(res, 404, { error: "no such route" });
+    } catch (e) {
+      if (!res.headersSent) json(res, 500, { error: e.message });
+      else { try { res.end(); } catch { /* gone */ } }
+    }
+  });
+
+  await new Promise((resolve, reject) => { server.on("error", reject); server.listen(port, "127.0.0.1", resolve); });
+  const url = `http://127.0.0.1:${server.address().port}/${token}/`;
+  if (!flags["no-open"] && !process.env.AIQA_NO_OPEN) {
+    const cmd = process.platform === "darwin" ? "open" : process.platform === "win32" ? "start" : "xdg-open";
+    try { spawn(cmd, [url], { detached: true, stdio: "ignore", shell: process.platform === "win32" }).unref(); } catch { /* the link still works */ }
+  }
+  const st = projectState(root, config(), activeEnv.name);
+  console.log(`\n  ${c.bold("ai-qa studio")}  ${c.gray(st.project.name)}`);
+  console.log(`  ${c.cyan(url)}`);
+  console.log(`  ${c.gray("local only · the path token is the key · Ctrl+C to stop")}`);
+  for (const e of describeEngines(engines)) console.log(`  ${e.available ? c.green("✓") : c.gray("·")} ${e.label}${e.available ? "" : c.gray(`  — ${e.reason}`)}`);
+  console.log();
+  if (flags.json) console.log(JSON.stringify({ url, port: server.address().port }));
+  return { url, server, close: () => server.close() };
+}

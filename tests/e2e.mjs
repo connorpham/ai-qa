@@ -15,7 +15,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { pkgRoot } from "../src/cli/util.mjs";
 import { hashFile } from "../src/cli/manifest.mjs";
 
@@ -453,6 +453,40 @@ for (const [label, cmd, args] of [
   const appLines = (doc.stdout.match(/^\s*[·✓]\s+app\s/gm) || []).length;
   check(appLines === 1, `doctor ran the app preflight ${appLines} times; it should dedupe to 1`);
   check(/doctor: (GREEN|AMBER)/.test(doc.stdout), `doctor verdict missing:\n${doc.stdout.slice(-400)}`);
+}
+
+// ---- 12. the studio boots, is fenced by its token, and reads this repo --------
+{
+  const studio = spawn(process.execPath, [CLI, "studio", "--port", "0", "--no-open"],
+    { cwd: repo, env: { ...process.env, NO_COLOR: "1", AIQA_NO_OPEN: "1" } });
+  let out = "";
+  const url = await new Promise((resolve) => {
+    const t = setTimeout(() => resolve(null), 25_000);
+    studio.stdout.on("data", (d) => {
+      out += d;
+      const m = out.match(/http:\/\/127\.0\.0\.1:(\d+)\/([a-f0-9]{16,})\//);
+      if (m) { clearTimeout(t); resolve({ base: `http://127.0.0.1:${m[1]}`, token: m[2] }); }
+    });
+  });
+  check(!!url, `studio did not print a URL within 25s:\n${out.slice(0, 400)}`);
+  if (url) {
+    const get = async (p) => { const r = await fetch(`${url.base}${p}`); return { status: r.status, text: await r.text() }; };
+    check((await get("/api/state")).status === 404, "the studio answered a request with no token");
+    check((await get(`/${"0".repeat(24)}/api/state`)).status === 404, "the studio answered a request with the wrong token");
+    const page = await get(`/${url.token}/`);
+    check(page.status === 200 && /window\.STUDIO = \{/.test(page.text), "the studio page did not render with its boot state");
+    check(!/window\.STUDIO = .*<\/script>/s.test(page.text.split("window.STUDIO")[1]?.slice(0, 200) || ""), "the boot state was injected without escaping");
+    const st = JSON.parse((await get(`/${url.token}/api/state`)).text);
+    check(st.state.project.key === "SHOP", `studio read project.key as ${st.state.project.key}`);
+    check(Array.isArray(st.engines) && st.engines.length >= 2, "the studio did not report its engines");
+    check(st.engines.every((e) => typeof e.available === "boolean" && typeof e.reason === "string"),
+      "an engine did not say whether it is available and why");
+    const trav = await get(`/${url.token}/api/evd/file?path=${encodeURIComponent("../../aiqa.config.yaml")}`);
+    check(trav.status === 404, "the evidence viewer served a file outside evd/");
+    const bad = await fetch(`${url.base}/${url.token}/api/compile`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ flow: { name: "x", nodes: [] } }) });
+    check(bad.status === 422, `an invalid flow compiled anyway (${bad.status})`);
+  }
+  studio.kill("SIGTERM");
 }
 
 // ---- report --------------------------------------------------------------------
