@@ -28,6 +28,7 @@ import { makeEngines, describeEngines } from "./studio/engines.mjs";
 import * as projects from "./studio/projects.mjs";
 import * as worktrees from "./studio/worktrees.mjs";
 import * as terminal from "./studio/terminal.mjs";
+import * as agents from "./studio/agents.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ASSETS = path.join(HERE, "studio");
@@ -805,14 +806,21 @@ export async function studio(flags = {}) {
       const resolved = shellOnly ? null : projects.resolveAgent(r.project, projects.detectAgents(), r.flow.agent || null);
       const shell = terminal.shellFor();
       const cmd = shellOnly ? { ok: false, reason: null } : terminal.agentCommand(resolved, r.project);
-      sess = new terminal.TerminalSession({ id: key, argv: shell.argv, cwd: r.cwd,
+      const agentId = cmd.ok ? resolved.id : null;
+      // The agent goes in through the CONSTRUCTOR, not afterwards: its profile
+      // decides which inherited session markers get scrubbed, and start() has
+      // already spawned the pty by the time a later assignment lands.
+      sess = new terminal.TerminalSession({ id: key, argv: shell.argv, cwd: r.cwd, agent: agentId,
         env: { ...envFor(r.cwd, config(r.cwd), activeEnv.name), AIQA_STUDIO: "1" },
         cols: Number(url.searchParams.get("cols")) || 120, rows: Number(url.searchParams.get("rows")) || 36,
         type: cmd.ok ? `${cmd.command}\r` : null }).start();
-      sess.shell = shell.name; sess.agent = cmd.ok ? resolved.id : null; sess.note = cmd.ok ? null : cmd.reason;
+      sess.shell = shell.name; sess.note = cmd.ok ? null : cmd.reason;
+      sess.lane = agents.laneStatus(agentId, r.project.path);
+      sess.hygiene = agents.hygieneText(agentId, sess.cleared);
       terms.set(key, sess);
     }
     const status = (state) => ({ type: "status", state, flow: r.flow.name, shell: sess.shell, agent: sess.agent, typed: sess.typed || (sess.type ? sess.type.trim() : null), note: sess.note,
+      lane: sess.lane || null, hygiene: sess.hygiene || null, cleared: sess.cleared || [],
       cwd: sess.cwd, worktree: r.flow.worktree || null, worktreeMissing: r.worktreeMissing, exitCode: sess.exitCode, startedAt: sess.startedAt });
     sess.clients.add(ws);
     say(status(sess.running ? "running" : "exited"));

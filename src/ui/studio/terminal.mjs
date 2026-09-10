@@ -17,6 +17,7 @@ import path from "node:path";
 import { EventEmitter } from "node:events";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { terminalEnv, profileFor } from "./agents.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 export const BRIDGE = path.join(HERE, "pty_bridge.py");
@@ -40,10 +41,10 @@ const frame = (type, payload) => {
 export class TerminalSession extends EventEmitter {
   /** `type`, when given, is typed into the terminal shortly after it opens —
    *  the agent's command, echoed by the shell for the person to see. */
-  constructor({ id, argv, cwd, env = {}, cols = 120, rows = 36, scrollback = 512 * 1024, type = null, typeDelay = 400 }) {
+  constructor({ id, argv, cwd, env = {}, cols = 120, rows = 36, scrollback = 512 * 1024, type = null, typeDelay = 400, agent = null }) {
     super();
-    Object.assign(this, { id, argv, cwd, env, cols, rows, scrollback, type, typeDelay });
-    this.chunks = []; this.size = 0; this.typed = null;
+    Object.assign(this, { id, argv, cwd, env, cols, rows, scrollback, type, typeDelay, agent });
+    this.chunks = []; this.size = 0; this.typed = null; this.cleared = [];
     this.running = false; this.exitCode = null; this.startedAt = null; this.clients = new Set();
     this.setMaxListeners(50);
   }
@@ -51,11 +52,16 @@ export class TerminalSession extends EventEmitter {
     this.running = true; this.startedAt = new Date().toISOString();
     if (this.type) setTimeout(() => { if (this.running) { this.write(this.type); this.typed = this.type.replace(/\r?\n?$/, ""); } }, this.typeDelay).unref();
     // This terminal is the person's own session, not a child of whatever
-    // launched the studio. If the studio itself was started from inside a
-    // Claude Code session, the nesting markers would make the agent believe it
-    // is a subprocess (and, for one, switch transcript saving off).
-    const env = { ...process.env, ...this.env };
-    delete env.CLAUDECODE; delete env.CLAUDE_CODE_CHILD_SESSION;
+    // launched the studio. If the studio was itself started from inside an
+    // agent's session, the inherited markers would make the new one believe it
+    // is a subprocess — and for Claude Code some of them address the PARENT
+    // session's messaging socket, which this terminal has nothing to do with.
+    //
+    // The scrub happens HERE, at the one place a terminal is created, so no
+    // call site can forget it; which names go is the agent's own profile, and
+    // config and credentials are protected by its `keep` list.
+    const { env, cleared } = terminalEnv(this.agent, process.env, this.env);
+    this.cleared = cleared;
     this.child = spawn("python3", [BRIDGE, "--cols", String(this.cols), "--rows", String(this.rows), "--", ...this.argv],
       { cwd: this.cwd, env, stdio: ["pipe", "pipe", "pipe"] });
     const onData = (chunk) => { this.chunks.push(chunk); this.size += chunk.length; while (this.size > this.scrollback && this.chunks.length > 1) this.size -= this.chunks.shift().length; this.emit("data", chunk); };
@@ -77,7 +83,7 @@ export class TerminalSession extends EventEmitter {
     setTimeout(() => { if (this.running) { try { this.child.kill("SIGKILL"); } catch { /* gone */ } } }, 2000).unref();
   }
   replay() { return Buffer.concat(this.chunks); }
-  status() { return { id: this.id, running: this.running, exitCode: this.exitCode, argv: this.argv, cwd: this.cwd, startedAt: this.startedAt, clients: this.clients.size, cols: this.cols, rows: this.rows }; }
+  status() { return { id: this.id, running: this.running, exitCode: this.exitCode, argv: this.argv, cwd: this.cwd, startedAt: this.startedAt, clients: this.clients.size, cols: this.cols, rows: this.rows, agent: this.agent, cleared: this.cleared, envVerified: profileFor(this.agent).verified }; }
 }
 
 /** The person's own shell, as their terminal app would open it. zsh and bash

@@ -1165,6 +1165,122 @@ for (const [label, cmd, args] of [
   }
 }
 
+
+// ---- the terminal's per-agent profiles ---------------------------------------
+// Three agents, three different needs, and the failure mode of getting this
+// wrong is silent: a terminal that opens in a state its agent did not expect.
+{
+  const agentsMod = await import("../src/ui/studio/agents.mjs");
+  const { PROFILES, DEFAULT_PROFILE, LANE_MARKERS, profileFor, terminalEnv, laneStatus, hygieneText } = agentsMod;
+
+  // Claude Code's markers were read off a live session. The two that matter
+  // most address the PARENT session; inheriting them is the bug this fixes.
+  const claudeSession = {
+    PATH: "/usr/bin", HOME: "/home/x",
+    CLAUDECODE: "1",
+    CLAUDE_CODE_CHILD_SESSION: "1",
+    CLAUDE_CODE_MESSAGING_SOCKET: "/tmp/parent.sock",
+    CLAUDE_CODE_MESSAGING_TOKEN: "parent-token",
+    CLAUDE_CODE_SESSION_ID: "parent-session",
+    CLAUDE_CODE_ENTRYPOINT: "cli",
+    CLAUDE_PID: "123",
+    CLAUDE_EFFORT: "high",
+    CLAUDE_CODE_ENABLE_TELEMETRY: "1",
+    ANTHROPIC_API_KEY: "sk-keep-me",
+  };
+  {
+    const { env, cleared } = terminalEnv("claude", claudeSession);
+    for (const gone of ["CLAUDECODE", "CLAUDE_CODE_CHILD_SESSION", "CLAUDE_CODE_MESSAGING_SOCKET",
+                        "CLAUDE_CODE_MESSAGING_TOKEN", "CLAUDE_CODE_SESSION_ID", "CLAUDE_PID"]) {
+      check(!(gone in env), `claude terminal inherited ${gone} — a fresh terminal must not address the parent session`);
+      check(cleared.includes(gone), `${gone} was removed but not reported in cleared[]`);
+    }
+    // Preferences and credentials are NOT session markers.
+    check(env.CLAUDE_CODE_ENABLE_TELEMETRY === "1", "a telemetry preference was cleared — that is the person's setting, not this session's state");
+    check(env.ANTHROPIC_API_KEY === "sk-keep-me", "a credential was cleared from the terminal environment");
+    check(env.PATH === "/usr/bin" && env.HOME === "/home/x", "terminalEnv damaged the ordinary environment");
+  }
+
+  // A shell that was never started from inside an agent has nothing to clear,
+  // and must not pretend otherwise.
+  {
+    const { cleared } = terminalEnv("claude", { PATH: "/usr/bin" });
+    check(cleared.length === 0, `nothing was inherited, yet cleared[] claims ${JSON.stringify(cleared)}`);
+    check(/not started from inside/.test(hygieneText("claude", cleared)),
+      "the hygiene line should say plainly that there was nothing to clear");
+  }
+
+  // `keep` beats `clear`. This is the whole reason there are two lists: a
+  // config pointer that looks like a session marker must survive.
+  {
+    const withBoth = { ...agentsMod.PROFILES };
+    // Use the real codex profile: CODEX_HOME is config, and must never go.
+    const { env } = terminalEnv("codex", { CODEX_HOME: "/home/x/.codex", OPENAI_API_KEY: "sk-x" });
+    check(env.CODEX_HOME === "/home/x/.codex",
+      "CODEX_HOME was cleared — it points at the person's own config, not at a session");
+    check(env.OPENAI_API_KEY === "sk-x", "a credential was cleared for codex");
+    void withBoth;
+  }
+  {
+    // Synthetic: a name in BOTH lists survives, whatever the profile says.
+    const both = { clear: ["X_THING"], keep: ["X_THING"], verified: false, note: "", lane: null };
+    const saved = PROFILES.__test__;
+    PROFILES.__test__ = both;
+    const { env, cleared } = terminalEnv("__test__", { X_THING: "keep me" });
+    check(env.X_THING === "keep me", "keep did not win over clear");
+    check(cleared.length === 0, "a kept name was reported as cleared");
+    if (saved === undefined) delete PROFILES.__test__; else PROFILES.__test__ = saved;
+  }
+
+  // Honesty: an unverified profile claims NO session markers rather than
+  // inventing plausible ones.
+  for (const id of ["codex", "gemini", "cursor", "copilot"]) {
+    check(PROFILES[id].verified === false, `${id} is marked verified — was a real session actually inspected?`);
+    check(PROFILES[id].clear.length === 0,
+      `${id} is unverified but claims session markers ${JSON.stringify(PROFILES[id].clear)} — that is an invented value`);
+  }
+  check(PROFILES.claude.verified === true, "claude's markers were read off a live session and should be marked verified");
+  check(DEFAULT_PROFILE.clear.length === 0 && DEFAULT_PROFILE.lane === null,
+    "the fallback profile must claim nothing");
+  check(profileFor("nope") === DEFAULT_PROFILE, "an unknown agent should fall back, not throw");
+
+  // Gemini has no adapter in this repo. The profile must say so instead of
+  // implying the workflows are there.
+  check(PROFILES.gemini.lane === null, "gemini has no ai-qa adapter; its profile must not name a lane marker");
+  check(/NOT installed|no adapter/i.test(PROFILES.gemini.note),
+    "gemini's note should say the lane is not installed for it");
+
+  // DRIFT GUARD: every lane marker must be the marker an adapter really writes.
+  // Without this the profile quietly starts pointing at a path nothing creates.
+  for (const [agentId, marker] of Object.entries(LANE_MARKERS)) {
+    const tool = agentId === "claude" ? "claude-code" : agentId;
+    const src = fs.readFileSync(path.join(pkgRoot, "adapters", `${tool}.mjs`), "utf8");
+    const m = /export const marker = "([^"]+)"/.exec(src);
+    check(!!m, `adapters/${tool}.mjs exports no marker`);
+    check(m && m[1] === marker,
+      `LANE_MARKERS.${agentId} is ${JSON.stringify(marker)} but adapters/${tool}.mjs writes ${JSON.stringify(m && m[1])}`);
+  }
+
+  // laneStatus tells three different problems apart.
+  {
+    const tmpL = fs.mkdtempSync(path.join(process.env.TMPDIR || "/tmp", "aiqa-lane-"));
+    check(laneStatus("gemini", tmpL).state === "none", "gemini should report state 'none' — there is no adapter");
+    check(laneStatus("claude", tmpL).state === "missing", "an uninitialised project should report 'missing'");
+    check(/ai-qa init|ai-qa update/.test(laneStatus("claude", tmpL).text),
+      "the 'missing' message should name the command that fixes it");
+    fs.mkdirSync(path.join(tmpL, ".claude", "skills", "qa"), { recursive: true });
+    fs.writeFileSync(path.join(tmpL, ".claude", "skills", "qa", "SKILL.md"), "x");
+    check(laneStatus("claude", tmpL).state === "present", "an installed lane should report 'present'");
+    fs.rmSync(tmpL, { recursive: true, force: true });
+  }
+
+  // Every profile a person can pick must carry a one-line explanation.
+  for (const [id, p] of Object.entries(PROFILES)) {
+    check(typeof p.note === "string" && p.note.length > 20, `${id}: profile note is too short to be useful`);
+    check(Array.isArray(p.keep), `${id}: profile has no keep list`);
+  }
+}
+
 // ---- report -------------------------------------------------------------------
 if (fails.length) {
   console.error(`conformance: ${fails.length} FAILED of ${checks} checks\n`);
