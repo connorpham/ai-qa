@@ -62,8 +62,8 @@
           <label>Case # <input id="flowCase" type="number" min="1" value="1"></label>
           <div class="row">
             <button id="saveFlow" class="primary">Save</button>
-            <button id="autoLayout">Auto-layout</button>
-            <button id="draftFlow" title="Ask the agent to draft this flow from the ticket and the spec">Draft from ticket</button>
+            <button class="bd" id="autoLayout">Auto-layout</button>
+            <button class="bd" id="draftFlow" title="Ask the agent to draft this flow from the ticket and the spec">Draft from ticket</button>
           </div>
         </div>
         <div class="validation" id="validation"></div>
@@ -73,9 +73,9 @@
 
     <div class="tab" id="tab-run">
       <div class="run-head">
-        <button id="compileBtn">Compile</button>
+        <button class="bd" id="compileBtn">Compile</button>
         <button id="runBtn" class="primary">Run for real</button>
-        <button id="stopBtn" disabled>Stop</button>
+        <button class="bd" id="stopBtn" disabled>Stop</button>
         <span class="run-status" id="runStatus"></span>
       </div>
       <div class="run-grid">
@@ -87,8 +87,8 @@
 
     <div class="tab" id="tab-evidence">
       <div class="run-head">
-        <button id="gateBtn">Run the gate (evd_check)</button>
-        <button id="exportBtn">Export spreadsheet</button>
+        <button class="bd" id="gateBtn">Run the gate (evd_check)</button>
+        <button class="bd" id="exportBtn">Export spreadsheet</button>
         <span class="run-status" id="evdStatus"></span>
       </div>
       <div class="evd-view" id="evdView"><div class="muted">Pick a file in the Evidence list on the left.</div></div>
