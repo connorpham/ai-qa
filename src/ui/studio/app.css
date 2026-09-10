@@ -352,3 +352,36 @@ code { font-family: var(--mono); font-size: 11.5px; background: color-mix(in srg
 ::-webkit-scrollbar-thumb { background: color-mix(in srgb, var(--muted-foreground) 32%, transparent); border-radius: 999px; border: 3px solid transparent; background-clip: content-box; }
 ::-webkit-scrollbar-thumb:hover { background: color-mix(in srgb, var(--muted-foreground) 52%, transparent); background-clip: content-box; }
 ::-webkit-scrollbar-track { background: transparent; }
+
+/* ---- dialogs, project + worktree chrome -------------------------------- */
+.warnchip {
+  height: 22px; display: inline-flex; align-items: center; padding: 0 8px;
+  background: var(--fail-tint); color: var(--fail); border-radius: 999px; font-size: 11px; font-weight: 500;
+}
+.scrim { position: fixed; inset: 0; background: rgba(10, 10, 10, .45); z-index: 40; }
+.dialog {
+  position: fixed; z-index: 41; top: 50%; left: 50%; transform: translate(-50%, -50%);
+  width: 460px; max-width: calc(100vw - 32px); max-height: calc(100vh - 64px); overflow: auto;
+  background: var(--popover); border: 1px solid var(--border); border-radius: var(--r-lg);
+  padding: 14px; display: flex; flex-direction: column; gap: 10px;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, .28);
+}
+.dialog h3 { margin: 0; font-size: 13px; font-weight: 600; }
+.dialog .dlg-note { margin: 0; font-size: 11px; font-weight: 400; color: var(--muted-foreground); line-height: 1.5; }
+.dialog .dlg-actions { margin-top: 2px; }
+.dialog label.cb { flex-direction: row; align-items: center; gap: 6px; font-size: 11.5px; color: var(--foreground); font-weight: 400; }
+.dialog label.cb input { width: auto; height: auto; }
+.probe { font-size: 11px; font-weight: 400; line-height: 1.5; padding: 7px 9px; border-radius: var(--r-md); color: var(--muted-foreground); background: color-mix(in srgb, var(--muted) 45%, transparent); }
+.probe.ok { color: var(--pass); background: var(--pass-tint); }
+.probe.bad { color: var(--fail); background: var(--fail-tint); }
+.probe.warn { color: var(--warn); background: var(--warn-tint); }
+.probe:empty { display: none; }
+.list li .sub { font-size: 10.5px; color: var(--muted-foreground); font-weight: 400; font-family: var(--mono); }
+.list li .col { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.list li .col span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.list li .badge { font-size: 10px; padding: 0 5px; height: 16px; display: inline-flex; align-items: center; border-radius: 999px; background: color-mix(in srgb, var(--muted) 70%, transparent); color: var(--muted-foreground); font-weight: 500; }
+
+/* a label whose text contains inline code is still ONE line of label, not two
+ * flex items — the <span> keeps it together and this keeps the code inline. */
+.dialog label > span { display: block; }
+.dialog label code { display: inline; }

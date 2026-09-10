@@ -126,6 +126,167 @@
   ticketInput.addEventListener("change", () => { flow.ticket = ticketInput.value.trim(); scheduleValidate(); scheduleSave(); loadSpecTab(); });
 
   // ---------------------------------------------------------------------------
+  // projects · the agent choice · worktrees
+  // ---------------------------------------------------------------------------
+  let specLoadedFor = null;
+  const dialogs = ["dlgProject", "dlgSettings", "dlgWorktree"];
+  function openDialog(id) {
+    for (const d of dialogs) $(d).hidden = d !== id;
+    $("scrim").hidden = false;
+  }
+  function closeDialogs() { for (const d of dialogs) $(d).hidden = true; $("scrim").hidden = true; }
+  $("scrim").addEventListener("click", closeDialogs);
+  document.querySelectorAll("[data-close]").forEach((b) => b.addEventListener("click", closeDialogs));
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeDialogs(); });
+
+  async function refreshState() {
+    const r = await getJSON("/state");
+    STATE = r.state; ENGINES = r.engines;
+    fillTop(); renderProjects(); renderWorktrees();
+    return STATE;
+  }
+
+  function renderProjects() {
+    const ul = $("projectList"); ul.replaceChildren();
+    const P = STATE.projects || { list: [], activeId: null };
+    for (const p of P.list) {
+      const on = p.id === P.activeId;
+      ul.append(el("li", { class: on ? "on" : "", title: p.path, onclick: async () => {
+        if (p.id === P.activeId) { openSettings(); return; }
+        await sendJSON("/projects/active", { id: p.id });
+        await refreshState(); await loadFlows(null); await loadEvd(); specLoadedFor = null;
+      } },
+        el("div", { class: "col" }, el("span", {}, p.name), el("span", { class: "sub" }, p.path.replace(/^\/Users\/[^/]+/, "~"))),
+        p.agent ? el("span", { class: "badge" }, p.agent) : el("span", { class: "badge", title: "no AI chosen for this project" }, "AI?")));
+    }
+    if (!P.list.length) ul.append(el("li", { class: "muted" }, "no projects — press + add"));
+  }
+
+  function renderWorktrees() {
+    const W = STATE.worktrees || { list: [], activePath: null };
+    const ul = $("wtList"); ul.replaceChildren();
+    const sel = $("wtSel"); sel.replaceChildren();
+    const main = W.list.find((w) => w.isMain);
+    sel.append(el("option", { value: "", selected: !W.activePath }, main ? `${main.branch || main.head || "the checkout"} (project)` : "the project"));
+    for (const w of W.list) {
+      if (w.isMain) continue;
+      sel.append(el("option", { value: w.path, selected: W.activePath === w.path }, `${w.name}${w.branch ? ` · ${w.branch}` : ""}`));
+    }
+    for (const w of W.list) {
+      const on = w.isMain ? !W.activePath : W.activePath === w.path;
+      ul.append(el("li", { class: on ? "on" : "", title: w.path, onclick: async () => {
+        await sendJSON("/worktrees/active", { path: w.isMain ? null : w.path });
+        await refreshState(); await loadFlows(null); await loadEvd(); specLoadedFor = null;
+      } },
+        el("div", { class: "col" },
+          el("span", {}, w.isMain ? "the project checkout" : w.name),
+          el("span", { class: "sub" }, `${w.branch || w.head || "detached"}${w.hasLane ? "" : " · no lane"}`)),
+        w.isMain ? null : el("span", { class: "del muted", title: "Remove this worktree", onclick: async (e) => {
+          e.stopPropagation();
+          try { await sendJSON(`/worktrees/${encodeURIComponent(w.name)}`, {}, "DELETE"); }
+          catch (err) {
+            if (!confirm(`${err.message}\n\nRemove it anyway?`)) return;
+            await fetch(API(`/worktrees/${encodeURIComponent(w.name)}?force=1`), { method: "DELETE" });
+          }
+          await refreshState(); await loadEvd();
+        } }, "✕")));
+    }
+    $("laneChip").hidden = STATE.hasLane !== false;
+  }
+  $("wtSel").addEventListener("change", async (e) => {
+    await sendJSON("/worktrees/active", { path: e.target.value || null });
+    await refreshState(); await loadFlows(null); await loadEvd(); specLoadedFor = null;
+  });
+
+  // -- add a project ------------------------------------------------------------
+  $("addProject").addEventListener("click", () => { $("pjPath").value = ""; $("pjProbe").replaceChildren(); openDialog("dlgProject"); $("pjPath").focus(); });
+  const probePath = debounce(async () => {
+    const v = $("pjPath").value.trim();
+    const box = $("pjProbe");
+    if (!v) { box.className = "probe"; box.replaceChildren(); return; }
+    const i = await sendJSON("/inspect", { path: v });
+    if (!i.exists) { box.className = "probe bad"; box.textContent = "no such folder"; return; }
+    if (!i.isRepo) { box.className = "probe bad"; box.textContent = "not a git repository — run `git init` there first"; return; }
+    box.className = i.hasLane ? "probe ok" : "probe warn";
+    box.textContent = i.hasLane
+      ? `${i.name} · branch ${i.branch || "?"} · the lane is installed`
+      : `${i.name} · branch ${i.branch || "?"} · no aiqa.config.yaml — add it anyway, then run \`ai-qa init\` in that folder. The studio will not install it for you.`;
+  }, 250);
+  $("pjPath").addEventListener("input", probePath);
+  $("pjAdd").addEventListener("click", async () => {
+    try {
+      await sendJSON("/projects", { path: $("pjPath").value.trim() });
+      closeDialogs();
+      await refreshState(); await loadFlows(null); await loadEvd(); specLoadedFor = null;
+    } catch (e) { const b = $("pjProbe"); b.className = "probe bad"; b.textContent = e.message; }
+  });
+
+  // -- which AI this project uses ----------------------------------------------
+  function openSettings() {
+    const p = STATE.projects?.active;
+    if (!p) return;
+    $("stPath").textContent = `${p.name} — ${p.path}`;
+    const sel = $("stAgent"); sel.replaceChildren();
+    sel.append(el("option", { value: "" }, "— not chosen: use the first one the studio can drive —"));
+    for (const a of STATE.agents || []) {
+      const bits = [a.installed ? "installed" : "not installed", a.drive === "stream" ? "drivable" : "needs a command"];
+      sel.append(el("option", { value: a.id, selected: p.agent === a.id }, `${a.label} · ${bits.join(" · ")}`));
+    }
+    $("stCustom").value = p.customCommand || "";
+    $("stModel").value = p.model || "";
+    describeAgent();
+    openDialog("dlgSettings");
+  }
+  function describeAgent() {
+    const id = $("stAgent").value;
+    const a = (STATE.agents || []).find((x) => x.id === id);
+    const box = $("stAgentNote");
+    $("stCustomWrap").hidden = !(a && a.drive === "custom");
+    if (!id) { box.className = "probe"; box.textContent = "The studio will use the first installed agent it knows how to drive. It says which, in the terminal and here."; return; }
+    if (!a) { box.className = "probe bad"; box.textContent = "unknown agent"; return; }
+    if (!a.installed) { box.className = "probe bad"; box.textContent = a.cmd ? `\`${a.cmd}\` is not on PATH — install it, or pick another.` : "ANTHROPIC_API_KEY is not set in the studio's shell."; return; }
+    if (a.drive === "custom") { box.className = "probe warn"; box.textContent = `${a.label} is installed, but the studio has no adapter for its flags. Give the exact command below and it will be run as-is — nothing is guessed.`; return; }
+    box.className = "probe ok"; box.textContent = a.note || `${a.label} is installed and the studio can drive it.`;
+  }
+  $("stAgent").addEventListener("change", describeAgent);
+  $("settingsBtn").addEventListener("click", openSettings);
+  $("stSave").addEventListener("click", async () => {
+    const p = STATE.projects?.active; if (!p) return;
+    await sendJSON(`/projects/${p.id}`, { agent: $("stAgent").value, customCommand: $("stCustom").value.trim(), model: $("stModel").value.trim() });
+    closeDialogs(); await refreshState();
+  });
+  $("stForget").addEventListener("click", async () => {
+    const p = STATE.projects?.active; if (!p) return;
+    if (!confirm(`Forget "${p.name}"?\n\nIt is removed from the studio only — nothing on disk is touched.`)) return;
+    await sendJSON(`/projects/${p.id}`, {}, "DELETE");
+    closeDialogs(); await refreshState(); await loadFlows(null); await loadEvd();
+  });
+
+  // -- a worktree to verify in --------------------------------------------------
+  $("newWorktree").addEventListener("click", async () => {
+    const box = $("wtProbe"); box.className = "probe"; box.replaceChildren();
+    $("wtName").value = ""; $("wtNewBranch").checked = false;
+    const sel = $("wtBase"); sel.replaceChildren(el("option", { value: "" }, "loading branches…"));
+    openDialog("dlgWorktree"); $("wtName").focus();
+    try {
+      const w = await getJSON("/worktrees");
+      sel.replaceChildren();
+      if (w.branches.current) sel.append(el("option", { value: "HEAD", selected: true }, `HEAD · ${w.branches.current} (this checkout)`));
+      for (const b of w.branches.local) sel.append(el("option", { value: b }, b));
+      for (const b of w.branches.remoteOnly) sel.append(el("option", { value: `origin/${b}` }, `origin/${b} — not checked out here yet`));
+    } catch (e) { sel.replaceChildren(el("option", { value: "" }, e.message)); }
+  });
+  $("wtCreate").addEventListener("click", async () => {
+    const box = $("wtProbe");
+    try {
+      const r = await sendJSON("/worktrees", { name: $("wtName").value.trim(), base: $("wtBase").value, newBranch: $("wtNewBranch").checked });
+      closeDialogs();
+      await refreshState(); await loadFlows(null); await loadEvd(); specLoadedFor = null;
+      if (STATE.hasLane === false) alert("The worktree is ready, but it has no aiqa.config.yaml — that commit predates the install.\n\nRun `ai-qa init` inside it, or pick a base that has the lane.");
+    } catch (e) { box.className = "probe bad"; box.textContent = e.body?.error || e.message; }
+  });
+
+  // ---------------------------------------------------------------------------
   // tabs
   // ---------------------------------------------------------------------------
   document.querySelectorAll(".tabs button").forEach((b) => b.addEventListener("click", () => showTab(b.dataset.tab)));
@@ -496,7 +657,6 @@
   // ---------------------------------------------------------------------------
   // ticket & spec tab
   // ---------------------------------------------------------------------------
-  let specLoadedFor = null;
   async function loadSpecTab() {
     const key = ticketInput.value.trim();
     $("ticketKeyLabel").textContent = key;
@@ -583,6 +743,6 @@
 
   // ---------------------------------------------------------------------------
   $("themeBtn").addEventListener("click", () => { themeMode = THEMES[(THEMES.indexOf(themeMode) + 1) % THEMES.length]; applyTheme(themeMode); });
-  fillTop(); renderPalette(); renderInspector(); renderNodes(); setZoom(1); loadFlows(null); loadEvd();
+  fillTop(); renderProjects(); renderWorktrees(); renderPalette(); renderInspector(); renderNodes(); setZoom(1); loadFlows(null); loadEvd();
   $("chatMeta").textContent = ENGINES.find((e) => e.available) ? "ready" : "no engine available";
 })();

@@ -17,6 +17,7 @@
 import http from "node:http";
 import crypto from "node:crypto";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -24,6 +25,8 @@ import { c, gitRoot, readIfExists } from "../cli/util.mjs";
 import { CONFIG_NAME, configPath, loadConfig, get } from "../cli/config.mjs";
 import { compile, validate, NODE_TYPES, KINDS, NAME_RE, TICKET_RE } from "./studio/compile.mjs";
 import { makeEngines, describeEngines } from "./studio/engines.mjs";
+import * as projects from "./studio/projects.mjs";
+import * as worktrees from "./studio/worktrees.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ASSETS = path.join(HERE, "studio");
@@ -295,17 +298,34 @@ function extractFlow(text) {
 // the server
 // ---------------------------------------------------------------------------
 export async function studio(flags = {}) {
-  const root = gitRoot() || process.cwd();
-  if (!fs.existsSync(configPath(root))) {
-    console.log(`\n  ${c.red("✗")} no ${CONFIG_NAME} here — run ${c.cyan("ai-qa init")} first, then ${c.cyan("ai-qa studio")}.\n`);
-    process.exit(1);
+  // The studio spans projects. The folder it was started in is registered as
+  // one if it happens to be a repository, but it is not required to be — and a
+  // project with no lane installed is reported, never fixed behind the user's
+  // back: `init` writes thirty files into someone else's codebase.
+  const startedIn = gitRoot() || process.cwd();
+  let reg = projects.load();
+  if (fs.existsSync(path.join(startedIn, ".git")) || gitRoot()) {
+    try { projects.add(reg, startedIn); projects.save(reg); } catch { /* not a repo: the UI asks for one */ }
   }
+  /** The active worktree, per project id. A choice about where work happens,
+   *  so it lives in memory for this session rather than in the registry. */
+  const wtByProject = new Map();
+  const activeProject = () => projects.active(reg);
+  const activeWorktree = () => {
+    const p = activeProject();
+    if (!p) return null;
+    const w = wtByProject.get(p.id);
+    return w && fs.existsSync(w) ? w : null;
+  };
+  /** Where everything runs: the chosen worktree, else the project itself. */
+  const cwd = () => activeWorktree() || activeProject()?.path || startedIn;
+
   // Re-read on every request rather than once at boot. aiqa.config.yaml is the
   // contract, it is a file a person edits while the studio is open — a new
   // environment, a spec they finally wrote down — and a page showing values the
   // file no longer holds is the same class of lie the gates exist to prevent.
   // It is a few kilobytes of local YAML; reading it per request costs nothing.
-  const config = () => { try { return loadConfig(root); } catch { return {}; } };
+  const config = (root) => { try { return loadConfig(root); } catch { return {}; } };
   const token = crypto.randomBytes(12).toString("hex");
   const engines = makeEngines();
   const port = Number(flags.port || 0);
@@ -315,7 +335,32 @@ export async function studio(flags = {}) {
     const url = new URL(req.url, "http://127.0.0.1");
     if (!url.pathname.startsWith(`/${token}`)) { res.writeHead(404, { "content-type": "text/plain" }).end("not found"); return; }
     const route = url.pathname.slice(token.length + 1) || "/";
-    const state = () => projectState(root, config(), activeEnv.name);
+    const root = cwd();                       // every route below is relative to this
+    // Resolved inside state(), not captured from the handler's `root`: a route
+    // that CHANGES the active worktree must report where work happens now, not
+    // where it happened when the request arrived.
+    const state = () => {
+      const p = activeProject();
+      const at = cwd();
+      const st = projectState(at, config(at), activeEnv.name);
+      const detected = projects.detectAgents();
+      const wl = p ? worktrees.list(p.path) : { worktrees: [] };
+      const here = activeWorktree();
+      st.cwd = at;
+      st.hasLane = fs.existsSync(configPath(at));
+      st.projects = {
+        list: reg.projects.map((x) => ({ id: x.id, name: x.name, path: x.path, agent: x.agent })),
+        activeId: p?.id || null,
+        active: p ? { ...p, agentResolved: projects.resolveAgent(p, detected) } : null,
+      };
+      st.agents = detected;
+      st.worktrees = {
+        list: wl.worktrees || [],
+        activePath: here,
+        activeName: here ? (wl.worktrees.find((w) => path.resolve(w.path) === path.resolve(here))?.name || path.basename(here)) : null,
+      };
+      return st;
+    };
     try {
       // ---- page + assets -----------------------------------------------------
       if (req.method === "GET" && (route === "/" || route === "")) {
@@ -345,7 +390,7 @@ export async function studio(flags = {}) {
       if (req.method === "GET" && route === "/api/ticket") {
         const key = String(url.searchParams.get("key") || "");
         if (!TICKET_RE.test(key)) { json(res, 400, { error: "ticket key like SHOP-142" }); return; }
-        const r = runSync(root, ["python3", ".ai-qa/scripts/tracker.py", "get", key, "--json"], envFor(root, config(), activeEnv.name), 60_000);
+        const r = runSync(root, ["python3", ".ai-qa/scripts/tracker.py", "get", key, "--json"], envFor(root, config(root), activeEnv.name), 60_000);
         let ticket = null;
         try { ticket = JSON.parse(r.out.slice(r.out.indexOf("{"))); } catch { /* not json */ }
         json(res, r.status === 0 ? 200 : r.status === 2 ? 424 : 404, { status: r.status, ticket, raw: r.out.slice(0, 4000) });
@@ -401,8 +446,8 @@ export async function studio(flags = {}) {
           if (rel.endsWith(".sh")) fs.chmodSync(abs, 0o755);
         }
         seedRootManifest(root, body.flow.ticket);
-        refreshIndex(root, body.flow.ticket, envFor(root, config(), activeEnv.name));
-        json(res, 200, { caseDir: out.caseDir, files: out.files, steps: out.steps, surface: out.surface, warnings: out.warnings, gate: gate(root, body.flow.ticket, envFor(root, config(), activeEnv.name)) });
+        refreshIndex(root, body.flow.ticket, envFor(root, config(root), activeEnv.name));
+        json(res, 200, { caseDir: out.caseDir, files: out.files, steps: out.steps, surface: out.surface, warnings: out.warnings, gate: gate(root, body.flow.ticket, envFor(root, config(root), activeEnv.name)) });
         return;
       }
       if (req.method === "POST" && route === "/api/run") {
@@ -424,11 +469,11 @@ export async function studio(flags = {}) {
         if (st.environments.writes === "forbidden" && out.steps.some((s) => s.kind === "api" && /^(POST|PUT|PATCH|DELETE)$/i.test(s.argv[2] || ""))) {
           send({ type: "error", message: `environment ${st.environments.active} is writes: forbidden — a flow that creates data is BLOCKED there, not attempted` });
           recordRun(root, out.caseDir, { result: "BLOCKED", actual: "not run", reason: `environment ${st.environments.active} forbids writes`, unblock: "run against an environment where test data may be created", env: st.environments.active });
-          refreshIndex(root, body.flow.ticket, envFor(root, config(), activeEnv.name));
-          send({ type: "gate", ...gate(root, body.flow.ticket, envFor(root, config(), activeEnv.name)) });
+          refreshIndex(root, body.flow.ticket, envFor(root, config(root), activeEnv.name));
+          send({ type: "gate", ...gate(root, body.flow.ticket, envFor(root, config(root), activeEnv.name)) });
           send({ type: "done", result: "BLOCKED" }); res.end(); return;
         }
-        const env = envFor(root, config(), activeEnv.name);
+        const env = envFor(root, config(root), activeEnv.name);
         const outcome = await runSteps(root, out, env, send, ac.signal);
         recordRun(root, out.caseDir, { ...outcome, env: st.environments.active });
         refreshIndex(root, body.flow.ticket, env);
@@ -456,13 +501,13 @@ export async function studio(flags = {}) {
       if (req.method === "POST" && route === "/api/gate") {
         const body = JSON.parse((await readBody(req)) || "{}");
         if (!TICKET_RE.test(String(body.ticket || ""))) { json(res, 400, { error: "ticket key like SHOP-142" }); return; }
-        json(res, 200, gate(root, body.ticket, envFor(root, config(), activeEnv.name)));
+        json(res, 200, gate(root, body.ticket, envFor(root, config(root), activeEnv.name)));
         return;
       }
       if (req.method === "POST" && route === "/api/export") {
         const body = JSON.parse((await readBody(req)) || "{}");
         if (!TICKET_RE.test(String(body.ticket || ""))) { json(res, 400, { error: "ticket key like SHOP-142" }); return; }
-        const r = runSync(root, ["python3", ".ai-qa/scripts/xlsx_export.py", "--evd", path.posix.join("evd", body.ticket)], envFor(root, config(), activeEnv.name), 120_000);
+        const r = runSync(root, ["python3", ".ai-qa/scripts/xlsx_export.py", "--evd", path.posix.join("evd", body.ticket)], envFor(root, config(root), activeEnv.name), 120_000);
         const m = r.out.match(/(evd\/[^\s]+\.xlsx)/);
         json(res, r.status === 2 ? 424 : 200, { status: r.status, text: r.out, file: m ? m[1].replace(/^evd\//, "") : null });
         return;
@@ -472,13 +517,19 @@ export async function studio(flags = {}) {
       if (req.method === "POST" && (route === "/api/chat" || route === "/api/draft")) {
         const body = JSON.parse((await readBody(req)) || "{}");
         const st = state();
-        const engine = engines.find((e) => e.id === body.engine) || engines[0];
+        // the custom engine's command is a per-project setting, so refresh it
+        const custom = engines.find((e) => e.id === "custom");
+        if (custom) custom.template = activeProject()?.customCommand || null;
+        const chosen = body.engine || projects.resolveAgent(activeProject()).id;
+        const engine = engines.find((e) => e.id === chosen)
+          || engines.find((e) => e.id === "custom" && activeProject()?.customCommand)
+          || engines[0];
         const avail = engine.availability();
         if (!avail.available) { json(res, 424, { error: `${engine.label}: ${avail.reason}` }); return; }
         const send = sseStart(res);
         const ac = new AbortController();
         req.on("close", () => ac.abort());
-        const env = envFor(root, config(), activeEnv.name);
+        const env = envFor(root, config(root), activeEnv.name);
         let message = String(body.message || "");
         if (route === "/api/draft") {
           const key = String(body.ticket || "");
@@ -503,6 +554,96 @@ export async function studio(flags = {}) {
         return;
       }
 
+      // ---- projects ----------------------------------------------------------
+      if (req.method === "GET" && route === "/api/projects") {
+        json(res, 200, { projects: reg.projects, activeId: activeProject()?.id || null, agents: projects.detectAgents({ fresh: url.searchParams.get("fresh") === "1" }) });
+        return;
+      }
+      if (req.method === "POST" && route === "/api/inspect") {
+        const body = JSON.parse((await readBody(req)) || "{}");
+        json(res, 200, projects.inspect(path.resolve(String(body.path || "").replace(/^~(?=$|\/)/, os.homedir()))));
+        return;
+      }
+      if (req.method === "POST" && route === "/api/projects") {
+        const body = JSON.parse((await readBody(req)) || "{}");
+        try {
+          const { project, info, added } = projects.add(reg, body.path, { agent: body.agent || null });
+          projects.save(reg);
+          json(res, 200, { project, info, added, state: state() });
+        } catch (e) { json(res, 400, { error: e.message }); }
+        return;
+      }
+      if (req.method === "POST" && route === "/api/projects/active") {
+        const body = JSON.parse((await readBody(req)) || "{}");
+        if (!reg.projects.some((p) => p.id === body.id)) { json(res, 404, { error: "no such project" }); return; }
+        reg.activeProjectId = body.id;
+        projects.save(reg);
+        json(res, 200, { state: state() });
+        return;
+      }
+      {
+        const m = route.match(/^\/api\/projects\/([0-9a-f]{6,24})$/);
+        if (m && (req.method === "POST" || req.method === "PATCH")) {
+          const body = JSON.parse((await readBody(req)) || "{}");
+          const p = projects.update(reg, m[1], body);
+          if (!p) { json(res, 404, { error: "no such project" }); return; }
+          projects.save(reg);
+          json(res, 200, { project: p, state: state() });
+          return;
+        }
+        if (m && req.method === "DELETE") {
+          const gone = projects.remove(reg, m[1]);
+          projects.save(reg);
+          json(res, gone ? 200 : 404, gone ? { removed: m[1], state: state() } : { error: "no such project" });
+          return;
+        }
+      }
+
+      // ---- worktrees ---------------------------------------------------------
+      if (req.method === "GET" && route === "/api/worktrees") {
+        const p = activeProject();
+        if (!p) { json(res, 400, { error: "no project is active" }); return; }
+        json(res, 200, { ...worktrees.list(p.path), branches: worktrees.branches(p.path), activePath: activeWorktree() });
+        return;
+      }
+      if (req.method === "POST" && route === "/api/worktrees") {
+        const p = activeProject();
+        if (!p) { json(res, 400, { error: "no project is active" }); return; }
+        const body = JSON.parse((await readBody(req)) || "{}");
+        const r = worktrees.create(p.path, { name: body.name, base: body.base || null, newBranch: !!body.newBranch });
+        if (!r.ok) { json(res, 422, { error: r.error }); return; }
+        if (body.activate !== false) wtByProject.set(p.id, r.worktree.path);
+        json(res, 200, { worktree: r.worktree, state: state() });
+        return;
+      }
+      if (req.method === "POST" && route === "/api/worktrees/active") {
+        const p = activeProject();
+        if (!p) { json(res, 400, { error: "no project is active" }); return; }
+        const body = JSON.parse((await readBody(req)) || "{}");
+        if (!body.path) wtByProject.delete(p.id);
+        else {
+          const known = (worktrees.list(p.path).worktrees || []).some((w) => path.resolve(w.path) === path.resolve(body.path));
+          if (!known) { json(res, 404, { error: "not a worktree of this project" }); return; }
+          wtByProject.set(p.id, path.resolve(body.path));
+        }
+        json(res, 200, { state: state() });
+        return;
+      }
+      {
+        const m = route.match(/^\/api\/worktrees\/(.+)$/);
+        if (m && req.method === "DELETE") {
+          const p = activeProject();
+          if (!p) { json(res, 400, { error: "no project is active" }); return; }
+          const name = decodeURIComponent(m[1]);
+          const r = worktrees.remove(p.path, name, { force: url.searchParams.get("force") === "1" });
+          if (!r.ok) { json(res, r.needsForce ? 409 : 422, { error: r.error, needsForce: !!r.needsForce }); return; }
+          const gone = path.resolve(path.join(p.path, worktrees.WORKTREE_SUBDIR, name));
+          if (activeWorktree() && path.resolve(activeWorktree()) === gone) wtByProject.delete(p.id);
+          json(res, 200, { removed: name, state: state() });
+          return;
+        }
+      }
+
       json(res, 404, { error: "no such route" });
     } catch (e) {
       if (!res.headersSent) json(res, 500, { error: e.message });
@@ -516,8 +657,14 @@ export async function studio(flags = {}) {
     const cmd = process.platform === "darwin" ? "open" : process.platform === "win32" ? "start" : "xdg-open";
     try { spawn(cmd, [url], { detached: true, stdio: "ignore", shell: process.platform === "win32" }).unref(); } catch { /* the link still works */ }
   }
-  const st = projectState(root, config(), activeEnv.name);
-  console.log(`\n  ${c.bold("ai-qa studio")}  ${c.gray(st.project.name)}`);
+  const p0 = activeProject();
+  const st = projectState(cwd(), config(cwd()), activeEnv.name);
+  console.log(`\n  ${c.bold("ai-qa studio")}  ${c.gray(p0 ? `${p0.name} · ${p0.path}` : st.project.name)}`);
+  if (p0) {
+    const a = projects.resolveAgent(p0);
+    console.log(`  ${a.reason ? c.yellow("~") : c.green("✓")} agent: ${a.id || "none"}${a.reason ? c.gray(`  — ${a.reason}`) : ""}`);
+    if (!fs.existsSync(configPath(cwd()))) console.log(`  ${c.yellow("~")} no ${CONFIG_NAME} in this checkout ${c.gray("— run `ai-qa init` there; the studio will not do it for you")}`);
+  }
   console.log(`  ${c.cyan(url)}`);
   console.log(`  ${c.gray("local only · the path token is the key · Ctrl+C to stop")}`);
   for (const e of describeEngines(engines)) console.log(`  ${e.available ? c.green("✓") : c.gray("·")} ${e.label}${e.available ? "" : c.gray(`  — ${e.reason}`)}`);

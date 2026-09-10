@@ -322,8 +322,71 @@ export async function runTool(block, { cwd, env = {} }) {
 }
 
 // ---------------------------------------------------------------------------
+// custom command — for the agents the studio has no adapter for
+// ---------------------------------------------------------------------------
+/** Runs a command the project's settings supply, with `{prompt}` substituted.
+ *
+ *  The prompt is passed as its own argv element, never interpolated into a
+ *  shell string, so a ticket description with a backtick in it cannot become a
+ *  command. There is no session: each message is one invocation, and the page
+ *  says so rather than implying the agent remembers.
+ *
+ *  Everything the command prints is relayed as it arrives. Whether the agent
+ *  respected the lane's rules is not something this engine can promise — only
+ *  the gates can, and they still run. */
+export class CustomCommandEngine {
+  id = "custom";
+  label = "Custom command (per project)";
+  constructor({ template = null } = {}) { this.template = template; }
+
+  availability() {
+    if (!this.template) return { available: false, reason: "no command set — put one in the project's settings, using {prompt}" };
+    if (!/\{prompt\}/.test(this.template)) return { available: false, reason: "the command must contain {prompt}" };
+    const argv = splitCommand(this.template);
+    if (!argv.length) return { available: false, reason: "the command is empty" };
+    const bin = spawnSync(process.platform === "win32" ? "where" : "which", [argv[0]], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+    if (bin.status !== 0) return { available: false, reason: `\`${argv[0]}\` is not on PATH` };
+    return { available: true, reason: this.template };
+  }
+
+  chat({ message, cwd, env = {}, onEvent, signal }) {
+    return new Promise((resolve) => {
+      const argv = splitCommand(this.template).map((a) => a.replace("{prompt}", message));
+      onEvent({ type: "status", text: `${argv[0]} · one invocation, no session` });
+      onEvent({ type: "tool", name: argv[0], input: argv.slice(1).join(" ").slice(0, 300) });
+      const child = spawn(argv[0], argv.slice(1), { cwd, env: { ...process.env, ...env }, stdio: ["ignore", "pipe", "pipe"] });
+      let text = "";
+      const relay = (chunk) => { const t = String(chunk); text += t; onEvent({ type: "text", text: t }); };
+      child.stdout.on("data", relay);
+      child.stderr.on("data", relay);
+      child.on("error", (e) => { onEvent({ type: "error", message: `could not start ${argv[0]}: ${e.message}` }); onEvent({ type: "done", text }); resolve({ sessionId: null }); });
+      child.on("close", (code) => {
+        if (code !== 0) onEvent({ type: "error", message: `${argv[0]} exited with ${code}` });
+        onEvent({ type: "done", text, sessionId: null });
+        resolve({ sessionId: null });
+      });
+      if (signal) signal.addEventListener("abort", () => { try { child.kill("SIGTERM"); } catch { /* gone */ } }, { once: true });
+    });
+  }
+}
+
+/** Split a command template into argv, honouring quotes. Deliberately small:
+ *  no pipes, no redirection, no substitution — a template that needs a shell is
+ *  a template that should be a script the person can read. */
+export function splitCommand(str) {
+  const out = [];
+  const re = /"([^"]*)"|'([^']*)'|(\S+)/g;
+  let m;
+  while ((m = re.exec(String(str || "")))) out.push(m[1] ?? m[2] ?? m[3]);
+  return out;
+}
+
 export function makeEngines(opts = {}) {
-  return [new ClaudeCodeEngine(opts.claude || {}), new AnthropicEngine(opts.anthropic || {})];
+  return [
+    new ClaudeCodeEngine(opts.claude || {}),
+    new AnthropicEngine(opts.anthropic || {}),
+    new CustomCommandEngine(opts.custom || {}),
+  ];
 }
 
 export function describeEngines(engines) {

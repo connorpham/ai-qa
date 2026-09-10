@@ -14,13 +14,28 @@
     <datalist id="ticketList"></datalist>
     <label>Environment <select id="envSel"></select></label>
     <label>Engine <select id="engineSel"></select></label>
+    <label>Worktree <select id="wtSel" title="Where the lane runs"></select></label>
     <span class="writes" id="writesBadge" hidden>writes: forbidden</span>
+    <span class="warnchip" id="laneChip" hidden title="This checkout has no aiqa.config.yaml">no lane here</span>
+    <button class="bd" id="settingsBtn" title="Which AI this project uses">Settings</button>
     <button class="theme ghost" id="themeBtn" title="Light / dark / follow the system">◐</button>
   </div>
 </header>
 
 <main class="app">
   <aside class="side">
+    <div class="side-head">
+      <span>Projects</span>
+      <button class="mini" id="addProject" title="Add a git repository">+ add</button>
+    </div>
+    <ul class="list" id="projectList"></ul>
+
+    <div class="side-head">
+      <span>Worktrees</span>
+      <button class="mini" id="newWorktree" title="Create a worktree of this project">+ new</button>
+    </div>
+    <ul class="list" id="wtList"></ul>
+
     <div class="side-head">
       <span>Flows</span>
       <button class="mini" id="newFlow" title="New flow">+ new</button>
@@ -118,6 +133,51 @@
     </form>
   </aside>
 </main>
+
+<div class="scrim" id="scrim" hidden></div>
+
+<div class="dialog" id="dlgProject" hidden>
+  <h3>Add a project</h3>
+  <p class="dlg-note">A git repository on this machine. The studio reads it and runs the lane there; it never installs the lane for you.</p>
+  <label>Path <input id="pjPath" placeholder="~/work/shop" spellcheck="false"></label>
+  <div class="probe" id="pjProbe"></div>
+  <div class="row dlg-actions">
+    <button class="bd" data-close>Cancel</button>
+    <button class="primary" id="pjAdd">Add project</button>
+  </div>
+</div>
+
+<div class="dialog" id="dlgSettings" hidden>
+  <h3>Project settings</h3>
+  <p class="dlg-note" id="stPath"></p>
+  <label>Which AI this project uses
+    <select id="stAgent"></select>
+  </label>
+  <div class="probe" id="stAgentNote"></div>
+  <label id="stCustomWrap" hidden><span>Command to run it — <code>{prompt}</code> is replaced, and passed as its own argument, never through a shell</span>
+    <input id="stCustom" placeholder="codex exec {prompt}" spellcheck="false">
+  </label>
+  <label>Model override <input id="stModel" placeholder="(the agent's default)" spellcheck="false"></label>
+  <div class="row dlg-actions">
+    <button class="bd" id="stForget" title="Remove this project from the studio; nothing on disk is touched">Forget project</button>
+    <span style="flex:1"></span>
+    <button class="bd" data-close>Cancel</button>
+    <button class="primary" id="stSave">Save</button>
+  </div>
+</div>
+
+<div class="dialog" id="dlgWorktree" hidden>
+  <h3>New worktree</h3>
+  <p class="dlg-note">An isolated checkout under <code>.ai-qa/worktrees/</code>, so a verification can hold a branch without disturbing the one you are working in.</p>
+  <label>Name <input id="wtName" placeholder="verify-shop-142" spellcheck="false"></label>
+  <label>What it checks out <select id="wtBase"></select></label>
+  <label class="cb"><input type="checkbox" id="wtNewBranch"> create a new branch with this name, from the ref above</label>
+  <div class="probe" id="wtProbe"></div>
+  <div class="row dlg-actions">
+    <button class="bd" data-close>Cancel</button>
+    <button class="primary" id="wtCreate">Create</button>
+  </div>
+</div>
 
 <script>window.STUDIO = __STUDIO_BOOT__;</script>
 <script src="assets/app.js"></script>
