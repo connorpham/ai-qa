@@ -1,13 +1,12 @@
-// terminal.mjs — a real terminal for the agent, the way Orca does it.
+// terminal.mjs — the machine's own terminal, in the page, the way Orca does it.
 //
 // The first studio talked to Claude Code through `--print --output-format
-// stream-json` and drew the answer itself. That is a fence — the engine can
-// only reach the tools the lane allows — but it is also a translation, and a
-// person who already knows Claude Code recognised nothing in it. Orca's
-// answer is the honest one: give the agent a pseudo-terminal, put a terminal
-// emulator in the page, and let the agent be itself. Every CLI agent becomes
-// usable at once, with its own permission prompts, its own slash commands,
-// its own colours — and `/qa SHOP-142` is typed into the real thing.
+// stream-json` and drew the answer itself; the second wrapped the agent in a
+// pty but still added flags and a system prompt of its own. Both were the
+// studio's invention. What was asked for is plainer, and better: the person's
+// own shell, opened in the flow's checkout, with the chosen agent's command
+// TYPED into it — `claude`, `codex`, `gemini` — exactly as they would type it.
+// Nothing added. Pick another agent and a fresh terminal opens with that one.
 //
 // Two pieces, no dependencies:
 //   the pty      pty_bridge.py — Python's standard library, POSIX only
@@ -39,15 +38,18 @@ const frame = (type, payload) => {
  *  that reattaches sees what happened while it was away — the session lives
  *  in the studio process, not in the browser tab. */
 export class TerminalSession extends EventEmitter {
-  constructor({ id, argv, cwd, env = {}, cols = 120, rows = 36, scrollback = 512 * 1024 }) {
+  /** `type`, when given, is typed into the terminal shortly after it opens —
+   *  the agent's command, echoed by the shell for the person to see. */
+  constructor({ id, argv, cwd, env = {}, cols = 120, rows = 36, scrollback = 512 * 1024, type = null, typeDelay = 400 }) {
     super();
-    Object.assign(this, { id, argv, cwd, env, cols, rows, scrollback });
-    this.chunks = []; this.size = 0;
+    Object.assign(this, { id, argv, cwd, env, cols, rows, scrollback, type, typeDelay });
+    this.chunks = []; this.size = 0; this.typed = null;
     this.running = false; this.exitCode = null; this.startedAt = null; this.clients = new Set();
     this.setMaxListeners(50);
   }
   start() {
     this.running = true; this.startedAt = new Date().toISOString();
+    if (this.type) setTimeout(() => { if (this.running) { this.write(this.type); this.typed = this.type.replace(/\r?\n?$/, ""); } }, this.typeDelay).unref();
     // This terminal is the person's own session, not a child of whatever
     // launched the studio. If the studio itself was started from inside a
     // Claude Code session, the nesting markers would make the agent believe it
@@ -78,26 +80,27 @@ export class TerminalSession extends EventEmitter {
   status() { return { id: this.id, running: this.running, exitCode: this.exitCode, argv: this.argv, cwd: this.cwd, startedAt: this.startedAt, clients: this.clients.size, cols: this.cols, rows: this.rows }; }
 }
 
-/** The argv that starts an agent interactively. Claude Code gets the studio's
- *  note and the project's model; an agent the studio has no adapter for is
- *  simply run as itself — a terminal needs no adapter, that is the point.
- *  The custom command still wins when a project set one (extra flags, a
- *  different binary), minus any `{prompt}` it carried for the chat mode. */
-export function commandFor(resolved, project, { note = "" } = {}) {
-  if (!resolved || !resolved.id) return { ok: false, reason: "no agent is chosen for this flow" };
+/** The person's own shell, as their terminal app would open it. zsh and bash
+ *  get `-l` so the profile runs and PATH is the one they see in a normal
+ *  terminal. AIQA_SHELL overrides — the test suite uses /bin/sh. */
+export function shellFor(env = process.env) {
+  const sh = env.AIQA_SHELL || env.SHELL || (process.platform === "win32" ? "cmd.exe" : "/bin/sh");
+  const name = path.basename(sh);
+  return { argv: name === "zsh" || name === "bash" ? [sh, "-l"] : [sh], name };
+}
+
+/** What gets typed into that shell for an agent: the project's own command if
+ *  it set one, otherwise the agent's program name — exactly what the person
+ *  would type. Nothing is added. */
+export function agentCommand(resolved, project) {
+  if (!resolved || !resolved.id) return { ok: false, reason: "no agent chosen — the shell is yours; pick an agent above to type its command" };
   if (!resolved.installed) return { ok: false, reason: resolved.reason || `${resolved.label || resolved.id} is not installed` };
-  if (!resolved.cmd) return { ok: false, reason: `${resolved.label || resolved.id} has no command-line program — use the Chat mode for it` };
-  if (project?.customCommand && resolved.id === project.agent) {
-    const argv = splitCommand(project.customCommand).filter((a) => !/\{prompt\}/.test(a));
-    if (argv.length) return { ok: true, argv };
+  if (project?.customCommand && project.agent === resolved.id) {
+    const cmd = project.customCommand.replace(/\s*\{prompt\}\s*/g, " ").trim();
+    if (cmd) return { ok: true, command: cmd };
   }
-  if (resolved.id === "claude") {
-    const argv = ["claude"];
-    if (project?.model) argv.push("--model", project.model);
-    if (note) argv.push("--append-system-prompt", note);
-    return { ok: true, argv };
-  }
-  return { ok: true, argv: [resolved.cmd] };
+  if (!resolved.cmd) return { ok: false, reason: `${resolved.label || resolved.id} has no command-line program` };
+  return { ok: true, command: resolved.cmd };
 }
 
 /** Shell-like word splitting with quotes, no expansion, no shell. */

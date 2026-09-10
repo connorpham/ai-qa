@@ -36,11 +36,11 @@ export const CLONES_DIR = path.join(REGISTRY_DIR, "projects");
  *  same class of lie the gates exist to refuse, so the UI shows this column. */
 export const AGENTS = [
   { id: "claude", label: "Claude Code", cmd: "claude", drive: "stream",
-    note: "run with --print --output-format stream-json; uses the skills ai-qa installed in the project" },
-  { id: "codex", label: "OpenAI Codex", cmd: "codex", drive: "custom", note: "e.g. codex exec {prompt}" },
+    note: "typed as `claude` — your own session; the lane's /qa, /triage, /regress, /onboard skills are installed in the project" },
+  { id: "codex", label: "OpenAI Codex", cmd: "codex", drive: "custom" },
   { id: "cursor", label: "Cursor CLI", cmd: "cursor-agent", drive: "custom" },
   { id: "copilot", label: "GitHub Copilot CLI", cmd: "copilot", drive: "custom" },
-  { id: "gemini", label: "Gemini CLI", cmd: "gemini", drive: "custom", note: "e.g. gemini -p {prompt}" },
+  { id: "gemini", label: "Gemini CLI", cmd: "gemini", drive: "custom" },
   { id: "opencode", label: "OpenCode", cmd: "opencode", drive: "custom" },
   { id: "aider", label: "Aider", cmd: "aider", drive: "custom" },
   { id: "amp", label: "Amp", cmd: "amp", drive: "custom" },
@@ -50,8 +50,6 @@ export const AGENTS = [
   { id: "crush", label: "Charm Crush", cmd: "crush", drive: "custom" },
   { id: "qwen-code", label: "Qwen Code", cmd: "qwen", drive: "custom" },
   { id: "kimi", label: "Kimi", cmd: "kimi", drive: "custom" },
-  { id: "anthropic", label: "Anthropic API", cmd: null, drive: "stream",
-    note: "no CLI — needs ANTHROPIC_API_KEY; the method is inlined because there are no skills to load" },
 ];
 
 function which(cmd) {
@@ -67,13 +65,7 @@ let detectCache = null;
  *  but the settings dialog asks on every open. */
 export function detectAgents({ fresh = false } = {}) {
   if (!fresh && detectCache && Date.now() - detectCache.at < 60_000) return detectCache.list;
-  const list = AGENTS.map((a) => {
-    if (a.id === "anthropic") {
-      return { ...a, installed: !!process.env.ANTHROPIC_API_KEY, where: process.env.ANTHROPIC_API_KEY ? "ANTHROPIC_API_KEY is set" : null };
-    }
-    const where = which(a.cmd);
-    return { ...a, installed: !!where, where };
-  });
+  const list = AGENTS.map((a) => { const where = which(a.cmd); return { ...a, installed: !!where, where }; });
   detectCache = { at: Date.now(), list };
   return list;
 }
@@ -192,19 +184,20 @@ export function resolveAgent(project, detected = detectAgents(), override = null
   if (want) {
     const d = byId.get(want);
     if (!d) return { id: want, chosen: true, installed: false, terminal: false, chat: false, reason: `${want} is not an agent the studio knows` };
-    if (!d.installed) return shape(d, { chosen: true, reason: d.id === "anthropic" ? "ANTHROPIC_API_KEY is not set in the studio's shell" : `\`${d.cmd}\` is not on PATH` });
+    if (!d.installed) return shape(d, { chosen: true, reason: `\`${d.cmd}\` is not on PATH` });
     return shape(d, { chosen: true, reason: null });
   }
-  const fallback = detected.find((d) => d.installed && d.cmd) || detected.find((d) => d.installed);
-  if (!fallback) return { id: null, chosen: false, installed: false, terminal: false, chat: false, reason: "no agent is installed on this machine" };
+  const fallback = detected.find((d) => d.installed);
+  if (!fallback) return { id: null, chosen: false, installed: false, terminal: false, chat: false, reason: "no agent CLI is installed on this machine" };
   return shape(fallback, { chosen: false, reason: "no agent chosen for this project — using the first one installed" });
 }
 
-/** Which chat engine runs a resolved agent: the two the studio has adapters
- *  for by their own id, everything else through the custom-command engine. */
+/** Which non-interactive engine can answer for a resolved agent (used by the
+ *  fenced /api/chat): Claude Code's --print adapter for claude, the project's
+ *  own command for everything else. */
 export function engineFor(resolved) {
   if (!resolved || !resolved.id) return null;
-  return resolved.drive === "stream" ? resolved.id : "custom";
+  return resolved.id === "claude" ? "claude-code" : "custom";
 }
 
 // ---------------------------------------------------------------------------

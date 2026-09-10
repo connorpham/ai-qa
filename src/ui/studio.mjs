@@ -255,17 +255,6 @@ function studioSystemNote(state) {
   ].join("\n");
 }
 
-/** What the agent in the embedded terminal is told, once, at launch. Short:
- *  it is a real Claude Code session with the lane's skills installed, and the
- *  workflows already say the rest. */
-function terminalNote(st, r) {
-  return [
-    `You are running inside ai-qa studio's embedded terminal, for flow "${r.flow.name}"${r.flow.ticket ? ` (ticket ${r.flow.ticket})` : ""}, in ${r.cwd}${r.flow.worktree ? ` — an isolated worktree named ${r.flow.worktree}` : ""}.`,
-    `Project: ${st.project.name} (${st.project.key}-nnn). Environment: ${st.environments.active || "(default)"} → ${st.environments.url || "(app.url unset)"}. Working language: ${st.project.language}.`,
-    "Use the installed workflows (/onboard, /qa, /triage, /regress) exactly as written. Never change product code. Never print a secret. When a step could not run, say BLOCKED and why.",
-  ].join(" ");
-}
-
 function fullSystemPrompt(root, state) {
   const parts = [studioSystemNote(state), "", "## aiqa.config.yaml", "", readIfExists(path.join(root, CONFIG_NAME)).slice(0, 12_000)];
   for (const wf of ["qa", "onboard", "triage", "regress"]) {
@@ -493,8 +482,8 @@ export async function studio(flags = {}) {
           else { wtByProject.delete(p.id); worktreeMissing = !!flow.worktree; }
         }
         const st = state();
-        json(res, 200, { flow, state: st, worktreeMissing,
-          agent: projects.resolveAgent(p, st.agents, flow.agent || null) });
+        json(res, 200, { flow, state: st, worktreeMissing, shellOnly: flow.agent === "shell",
+          agent: flow.agent === "shell" ? { id: null, chosen: true, installed: false, shellOnly: true, reason: null } : projects.resolveAgent(p, st.agents, flow.agent || null) });
         return;
       }
       const fm = route.match(/^\/api\/flows\/([a-z0-9][a-z0-9_-]{0,59})$/);
@@ -504,7 +493,8 @@ export async function studio(flags = {}) {
         if (req.method === "PUT") {
           const flow = JSON.parse((await readBody(req)) || "{}");
           if (flow.name !== fm[1] || !NAME_RE.test(fm[1])) { json(res, 400, { error: "the flow's name must match the URL" }); return; }
-          if (flow.agent && !projects.AGENTS.some((a) => a.id === flow.agent)) { json(res, 400, { error: `unknown agent: ${flow.agent}` }); return; }
+          // "shell" is the explicit choice of no agent: the terminal opens, nothing is typed
+          if (flow.agent && flow.agent !== "shell" && !projects.AGENTS.some((a) => a.id === flow.agent)) { json(res, 400, { error: `unknown agent: ${flow.agent}` }); return; }
           if (flow.worktree && !worktrees.NAME_RE.test(flow.worktree)) { json(res, 400, { error: "bad worktree name" }); return; }
           fs.mkdirSync(flowsDir, { recursive: true });
           fs.writeFileSync(abs, JSON.stringify(flow, null, 2) + "\n");
@@ -608,13 +598,20 @@ export async function studio(flags = {}) {
         if (custom) custom.template = activeProject()?.customCommand || null;
         // The flow's agent wins over the project's default; an explicit
         // `engine` in the body (the old top-bar selector, tests) wins over both.
+        // /api/draft is a one-off, non-interactive call made on the person's
+        // behalf — not their terminal — so it takes the first engine that can
+        // answer: Claude Code --print, the Anthropic API, or the project's own
+        // command. /api/chat, the fenced stream, follows the flow's agent.
         const resolved = projects.resolveAgent(activeProject(), st.agents, body.agent || null);
-        const chosen = body.engine || projects.engineFor(resolved) || "claude";
-        const engine = engines.find((e) => e.id === chosen) || engines[0];
-        const avail = engine.availability();
-        if (!body.engine && !resolved.chat) {
-          json(res, 424, { error: `${resolved.label || resolved.id}: ${resolved.reason || "the fenced chat has no adapter for this agent — use the Terminal, or give the exact command in Project settings"}` }); return;
+        let engine;
+        if (route === "/api/draft") {
+          engine = (body.engine && engines.find((e) => e.id === body.engine)) || engines.find((e) => e.availability().available) || engines[0];
+        } else {
+          const chosen = body.engine || projects.engineFor(resolved) || "claude-code";
+          engine = engines.find((e) => e.id === chosen) || engines[0];
+          if (!body.engine && !resolved.chat) { json(res, 424, { error: `${resolved.label || resolved.id}: ${resolved.reason || "the fenced chat has no adapter for this agent"}` }); return; }
         }
+        const avail = engine.availability();
         if (!avail.available) { json(res, 424, { error: `${engine.label}: ${avail.reason}` }); return; }
         const send = sseStart(res);
         const ac = new AbortController();
@@ -763,8 +760,8 @@ export async function studio(flags = {}) {
       // ---- terminals (the socket itself is on `upgrade`, below) ---------------
       if (req.method === "GET" && route === "/api/term") {
         const p = activeProject();
-        json(res, 200, { ...terminal.availability(), sessions: [...terms.values()].filter((s) => !p || s.id.startsWith(`${p.id}:`))
-          .map((s) => ({ flow: s.id.split(":").slice(1).join(":"), running: s.running, exitCode: s.exitCode, startedAt: s.startedAt, clients: s.clients.size, command: s.argv[0], cwd: s.cwd })) });
+        json(res, 200, { ...terminal.availability(), shell: terminal.shellFor().name, sessions: [...terms.values()].filter((s) => !p || s.id.startsWith(`${p.id}:`))
+          .map((s) => ({ flow: s.id.split(":").slice(1).join(":"), running: s.running, exitCode: s.exitCode, startedAt: s.startedAt, clients: s.clients.size, shell: s.shell, agent: s.agent, typed: s.typed, cwd: s.cwd })) });
         return;
       }
       {
@@ -784,9 +781,11 @@ export async function studio(flags = {}) {
     }
   });
 
-  // The agent's terminal: one WebSocket per open page, one pty per flow.
-  // Binary frames are keystrokes and output; text frames are small JSON
-  // controls (resize, kill) and status. `?restart=1` replaces the session.
+  // The flow's terminal: one WebSocket per open page, one pty per flow. The
+  // pty runs the person's own shell in the flow's checkout, and the flow's
+  // agent command is typed into it — nothing added. Binary frames are
+  // keystrokes and output; text frames are small JSON controls (resize, kill)
+  // and status. `?restart=1` replaces the session.
   server.on("upgrade", (req, socket, head) => {
     const url = new URL(req.url, "http://127.0.0.1");
     const refuse = (code, text) => { try { socket.write(`HTTP/1.1 ${code} ${text}\r\nConnection: close\r\n\r\n`); } catch { /* gone */ } socket.destroy(); };
@@ -802,16 +801,19 @@ export async function studio(flags = {}) {
     let sess = terms.get(key);
     if (sess && url.searchParams.get("restart") === "1") { sess.kill(); terms.delete(key); sess = null; }
     if (!sess) {
-      const resolved = projects.resolveAgent(r.project, projects.detectAgents(), r.flow.agent || null);
-      const st = projectState(r.cwd, config(r.cwd), activeEnv.name);
-      const cmd = terminal.commandFor(resolved, r.project, { note: terminalNote(st, r) });
-      if (!cmd.ok) { say({ type: "status", state: "unavailable", reason: cmd.reason, agent: resolved.id || null }); ws.close(); return; }
-      sess = new terminal.TerminalSession({ id: key, argv: cmd.argv, cwd: r.cwd,
+      const shellOnly = r.flow.agent === "shell";
+      const resolved = shellOnly ? null : projects.resolveAgent(r.project, projects.detectAgents(), r.flow.agent || null);
+      const shell = terminal.shellFor();
+      const cmd = shellOnly ? { ok: false, reason: null } : terminal.agentCommand(resolved, r.project);
+      sess = new terminal.TerminalSession({ id: key, argv: shell.argv, cwd: r.cwd,
         env: { ...envFor(r.cwd, config(r.cwd), activeEnv.name), AIQA_STUDIO: "1" },
-        cols: Number(url.searchParams.get("cols")) || 120, rows: Number(url.searchParams.get("rows")) || 36 }).start();
+        cols: Number(url.searchParams.get("cols")) || 120, rows: Number(url.searchParams.get("rows")) || 36,
+        type: cmd.ok ? `${cmd.command}\r` : null }).start();
+      sess.shell = shell.name; sess.agent = cmd.ok ? resolved.id : null; sess.note = cmd.ok ? null : cmd.reason;
       terms.set(key, sess);
     }
-    const status = (state) => ({ type: "status", state, flow: r.flow.name, command: sess.argv[0], cwd: sess.cwd, worktree: r.flow.worktree || null, worktreeMissing: r.worktreeMissing, exitCode: sess.exitCode, startedAt: sess.startedAt });
+    const status = (state) => ({ type: "status", state, flow: r.flow.name, shell: sess.shell, agent: sess.agent, typed: sess.typed || (sess.type ? sess.type.trim() : null), note: sess.note,
+      cwd: sess.cwd, worktree: r.flow.worktree || null, worktreeMissing: r.worktreeMissing, exitCode: sess.exitCode, startedAt: sess.startedAt });
     sess.clients.add(ws);
     say(status(sess.running ? "running" : "exited"));
     const replay = sess.replay();
@@ -848,7 +850,7 @@ export async function studio(flags = {}) {
   console.log(`  ${c.gray("local only · the path token is the key · Ctrl+C to stop")}`);
   for (const e of describeEngines(engines)) console.log(`  ${e.available ? c.green("✓") : c.gray("·")} ${e.label}${e.available ? "" : c.gray(`  — ${e.reason}`)}`);
   const ta = terminal.availability();
-  console.log(`  ${ta.available ? c.green("✓") : c.gray("·")} embedded terminal${ta.available ? c.gray("  — the agent runs in a real pty (python3), one per flow") : c.gray(`  — ${ta.reason}`)}`);
+  console.log(`  ${ta.available ? c.green("✓") : c.gray("·")} terminal${ta.available ? c.gray(`  — ${terminal.shellFor().name} in the flow's checkout, the agent's command typed into it`) : c.gray(`  — ${ta.reason}`)}`);
   console.log();
   if (flags.json) console.log(JSON.stringify({ url, port: server.address().port }));
   return { url, server, close: () => server.close() };

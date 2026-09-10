@@ -110,18 +110,14 @@
         <button data-tab="spec">Ticket &amp; spec</button>
       </nav>
 
-      <!-- The agent, two ways. TERMINAL is the real thing: the agent CLI in a
-           pseudo-terminal, drawn by xterm.js — its own prompts, its own slash
-           commands, its own permission questions. CHAT is the fenced stream
-           for the agents that have an adapter (Claude Code, the Anthropic API),
-           where the studio itself decides which tools the engine may touch. -->
+      <!-- The machine's own terminal, opened in the flow's checkout and drawn
+           by xterm.js. The flow's agent command is typed into it — `claude`,
+           `codex`, `gemini` — exactly as the person would type it, nothing
+           added. Choose another agent and a fresh terminal opens with it. -->
       <div class="tab on" id="tab-agent">
         <div class="agent-pane">
           <div class="agent-bar">
-            <div class="seg small" id="agentMode" title="Terminal: the agent as itself, in this flow's checkout. Chat: the fenced stream.">
-              <button class="on" data-mode="term">Terminal</button>
-              <button data-mode="chat">Chat</button>
-            </div>
+            <label class="inline">Agent <select id="termAgent" title="The agent whose command is typed into this terminal. Changing it opens a fresh terminal."></select></label>
             <div class="quick" id="quick">
               <button data-q="/qa {ticket}">/qa {ticket}</button>
               <button data-q="What does the specification say about {ticket}, and which values could a test cite?">what does the spec say?</button>
@@ -131,19 +127,11 @@
             </div>
             <span style="flex:1"></span>
             <span class="term-status" id="termStatus"></span>
-            <button class="mini" id="termRestart" title="Stop the agent and start it again in this flow's checkout">restart</button>
-            <button class="mini" id="newChat" title="Start a new chat session" hidden>new session</button>
+            <button class="mini" id="termRestart" title="Close this terminal and open a fresh one in the flow's checkout">restart</button>
           </div>
           <div class="term-wrap" id="termWrap">
             <div class="term" id="term"></div>
             <div class="term-note" id="termNote" hidden></div>
-          </div>
-          <div class="chat" id="chatPane" hidden>
-            <div class="messages" id="messages"></div>
-            <form class="composer" id="composer">
-              <textarea id="chatInput" rows="3" placeholder="Ask the agent, or type a workflow: /qa SHOP-142"></textarea>
-              <div class="row"><span class="muted small" id="chatMeta"></span><span style="flex:1"></span><button type="button" class="bd" id="abortBtn" hidden>Stop</button><button type="submit" class="primary" id="sendBtn">Send</button></div>
-            </form>
           </div>
         </div>
       </div>
@@ -177,7 +165,7 @@
             <div class="row">
               <button id="saveFlow" class="primary">Save</button>
               <button class="bd" id="autoLayout">Auto-layout</button>
-              <button class="bd" id="draftFlow" title="Ask the agent to draft this flow from the ticket and the spec">Draft from ticket</button>
+              <button class="bd" id="draftFlow" title="A one-off, non-interactive call (Claude Code --print or the Anthropic API) that drafts these steps from the ticket and the spec. Separate from your terminal.">Draft from ticket</button>
             </div>
           </div>
           <div class="validation" id="validation"></div>
@@ -297,10 +285,9 @@
     <select id="stAgent"></select>
   </label>
   <div class="probe" id="stAgentNote"></div>
-  <label id="stCustomWrap" hidden><span>Command to run it — <code>{prompt}</code> is replaced, and passed as its own argument, never through a shell</span>
-    <input id="stCustom" placeholder="codex exec {prompt}" spellcheck="false">
+  <label id="stCustomWrap"><span>Command typed for it <span class="hint">— optional. What the terminal types instead of the bare program name, e.g. <code>codex --full-auto</code>. Nothing is added to it.</span></span>
+    <input id="stCustom" placeholder="(just the program name)" spellcheck="false">
   </label>
-  <label>Model override <input id="stModel" placeholder="(the agent's default)" spellcheck="false"></label>
   <div class="field">
     <span class="field-label">Worktrees of this project</span>
     <ul class="list compact" id="stWorktrees"></ul>

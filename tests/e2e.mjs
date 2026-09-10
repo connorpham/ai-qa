@@ -469,7 +469,9 @@ for (const [label, cmd, args] of [
   fs.mkdirSync(fakeBin, { recursive: true });
   fs.writeFileSync(path.join(fakeBin, "codex"), "#!/bin/sh\nprintf 'fake codex ready\\n'\nread line\nprintf 'you said: %s\\n' \"$line\"\nexit 0\n", { mode: 0o755 });
   const studio = spawn(process.execPath, [CLI, "studio", "--port", "0", "--no-open"],
-    { cwd: repo, env: { ...process.env, NO_COLOR: "1", AIQA_NO_OPEN: "1", AIQA_HOME: aiqaHome, PATH: `${fakeBin}:${process.env.PATH}` } });
+    // AIQA_SHELL=/bin/sh: a login zsh would re-run the developer's profile and may
+    // rebuild PATH without the fake bin; plain sh inherits the PATH given here.
+    { cwd: repo, env: { ...process.env, NO_COLOR: "1", AIQA_NO_OPEN: "1", AIQA_HOME: aiqaHome, AIQA_SHELL: "/bin/sh", PATH: `${fakeBin}:${process.env.PATH}` } });
   let out = "";
   const url = await new Promise((resolve) => {
     const t = setTimeout(() => resolve(null), 25_000);
@@ -577,27 +579,38 @@ for (const [label, cmd, args] of [
       sock.on("error", (e) => finish(`socket error: ${e.message}`));
       sock.on("close", () => finish("closed"));
     });
+    // the terminal is the shell (sh here), in the flow's checkout, with `codex` typed into it
     const run1 = await wsSession("flow=shop_3_terminal&cols=80&rows=24", {
       onText: (sock) => sock.write(clientFrame(2, "hello\r")),
-      until: ({ statuses, text }) => statuses.some((s) => s.state === "exited") && /you said: hello/.test(text),
+      until: ({ text }) => /you said: hello/.test(text),
     });
     check(run1.httpLine === "HTTP/1.1 101 Switching Protocols", `the terminal socket did not upgrade: ${run1.httpLine} (${run1.why})`);
-    check(run1.statuses.some((s) => s.state === "running" && s.command === "codex"), `the terminal did not report the fake agent running: ${JSON.stringify(run1.statuses.map((s) => [s.state, s.command]))}`);
+    check(run1.statuses.some((s) => s.state === "running" && s.shell === "sh" && s.agent === "codex"), `the terminal did not report the shell with the flow's agent: ${JSON.stringify(run1.statuses.map((s) => [s.state, s.shell, s.agent]))}`);
+    check(/(^|\n|\$ )codex\r?\n/.test(run1.text) || /codex/.test(run1.text.split("fake codex ready")[0] || ""), `the agent's command was not TYPED into the shell where a person can see it: ${JSON.stringify(run1.text.slice(0, 120))}`);
     check(/fake codex ready/.test(run1.text), `the agent's output did not reach the socket: ${JSON.stringify(run1.text.slice(0, 120))}`);
     check(/you said: hello/.test(run1.text), `keystrokes sent over the socket did not reach the agent's pty: ${JSON.stringify(run1.text.slice(0, 200))} (${run1.why})`);
-    check(run1.statuses.some((s) => s.state === "exited" && s.exitCode === 0), `the agent's exit was not reported with its code: ${JSON.stringify(run1.statuses.map((s) => [s.state, s.exitCode]))}`);
-    // reattaching to the finished session replays what it printed, and says it exited
+    check(!run1.statuses.some((s) => s.state === "exited"), "the shell closed when the agent exited — it must stay, as a terminal window would");
+    // reattaching replays what the terminal printed
     const run2 = await wsSession("flow=shop_3_terminal", { until: ({ statuses, text }) => statuses.length > 0 && /you said: hello/.test(text), timeout: 5000 });
-    check(run2.statuses[0]?.state === "exited" && /fake codex ready/.test(run2.text) && /you said: hello/.test(run2.text), `reattaching did not replay the finished session: ${run2.why} ${JSON.stringify(run2.statuses[0])}`);
-    // ?restart=1 starts the agent again
+    check(run2.statuses[0]?.state === "running" && /fake codex ready/.test(run2.text) && /you said: hello/.test(run2.text), `reattaching did not replay the session: ${run2.why} ${JSON.stringify(run2.statuses[0])}`);
+    // ?restart=1 opens a fresh terminal and types the agent again
     const run3 = await wsSession("flow=shop_3_terminal&restart=1", { until: ({ statuses, text }) => statuses.some((s) => s.state === "running") && /fake codex ready/.test(text), timeout: 8000 });
-    check(run3.statuses.some((s) => s.state === "running") && (run3.text.match(/fake codex ready/g) || []).length === 1, `restart did not start a fresh session: ${run3.why} ${JSON.stringify(run3.text.slice(0, 80))}`);
+    check(run3.statuses.some((s) => s.state === "running") && (run3.text.match(/fake codex ready/g) || []).length === 1, `restart did not open a fresh terminal: ${run3.why} ${JSON.stringify(run3.text.slice(0, 80))}`);
     const termList = JSON.parse((await get(`/${url.token}/api/term`)).text);
-    check(termList.available === true && termList.sessions.some((s) => s.flow === "shop_3_terminal" && s.running === true), `the session list does not show the restarted terminal: ${JSON.stringify(termList).slice(0, 200)}`);
+    check(termList.available === true && termList.shell === "sh" && termList.sessions.some((s) => s.flow === "shop_3_terminal" && s.running === true && s.agent === "codex"), `the session list does not show the restarted terminal: ${JSON.stringify(termList).slice(0, 200)}`);
     const flowsAfter = JSON.parse((await get(`/${url.token}/api/flows`)).text).flows.find((f) => f.name === "shop_3_terminal");
     check(flowsAfter?.terminal?.running === true, "the flow list does not carry the terminal's state");
     const killed = await fetch(`${url.base}/${url.token}/api/term/shop_3_terminal`, { method: "DELETE" }).then((r) => r.json());
     check(killed.killed === true, "DELETE /api/term/<flow> did not stop the running agent");
+    // "shell" is the explicit choice of no agent: the terminal opens, nothing is typed
+    const putShell = await put("shop_4_shell", { version: 1, name: "shop_4_shell", ticket: "SHOP-4", kind: "acceptance", agent: "shell", nodes: [], edges: [] });
+    check(putShell.status === 200, `a shell-only flow was refused (${putShell.status})`);
+    const run4 = await wsSession("flow=shop_4_shell", { until: ({ statuses }) => statuses.some((s) => s.state === "running"), timeout: 8000 });
+    await new Promise((r) => setTimeout(r, 900));   // longer than the typing delay
+    const run4b = await wsSession("flow=shop_4_shell", { until: ({ statuses }) => statuses.length > 0, timeout: 5000 });
+    check(run4.statuses.some((s) => s.state === "running" && s.agent === null && s.typed === null), `a shell-only flow still typed an agent: ${JSON.stringify(run4.statuses[0])}`);
+    check(!/fake codex ready/.test(run4b.text), "a shell-only terminal ran the project's default agent anyway");
+    await fetch(`${url.base}/${url.token}/api/term/shop_4_shell`, { method: "DELETE" });
     const noFlow = await wsSession("flow=does_not_exist", { timeout: 3000 });
     check(/ 404 /.test(noFlow.httpLine || ""), `a terminal for a flow that does not exist was opened: ${noFlow.httpLine}`);
   }

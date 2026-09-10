@@ -1132,13 +1132,24 @@ for (const [label, cmd, args] of [
   const partial = T.decodeFrames(Buffer.concat([T.clientFrame(1, "one"), T.clientFrame(1, "two").subarray(0, 3)]));
   check(partial.frames.length === 1 && partial.frames[0].payload.toString() === "one" && partial.rest.length === 3, "a frame split across TCP chunks was not held back whole");
   check(JSON.stringify(T.splitCommand(`codex exec --flag "two words" {prompt}`)) === JSON.stringify(["codex", "exec", "--flag", "two words", "{prompt}"]), "command splitting broke on quotes");
-  const claude = T.commandFor({ id: "claude", cmd: "claude", installed: true }, { model: "opus" }, { note: "N" });
-  check(claude.ok && claude.argv.join(" ") === "claude --model opus --append-system-prompt N", `claude's terminal argv: ${JSON.stringify(claude)}`);
-  check(T.commandFor({ id: "anthropic", cmd: null, installed: true, label: "Anthropic API" }, {}).ok === false, "an agent with no CLI was given a terminal");
-  check(T.commandFor({ id: "codex", cmd: "codex", installed: false, reason: "not on PATH" }, {}).ok === false, "an agent that is not installed was given a terminal");
-  const custom = T.commandFor({ id: "codex", cmd: "codex", installed: true }, { agent: "codex", customCommand: "codex exec --full-auto {prompt}" });
-  check(custom.ok && custom.argv.join(" ") === "codex exec --full-auto", "the project's custom command was not used, minus {prompt}, for the terminal");
-  check(T.commandFor({ id: "gemini", cmd: "gemini", installed: true }, {}).argv.join(" ") === "gemini", "an agent with no adapter must run as itself in the terminal");
+  // the terminal is the person's shell; the agent is TYPED into it, nothing added
+  const zsh = T.shellFor({ SHELL: "/bin/zsh" });
+  check(zsh.argv.join(" ") === "/bin/zsh -l" && zsh.name === "zsh", `zsh must open as a login shell so PATH is the person's: ${JSON.stringify(zsh)}`);
+  check(T.shellFor({ AIQA_SHELL: "/bin/sh", SHELL: "/bin/zsh" }).argv.join(" ") === "/bin/sh", "AIQA_SHELL did not override the shell");
+  check(T.agentCommand({ id: "claude", cmd: "claude", installed: true }, { model: "opus" }).command === "claude", "the terminal must type exactly the agent's command — no flags, no prompt of the studio's");
+  check(T.agentCommand({ id: "gemini", cmd: "gemini", installed: true }, {}).command === "gemini", "an agent with no adapter is typed as itself");
+  check(T.agentCommand({ id: "codex", cmd: "codex", installed: false, reason: "not on PATH" }, {}).ok === false, "an agent that is not installed was typed anyway");
+  check(T.agentCommand(null, {}).ok === false, "no agent must mean: the shell, and nothing typed");
+  const custom = T.agentCommand({ id: "codex", cmd: "codex", installed: true }, { agent: "codex", customCommand: "codex --full-auto {prompt}" });
+  check(custom.ok && custom.command === "codex --full-auto", "the project's own command was not typed verbatim (minus {prompt})");
+  if (T.availability().available) {
+    // typed after start: the shell receives the command as if a person typed it
+    const typed = new T.TerminalSession({ id: "typed", argv: ["sh"], cwd: pkgRoot, cols: 80, rows: 24, type: "printf typed-ok; exit 5\r", typeDelay: 150 }).start();
+    let tout = ""; const texits = [];
+    typed.on("data", (c) => { tout += c.toString(); }); typed.on("exit", (c) => texits.push(c));
+    const t1 = Date.now(); while (!texits.length && Date.now() - t1 < 8000) await new Promise((r) => setTimeout(r, 20));
+    check(/typed-ok/.test(tout) && texits[0] === 5 && typed.typed === "printf typed-ok; exit 5", `the typed command did not run in the shell: ${JSON.stringify(tout.slice(0, 120))} exit ${texits[0]}`);
+  }
   if (T.availability().available) {
     const s = new T.TerminalSession({ id: "t", argv: ["sh", "-c", "printf ready; read x; printf \"got:$x \"; stty size; exit 3"], cwd: pkgRoot, cols: 100, rows: 30 }).start();
     let out = ""; const exits = [];

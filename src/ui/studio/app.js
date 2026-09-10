@@ -162,8 +162,9 @@
   // sidebar: projects, and under each its flows as cards
   // ---------------------------------------------------------------------------
   function flowCard(f, { big = false } = {}) {
-    const a = agentById(f.agent || activeProject()?.agent);
-    const agentId = f.agent || activeProject()?.agent || STATE.projects?.active?.agentResolved?.id;
+    const shellOnly = f.agent === "shell";
+    const a = shellOnly ? null : agentById(f.agent || activeProject()?.agent);
+    const agentId = shellOnly ? null : (f.agent || activeProject()?.agent || STATE.projects?.active?.agentResolved?.id);
     const mainBranch = (STATE.worktrees?.list || []).find((w) => w.isMain)?.branch || "";
     const live = runningFlow === f.name || !!f.terminal?.running;
     const card = el("div", { class: `card${f.name === openName ? " on" : ""}`, title: f.title || f.name, onclick: () => openFlow(f.name) },
@@ -179,7 +180,7 @@
         f.ticket ? el("span", { class: "chip ticket" }, f.ticket) : el("span", { class: "chip" }, "no ticket"),
         el("span", { class: "branch" }, f.worktree ? `worktree ${f.worktree}${f.worktreeExists ? "" : " (missing)"}` : (mainBranch || "the project checkout"))),
       el("div", { class: "l3" },
-        el("span", { class: `agent ${agentId || ""}${a && !a.installed ? " missing" : ""}` }, a ? a.label : (agentId || "agent: project default")),
+        el("span", { class: `agent ${agentId || ""}${a && !a.installed ? " missing" : ""}` }, shellOnly ? "shell only" : a ? a.label : (agentId || "agent: project default")),
         el("span", { class: "when" }, runningFlow === f.name ? "running…" : f.terminal?.running ? "agent running" : f.result ? `${f.result}${f.ranAt ? ` · ${ago(f.ranAt)}` : ""}` : f.steps ? `${f.steps} steps · not run` : "empty")));
     return card;
   }
@@ -250,9 +251,9 @@
     $("flowCrumb").textContent = flow.name || "(unnamed)";
     $("flowTicketChip").textContent = flow.ticket || ""; $("flowTicketChip").hidden = !flow.ticket;
     const a = AGENT || {};
-    $("flowAgentChip").textContent = a.id ? `${agentLabel(a.id)}${a.chosen ? "" : " (project default)"}` : "no agent";
+    $("flowAgentChip").textContent = a.id ? `${agentLabel(a.id)}${a.chosen ? "" : " (project default)"}` : a.shellOnly ? "shell only" : "no agent";
     $("flowAgentChip").className = `chip${a.id && !a.installed ? " warnchip" : ""}`;
-    $("flowAgentChip").title = a.reason || `this flow uses ${agentLabel(a.id)}`;
+    $("flowAgentChip").title = a.reason || (a.id ? `the terminal types ${agentLabel(a.id)}'s command` : "the terminal opens with nothing typed");
     const W = STATE.worktrees || {};
     $("flowWtChip").textContent = W.activeName ? `worktree ${W.activeName}` : `${(W.list || []).find((w) => w.isMain)?.branch || "checkout"} · ${short(STATE.cwd)}`;
     const sum = FLOWS.find((f) => f.name === openName);
@@ -349,27 +350,23 @@
   });
 
   // -- new flow: ticket, name, the AI agent, where it runs ---------------------------
+  /** What the terminal will type for this agent — said before the flow exists. */
   function agentNote(a, project) {
     if (!a) return { cls: "probe", text: "" };
-    if (!a.installed) return { cls: "probe bad", text: a.cmd ? `\`${a.cmd}\` is not on PATH — install it, or pick another agent.` : "ANTHROPIC_API_KEY is not set in the studio's shell." };
-    if (!a.cmd) return { cls: "probe", text: `${a.label} has no command-line program, so it runs in the fenced Chat only — the Terminal needs a CLI.` };
-    if (a.drive === "custom") return project?.customCommand && project?.agent === a.id
-      ? { cls: "probe", text: `Terminal: runs your command from Project settings (${project.customCommand}). Chat: the same command, with {prompt} filled in.` }
-      : { cls: "probe", text: `Terminal: runs \`${a.cmd}\` as itself — no adapter needed. The fenced Chat has no adapter for it; give a command in Project settings if you want that mode too.` };
-    // nothing to add: the radio row already carries the agent's note
-    return { cls: "probe ok", text: "" };
+    if (!a.installed) return { cls: "probe bad", text: `\`${a.cmd}\` is not on PATH — install it, or pick another agent.` };
+    const typed = project?.customCommand && project?.agent === a.id ? project.customCommand.replace(/\s*\{prompt\}\s*/g, " ").trim() : a.cmd;
+    return { cls: "probe", text: `The terminal opens your shell in the flow's checkout and types \`${typed}\` — nothing added.` };
   }
   function renderAgentRadios(container, name, chosenId, { project = null, note = null } = {}) {
     container.replaceChildren();
     const agents = STATE.agents || [];
     const usable = (a) => a.installed;
     const first = agents.filter(usable); const rest = agents.filter((a) => !usable(a));
-    const pick = chosenId && agents.some((a) => a.id === chosenId) ? chosenId : (first.find((a) => a.cmd)?.id || first[0]?.id || agents[0]?.id);
-    const badge = (a) => !a.installed ? "not installed" : !a.cmd ? "chat only" : a.drive === "stream" ? "terminal + chat" : "terminal";
+    const pick = chosenId && agents.some((a) => a.id === chosenId) ? chosenId : (first[0]?.id || agents[0]?.id);
     const row = (a) => el("label", { class: `radio${usable(a) ? "" : " dim"}` },
       el("input", { type: "radio", name, value: a.id, checked: a.id === pick, onchange: () => { if (note) { const n = agentNote(a, project); note.className = n.cls; note.textContent = n.text; } } }),
-      el("span", {}, el("b", {}, a.label, el("span", { class: "badge" }, badge(a))),
-        el("small", {}, a.note || (a.cmd ? `looks for \`${a.cmd}\` on PATH` : ""))));
+      el("span", {}, el("b", {}, a.label, el("span", { class: "badge" }, a.installed ? "installed" : "not installed")),
+        el("small", {}, a.note || `typed as \`${a.cmd}\``)));
     for (const a of first) container.append(row(a));
     if (rest.length) {
       const more = el("div", { class: "radios", hidden: true }); for (const a of rest) more.append(row(a));
@@ -452,7 +449,7 @@
       const bits = [a.installed ? "installed" : "not installed", a.drive === "stream" ? "ready" : "needs a command"];
       sel.append(el("option", { value: a.id, selected: p.agent === a.id }, `${a.label} · ${bits.join(" · ")}`));
     }
-    $("stCustom").value = p.customCommand || ""; $("stModel").value = p.model || "";
+    $("stCustom").value = p.customCommand || "";
     describeAgent();
     const ul = $("stWorktrees"); ul.replaceChildren();
     for (const w of STATE.worktrees?.list || []) {
@@ -468,7 +465,7 @@
   }
   function describeAgent() {
     const id = $("stAgent").value; const a = agentById(id); const box = $("stAgentNote");
-    $("stCustomWrap").hidden = !(a && a.drive === "custom");
+    $("stCustomWrap").hidden = !a;
     if (!id) { box.className = "probe"; box.textContent = "The studio will use the first installed agent it knows how to drive, and say which."; return; }
     if (!a) { box.className = "probe bad"; box.textContent = "unknown agent"; return; }
     const n = agentNote(a, { customCommand: $("stCustom").value.trim() }); box.className = n.cls; box.textContent = n.text;
@@ -478,7 +475,7 @@
   $("settingsBtn").addEventListener("click", openSettings);
   $("stSave").addEventListener("click", async () => {
     const p = activeProject(); if (!p) return;
-    await sendJSON(`/projects/${p.id}`, { agent: $("stAgent").value, customCommand: $("stCustom").value.trim(), model: $("stModel").value.trim() });
+    await sendJSON(`/projects/${p.id}`, { agent: $("stAgent").value, customCommand: $("stCustom").value.trim() });
     closeDialogs(); await refreshState(); await loadFlows();
   });
   $("stForget").addEventListener("click", async () => {
@@ -499,14 +496,14 @@
     if (name === "canvas") { drawEdges(); requestAnimationFrame(() => fitView({ min: 0.6 })); }
     if (name === "spec") loadSpecTab();
     if (name === "evidence") loadEvd();
-    if (name === "agent" && openName && agentMode === "term") requestAnimationFrame(() => attachTerminal());
+    if (name === "agent" && openName) requestAnimationFrame(() => attachTerminal());
   }
 
   // ---------------------------------------------------------------------------
-  // the agent's terminal — the agent CLI in a real pty, drawn by xterm.js
+  // the flow's terminal — the machine's own shell in the flow's checkout, drawn
+  // by xterm.js. The chosen agent's command is typed into it. Nothing added.
   // ---------------------------------------------------------------------------
   let TERM = null, termFit = null, termWs = null, termFor = null, termRO = null;
-  let agentMode = (() => { try { return localStorage.getItem("aiqa.agentMode") || "term"; } catch { return "term"; } })();
   const cssVar = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
   function termTheme() {
     const dark = document.documentElement.getAttribute("data-theme") === "dark";
@@ -524,11 +521,11 @@
     if (TERM) { TERM.dispose(); TERM = null; termFit = null; }
     $("term").replaceChildren(); termFor = null;
   }
-  /** Attach the page to this flow's terminal session. The session lives in the
-   *  studio process: leaving the flow detaches the page, the agent keeps
-   *  running, and coming back replays what it printed meanwhile. */
+  /** Attach the page to this flow's terminal. The session lives in the studio
+   *  process: leaving the flow detaches the page, the shell (and whatever runs
+   *  in it) keeps going, and coming back replays what it printed meanwhile. */
   function attachTerminal({ restart = false } = {}) {
-    if (!openName || agentMode !== "term") return;
+    if (!openName) return;
     if (typeof Terminal === "undefined") { setTermStatus("xterm.js did not load", "unavailable"); return; }
     if (TERM && termFor === openName && !restart) { try { termFit.fit(); } catch { /* not laid out yet */ } TERM.focus(); return; }
     detachTerminal();
@@ -541,7 +538,7 @@
     const ws = new WebSocket(`${proto}://${location.host}/${TOKEN}/api/term?flow=${encodeURIComponent(openName)}&cols=${TERM.cols}&rows=${TERM.rows}${restart ? "&restart=1" : ""}`);
     ws.binaryType = "arraybuffer"; termWs = ws;
     const enc = new TextEncoder();
-    setTermStatus("connecting…");
+    setTermStatus("opening a terminal…");
     ws.onmessage = (e) => {
       if (typeof e.data !== "string") { TERM.write(new Uint8Array(e.data)); return; }
       let m; try { m = JSON.parse(e.data); } catch { return; }
@@ -549,13 +546,12 @@
       if (m.state === "unavailable") {
         setTermStatus("terminal unavailable", "unavailable");
         const n = $("termNote"); n.hidden = false;
-        n.replaceChildren(el("b", {}, "The terminal cannot start this agent here."), el("div", {}, m.reason || ""),
-          el("div", { class: "row" }, el("button", { class: "bd", onclick: () => setAgentMode("chat") }, "Use Chat instead"), el("button", { class: "bd", onclick: openSettings }, "Project settings")));
+        n.replaceChildren(el("b", {}, "No terminal on this machine."), el("div", {}, m.reason || ""));
         return;
       }
       const where = m.worktree ? `worktree ${m.worktree}${m.worktreeMissing ? " (missing → project checkout)" : ""}` : short(m.cwd);
-      if (m.state === "running") setTermStatus(`${m.command} · running in ${where}`, "running");
-      else setTermStatus(`${m.command} exited${m.exitCode != null ? ` (${m.exitCode})` : ""} — restart to run it again`, "exited");
+      if (m.state === "running") setTermStatus(`${m.shell} in ${where}${m.typed ? ` · typed ${m.typed}` : ""}${m.note ? ` · ${m.note}` : ""}`, m.note ? "exited" : "running");
+      else setTermStatus(`terminal closed${m.exitCode != null ? ` (${m.exitCode})` : ""} — restart opens a fresh one`, "exited");
       loadFlows();
     };
     ws.onclose = () => { if (termWs === ws && !$("termStatus").classList.contains("exited")) setTermStatus("disconnected — reopen the flow to reconnect", "exited"); };
@@ -566,7 +562,7 @@
     termRO = new ResizeObserver(refit); termRO.observe($("termWrap"));
     TERM.focus();
   }
-  /** Type into the agent's terminal as a person would: the text, then Enter. */
+  /** Type into the terminal as a person would: the text, then Enter. */
   function termType(text) {
     if (!termWs || termWs.readyState !== 1) return false;
     const enc = new TextEncoder();
@@ -575,14 +571,25 @@
     TERM?.focus();
     return true;
   }
-  function setAgentMode(mode) {
-    agentMode = mode; try { localStorage.setItem("aiqa.agentMode", mode); } catch { /* private window */ }
-    $("agentMode").querySelectorAll("button").forEach((b) => b.classList.toggle("on", b.dataset.mode === mode));
-    $("termWrap").hidden = mode !== "term"; $("chatPane").hidden = mode !== "chat";
-    $("termRestart").hidden = mode !== "term"; $("termStatus").hidden = mode !== "term"; $("newChat").hidden = mode !== "chat";
-    if (mode === "term") requestAnimationFrame(() => attachTerminal()); else detachTerminal();
+  /** The agent picker in the bar: what this machine has, the flow's own selected. */
+  function fillTermAgents() {
+    const sel = $("termAgent"); sel.replaceChildren();
+    // what is in effect: the flow's own choice, else the project's default (AGENT); "shell" is the explicit none
+    const effective = flow.agent === "shell" ? "shell" : (flow.agent || AGENT?.id || "shell");
+    sel.append(el("option", { value: "shell", selected: effective === "shell" }, "— shell only, nothing typed —"));
+    for (const a of (STATE.agents || []).filter((a) => a.installed)) sel.append(el("option", { value: a.id, selected: effective === a.id }, `${a.label}${!flow.agent && AGENT?.id === a.id ? " (project default)" : ""}`));
+    for (const a of (STATE.agents || []).filter((a) => !a.installed)) sel.append(el("option", { value: a.id, disabled: true }, `${a.label} — not installed`));
   }
-  $("agentMode").addEventListener("click", (e) => { const m = e.target.closest("button")?.dataset.mode; if (m) setAgentMode(m); });
+  // Choosing another agent: the flow remembers it, and a fresh terminal opens
+  // with that agent's command typed — the same as closing a terminal window and
+  // opening a new one for the other tool. "shell only" opens one with nothing typed.
+  $("termAgent").addEventListener("change", async () => {
+    flow.agent = $("termAgent").value || "shell";
+    AGENT = flow.agent === "shell" ? { id: null, chosen: true, shellOnly: true } : { ...(agentById(flow.agent) || { id: flow.agent }), chosen: true };
+    if (/^[a-z0-9][a-z0-9_-]{0,59}$/.test(flow.name || "")) await sendJSON(`/flows/${flow.name}`, flow, "PUT").catch(() => {});
+    renderFlowBar(); loadFlows();
+    attachTerminal({ restart: true });
+  });
   $("termRestart").addEventListener("click", () => attachTerminal({ restart: true }));
 
   async function openFlow(name) {
@@ -592,27 +599,8 @@
     nextId = 1 + Math.max(0, ...(flow.nodes || []).map((n) => Number(String(n.id).replace(/\D/g, "")) || 0));
     ticketInput.value = flow.ticket || "";
     showScreen("flow"); renderBars(); renderNodes(); renderInspector(); scheduleValidate();
-    messages.replaceChildren(); sessionsNote();
-    if (r.worktreeMissing) addMsg("studio", "assistant").textContent = `This flow was made for worktree "${flow.worktree}", which no longer exists. It is running in the project checkout instead. Create the worktree again from Project settings if that matters here.`;
+    fillTermAgents();
     showTab("agent");
-    // an agent with no CLI (the API) only has the chat; everything else opens in the terminal
-    setAgentMode(AGENT?.id && !AGENT.cmd ? "chat" : agentMode);
-    if (agentMode === "chat") $("chatInput").focus();
-  }
-  function sessionsNote() {
-    const p = activeProject(); const a = AGENT || {}; const W = STATE.worktrees || {};
-    const where = W.activeName ? `worktree ${W.activeName}` : `${short(STATE.cwd)} (${(W.list || []).find((w) => w.isMain)?.branch || "checkout"})`;
-    const intro = el("div", { class: "intro" });
-    if (a.id && a.chat) {
-      intro.append(`Fenced chat with `, el("b", {}, agentLabel(a.id)), ` in ${where}: the engine can only reach the lane's own tools. `,
-        flow.ticket ? `Start with /qa ${flow.ticket}, or ask what the specification says.` : "Give it a ticket in Steps → Ticket, then start with /qa.");
-    } else {
-      intro.append(el("span", { class: "warnchip" }, "no chat"), ` ${a.reason || `the fenced chat has no adapter for ${agentLabel(a.id)} — use the Terminal, where it runs as itself`}. `, el("a", { href: "#", onclick: (e) => { e.preventDefault(); openSettings(); } }, "Project settings"));
-    }
-    if (STATE.hasLane === false) intro.append(el("div", { class: "notice warn", style: "margin-top:8px" }, el("b", {}, `No aiqa.config.yaml in ${short(STATE.cwd)}.`), el("span", {}, ` Run \`ai-qa init\` there before asking the agent to verify anything; the workflows it needs are installed by init.`)));
-    messages.append(intro);
-    $("chatMeta").textContent = a.id ? `${agentLabel(a.id)} · new session` : "no agent";
-    if (p) $("crumbProject").textContent = p.name;
   }
 
   // ---------------------------------------------------------------------------
@@ -974,74 +962,50 @@
   }
 
   // ---------------------------------------------------------------------------
-  // chat — with the flow's agent, in the flow's worktree
+  // quick commands: typed into the terminal as a person would
   // ---------------------------------------------------------------------------
-  const sessions = {};
-  let chatAbort = null;
-  const messages = $("messages");
-  function addMsg(who, cls) { const m = el("div", { class: `msg ${cls}` }, el("div", { class: "who" }, who), el("div", { class: "bubble" })); messages.append(m); messages.scrollTop = messages.scrollHeight; return m.querySelector(".bubble"); }
-  async function sendChat(text, opts = {}) {
-    const a = AGENT || {};
-    if (!a.id || !a.chat) { addMsg("studio", "assistant").textContent = a.reason ? `${agentLabel(a.id)}: ${a.reason}` : `The fenced chat has no adapter for ${agentLabel(a.id)} — switch to Terminal, where it runs as itself.`; return; }
-    if (!opts.silentUser) addMsg("you", "user").textContent = text;
-    const bubble = addMsg(opts.label || agentLabel(a.id), "assistant");
-    let acc = ""; const live = el("div", { style: "white-space:pre-wrap" }); bubble.append(live);
-    chatAbort = new AbortController(); $("abortBtn").hidden = false; $("sendBtn").disabled = true;
-    const key = `${openName}:${a.id}`;
-    let drafted = null;
-    try {
-      await stream(opts.route || "/chat", { agent: flow.agent || null, message: text, sessionId: sessions[key] || null, ...(opts.body || {}) }, (ev) => {
-        if (ev.type === "text") { acc += ev.text; live.textContent = acc; messages.scrollTop = messages.scrollHeight; }
-        else if (ev.type === "tool") bubble.append(el("div", { class: "tool" }, `▸ ${ev.name}  ${ev.input || ""}`));
-        else if (ev.type === "tool_result") bubble.append(el("div", { class: `tool res${ev.error ? " err" : ""}` }, ev.text));
-        else if (ev.type === "status") bubble.append(el("div", { class: "status" }, ev.text));
-        else if (ev.type === "error") bubble.append(el("div", { class: "tool err" }, ev.message));
-        else if (ev.type === "flow") drafted = ev;
-        else if (ev.type === "done") {
-          if (ev.sessionId && !opts.route) sessions[key] = ev.sessionId;
-          const cost = ev.cost != null ? ` · $${Number(ev.cost).toFixed(3)}` : ev.usage ? ` · ${ev.usage.input}+${ev.usage.output} tokens` : "";
-          $("chatMeta").textContent = `${agentLabel(a.id)}${sessions[key] ? ` · session ${String(sessions[key]).slice(0, 8)}` : ""}${cost}`;
-        }
-      }, chatAbort.signal);
-      if (acc) { live.remove(); bubble.insertAdjacentHTML("afterbegin", md(acc)); }
-    } catch (e) { bubble.append(el("div", { class: "tool err" }, e.name === "AbortError" ? "stopped" : e.message)); }
-    $("abortBtn").hidden = true; $("sendBtn").disabled = false; chatAbort = null;
-    loadFlows(); loadEvd();
-    return drafted;
-  }
-  $("composer").addEventListener("submit", (e) => { e.preventDefault(); const t = $("chatInput").value.trim(); if (!t) return; $("chatInput").value = ""; sendChat(t); });
-  $("chatInput").addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); $("composer").requestSubmit(); } });
-  $("abortBtn").addEventListener("click", () => chatAbort?.abort());
-  $("newChat").addEventListener("click", () => { delete sessions[`${openName}:${AGENT?.id}`]; messages.replaceChildren(); sessionsNote(); });
   $("quick").addEventListener("click", (e) => {
     const q = e.target.closest("button")?.dataset.q; if (!q) return;
     const t = (flow.ticket || ticketInput.value).trim();
     const text = q.replace("{ticket}", t || "<ticket>");
-    if (q.includes("{ticket}") && !t) { $("chatInput").value = text; showTab("canvas"); ticketInput.focus(); return; }
-    if (agentMode === "term") {
-      // typed into the real terminal; a command that wants an argument is left for the person to finish
-      if (!termWs || termWs.readyState !== 1) { attachTerminal(); return; }
-      if (q.endsWith(" ")) { termWs.send(new TextEncoder().encode(text)); TERM?.focus(); return; }
-      termType(text); return;
-    }
-    if (q.endsWith(" ")) { $("chatInput").value = text; $("chatInput").focus(); return; }
-    sendChat(text);
+    if (q.includes("{ticket}") && !t) { showTab("canvas"); ticketInput.focus(); return; }
+    if (!termWs || termWs.readyState !== 1) { attachTerminal(); return; }
+    if (q.endsWith(" ")) { termWs.send(new TextEncoder().encode(text)); TERM?.focus(); return; }   // wants an argument: left for the person to finish
+    termType(text);
   });
 
+  // ---------------------------------------------------------------------------
+  // Draft from ticket — a one-off, non-interactive call (Claude Code --print or
+  // the Anthropic API), separate from the terminal, reported in the inspector.
+  // ---------------------------------------------------------------------------
   $("draftFlow").addEventListener("click", async () => {
     const ticket = (flow.ticket || ticketInput.value).trim(); if (!ticket) { ticketInput.focus(); return alert("Give the flow a ticket first — the draft is built from the ticket and the spec."); }
     const name = flow.name || flowNameFor(ticket, flow.kind);
     const surface = [].concat(STATE.project.surfaces).includes("web") ? "web" : "api";
-    showTab("agent");
-    const drafted = await sendChat(`Draft a ${flow.kind} flow for ${ticket} from the ticket and the specification.`, {
-      route: "/draft", body: { ticket, kind: flow.kind, name, surface }, label: "drafting" });
+    const box = $("validation"); box.replaceChildren(el("div", { class: "warn" }, `drafting ${flow.kind} steps for ${ticket} from the ticket and the spec…`));
+    const log = el("div", { class: "hint", style: "white-space:pre-wrap;max-height:180px;overflow:auto;font-family:var(--mono);font-size:10.5px" }); box.append(log);
+    let drafted = null, text = "";
+    $("draftFlow").disabled = true;
+    try {
+      await stream("/draft", { ticket, kind: flow.kind, name, surface }, (ev) => {
+        if (ev.type === "text") { text += ev.text; log.textContent = text.slice(-1500); log.scrollTop = log.scrollHeight; }
+        else if (ev.type === "tool") { log.textContent += `\n▸ ${ev.name}`; }
+        else if (ev.type === "status") { log.textContent += `\n${ev.text}`; }
+        else if (ev.type === "error") box.append(el("div", { class: "err" }, ev.message));
+        else if (ev.type === "flow") drafted = ev;
+      });
+    } catch (e) { box.append(el("div", { class: "err" }, e.message)); }
+    $("draftFlow").disabled = false;
     if (drafted && drafted.flow) {
-      const f = drafted.flow; f.nodes = (f.nodes || []).map((n, i) => ({ id: n.id || `n${i + 1}`, type: n.type, x: Number(n.x) || 40, y: Number(n.y) || 40 + i * 130, data: n.data || {} })).filter((n) => TYPES[n.type]);
+      const f = drafted.flow;
+      f.nodes = (f.nodes || []).map((n, i) => ({ id: n.id || `n${i + 1}`, type: n.type, x: Number(n.x) || 40, y: Number(n.y) || 40 + i * 130, data: n.data || {} })).filter((n) => TYPES[n.type]);
       f.edges = (f.edges || []).filter((e) => f.nodes.some((n) => n.id === e.from) && f.nodes.some((n) => n.id === e.to));
       flow = { ...flow, ...f, name: flow.name, agent: flow.agent, worktree: flow.worktree, case: flow.case }; selected = { node: null, edge: null };
       nextId = 1 + f.nodes.length; showTab("canvas"); autoLayout(); renderInspector(); scheduleValidate(); scheduleSave();
-      if (f.notes) addMsg("drafting", "assistant").textContent = `Notes from the draft: ${f.notes}`;
-    } else if (drafted) addMsg("studio", "assistant").textContent = "The engine did not return a flow I could read — try again, or build it by hand.";
+      if (f.notes) setTimeout(() => $("validation").append(el("div", { class: "warn" }, `Notes from the draft: ${f.notes}`)), 500);
+    } else {
+      box.append(el("div", { class: "err" }, "No flow came back that the canvas could read — try again, or build it by hand."));
+    }
   });
 
   // ---------------------------------------------------------------------------

@@ -523,15 +523,16 @@ steps, in the order a first-time user meets them:
    machine already has. The registry is `~/.ai-qa/studio.json`: paths and
    choices, never a token.
 2. **Create a flow** — one ticket, **the AI agent that will verify it** (the
-   agents found on `PATH`, each marked *ready* / *not installed* / *needs a
-   command*), and where it runs: the project checkout, or a fresh **worktree**
-   under `.ai-qa/worktrees/` so the branch you are working on is left alone.
+   agents found on `PATH`, each marked *installed* / *not installed*; the
+   terminal will type exactly its command), and where it runs: the project
+   checkout, or a fresh **worktree** under `.ai-qa/worktrees/` so the branch
+   you are working on is left alone.
 3. **Work inside the flow** — five tabs, each mapping onto something the lane
    already does:
 
 | Tab | What it is |
 |---|---|
-| **Agent** | **A real terminal.** The chosen agent CLI runs in a pseudo-terminal in the flow's checkout, drawn by xterm.js — its own prompts, its own slash commands, its own permission questions, exactly as in your shell. `/qa SHOP-142`, `/triage`, `/regress`, `/onboard` are one click, typed into the real thing. Any installed agent works here with no adapter; the session belongs to the studio process, so leaving the flow and coming back shows what happened meanwhile. A **Chat** mode remains: the fenced stream for Claude Code and the Anthropic API, where the studio decides which tools the engine may touch. |
+| **Agent** | **The machine's own terminal**, opened in the flow's checkout and drawn by xterm.js. The flow's agent is typed into it — `claude`, `codex`, `gemini` — exactly the command you would type, nothing added. It is your shell: `git status`, `npm test`, anything. Pick another agent from the bar and a fresh terminal opens with that one. `/qa SHOP-142`, `/triage`, `/regress`, `/onboard` are one click, typed into the real thing. The session belongs to the studio process, so leaving the flow and coming back shows what happened meanwhile. |
 | **Steps** | Drag the steps of a test onto a graph and wire them: *as* whom, what must already be true, the click path, what is typed, **what must be read and which spec section says so**, the read-back, the clean-up. Or ask the agent to draft the graph from the ticket and the spec. |
 | **Run** | The drawing becomes the files the gate already reads, then runs for real — streaming `APP: UP`, `API: FAIL  x discount: expected "50000", got 0`, `DB: OK`, and the gate's verdict. |
 | **Evidence** | `evd/` as a tree: the report rendered, screenshots, the recorded request and response, `evd_check` green or red, and the spreadsheet export. |
@@ -570,14 +571,13 @@ separate word for that.
   *defect*. The studio cannot invent an oracle any more than the CLI can.
 - **A `writes: forbidden` environment refuses a flow that creates data** before
   the first call, and records BLOCKED with the reason. It is not attempted.
-- **The chat engine is fenced to the lane's own tools** — the gate scripts,
-  reading the repo, writing under `evd/` and `docs/qa/`. "No product code is
-  changed" stops being a rule the agent is asked to follow and becomes one it
-  cannot break. `.env` is unreadable to it. **The terminal is not fenced by the
-  studio** — it is your own Claude Code (or Codex, or Gemini…) session, with
-  that tool's own permission prompts, exactly as if you had opened a shell in
-  the worktree. The two modes are labelled, and the page never calls one the
-  other.
+- **The terminal is not fenced by the studio.** It is your shell, and the agent
+  in it is your own Claude Code (or Codex, or Gemini…) session with that tool's
+  own permission prompts — exactly as if you had opened a terminal in the
+  worktree, because that is what it is. The one fenced engine left is behind
+  **Draft from ticket**: a one-off, non-interactive call (Claude Code `--print`
+  or the Anthropic API) that may only read the repo and the spec and returns a
+  drawing. `.env` is unreadable to it.
 - **Nothing typed on the canvas becomes a command.** Values are passed as
   their own argv elements to the gates and quoted when a script is written;
   conformance asserts a quote in a SQL string cannot escape into the shell.
