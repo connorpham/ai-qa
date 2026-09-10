@@ -181,18 +181,23 @@ export function update(reg, id, patch) {
 export function resolveAgent(project, detected = detectAgents(), override = null) {
   const byId = new Map(detected.map((d) => [d.id, d]));
   const want = override || project?.agent || null;
+  // Two ways to run an agent, said separately:
+  //   terminal  any installed CLI, in a real pty — no adapter needed
+  //   chat      the fenced stream: needs an adapter (claude, the API), or the
+  //             project's own command for anything else
+  const shape = (d, extra) => ({ ...d,
+    terminal: !!(d.installed && d.cmd),
+    chat: !!(d.installed && (d.drive === "stream" || (project?.customCommand && project?.agent === d.id))),
+    ...extra });
   if (want) {
     const d = byId.get(want);
-    if (!d) return { id: want, chosen: true, installed: false, reason: `${want} is not an agent the studio knows` };
-    if (!d.installed) return { ...d, chosen: true, reason: d.id === "anthropic" ? "ANTHROPIC_API_KEY is not set in the studio's shell" : `\`${d.cmd}\` is not on PATH` };
-    if (d.drive === "custom" && !project.customCommand) {
-      return { ...d, chosen: true, reason: "the studio has no adapter for this agent — give the exact command in the project's settings" };
-    }
-    return { ...d, chosen: true, reason: null };
+    if (!d) return { id: want, chosen: true, installed: false, terminal: false, chat: false, reason: `${want} is not an agent the studio knows` };
+    if (!d.installed) return shape(d, { chosen: true, reason: d.id === "anthropic" ? "ANTHROPIC_API_KEY is not set in the studio's shell" : `\`${d.cmd}\` is not on PATH` });
+    return shape(d, { chosen: true, reason: null });
   }
-  const fallback = detected.find((d) => d.installed && d.drive === "stream");
-  if (!fallback) return { id: null, chosen: false, installed: false, reason: "no agent is installed that the studio can drive" };
-  return { ...fallback, chosen: false, reason: "no agent chosen for this project — using the first one the studio can drive" };
+  const fallback = detected.find((d) => d.installed && d.cmd) || detected.find((d) => d.installed);
+  if (!fallback) return { id: null, chosen: false, installed: false, terminal: false, chat: false, reason: "no agent is installed on this machine" };
+  return shape(fallback, { chosen: false, reason: "no agent chosen for this project — using the first one installed" });
 }
 
 /** Which chat engine runs a resolved agent: the two the studio has adapters

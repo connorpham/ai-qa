@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ai-qa studio</title>
+<link rel="stylesheet" href="assets/vendor/xterm.css">
 <link rel="stylesheet" href="assets/app.css">
 </head>
 <body>
@@ -109,22 +110,41 @@
         <button data-tab="spec">Ticket &amp; spec</button>
       </nav>
 
+      <!-- The agent, two ways. TERMINAL is the real thing: the agent CLI in a
+           pseudo-terminal, drawn by xterm.js — its own prompts, its own slash
+           commands, its own permission questions. CHAT is the fenced stream
+           for the agents that have an adapter (Claude Code, the Anthropic API),
+           where the studio itself decides which tools the engine may touch. -->
       <div class="tab on" id="tab-agent">
-        <div class="chat">
-          <div class="quick" id="quick">
-            <button data-q="/qa {ticket}">/qa {ticket}</button>
-            <button data-q="What does the specification say about {ticket}, and which values could a test cite?">what does the spec say?</button>
-            <button data-q="/triage ">/triage</button>
-            <button data-q="/regress">/regress</button>
-            <button data-q="/onboard">/onboard</button>
+        <div class="agent-pane">
+          <div class="agent-bar">
+            <div class="seg small" id="agentMode" title="Terminal: the agent as itself, in this flow's checkout. Chat: the fenced stream.">
+              <button class="on" data-mode="term">Terminal</button>
+              <button data-mode="chat">Chat</button>
+            </div>
+            <div class="quick" id="quick">
+              <button data-q="/qa {ticket}">/qa {ticket}</button>
+              <button data-q="What does the specification say about {ticket}, and which values could a test cite?">what does the spec say?</button>
+              <button data-q="/triage ">/triage</button>
+              <button data-q="/regress">/regress</button>
+              <button data-q="/onboard">/onboard</button>
+            </div>
             <span style="flex:1"></span>
-            <button class="mini" id="newChat" title="Start a new session with the agent">new session</button>
+            <span class="term-status" id="termStatus"></span>
+            <button class="mini" id="termRestart" title="Stop the agent and start it again in this flow's checkout">restart</button>
+            <button class="mini" id="newChat" title="Start a new chat session" hidden>new session</button>
           </div>
-          <div class="messages" id="messages"></div>
-          <form class="composer" id="composer">
-            <textarea id="chatInput" rows="3" placeholder="Ask the agent, or type a workflow: /qa SHOP-142"></textarea>
-            <div class="row"><span class="muted small" id="chatMeta"></span><span style="flex:1"></span><button type="button" class="bd" id="abortBtn" hidden>Stop</button><button type="submit" class="primary" id="sendBtn">Send</button></div>
-          </form>
+          <div class="term-wrap" id="termWrap">
+            <div class="term" id="term"></div>
+            <div class="term-note" id="termNote" hidden></div>
+          </div>
+          <div class="chat" id="chatPane" hidden>
+            <div class="messages" id="messages"></div>
+            <form class="composer" id="composer">
+              <textarea id="chatInput" rows="3" placeholder="Ask the agent, or type a workflow: /qa SHOP-142"></textarea>
+              <div class="row"><span class="muted small" id="chatMeta"></span><span style="flex:1"></span><button type="button" class="bd" id="abortBtn" hidden>Stop</button><button type="submit" class="primary" id="sendBtn">Send</button></div>
+            </form>
+          </div>
         </div>
       </div>
 
@@ -294,6 +314,8 @@
 </div>
 
 <script>window.STUDIO = __STUDIO_BOOT__;</script>
+<script src="assets/vendor/xterm.js"></script>
+<script src="assets/vendor/addon-fit.js"></script>
 <script src="assets/app.js"></script>
 </body>
 </html>

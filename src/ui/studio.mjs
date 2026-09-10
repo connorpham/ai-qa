@@ -27,6 +27,7 @@ import { compile, validate, NODE_TYPES, KINDS, NAME_RE, TICKET_RE } from "./stud
 import { makeEngines, describeEngines } from "./studio/engines.mjs";
 import * as projects from "./studio/projects.mjs";
 import * as worktrees from "./studio/worktrees.mjs";
+import * as terminal from "./studio/terminal.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ASSETS = path.join(HERE, "studio");
@@ -254,6 +255,17 @@ function studioSystemNote(state) {
   ].join("\n");
 }
 
+/** What the agent in the embedded terminal is told, once, at launch. Short:
+ *  it is a real Claude Code session with the lane's skills installed, and the
+ *  workflows already say the rest. */
+function terminalNote(st, r) {
+  return [
+    `You are running inside ai-qa studio's embedded terminal, for flow "${r.flow.name}"${r.flow.ticket ? ` (ticket ${r.flow.ticket})` : ""}, in ${r.cwd}${r.flow.worktree ? ` — an isolated worktree named ${r.flow.worktree}` : ""}.`,
+    `Project: ${st.project.name} (${st.project.key}-nnn). Environment: ${st.environments.active || "(default)"} → ${st.environments.url || "(app.url unset)"}. Working language: ${st.project.language}.`,
+    "Use the installed workflows (/onboard, /qa, /triage, /regress) exactly as written. Never change product code. Never print a secret. When a step could not run, say BLOCKED and why.",
+  ].join(" ");
+}
+
 function fullSystemPrompt(root, state) {
   const parts = [studioSystemNote(state), "", "## aiqa.config.yaml", "", readIfExists(path.join(root, CONFIG_NAME)).slice(0, 12_000)];
   for (const wf of ["qa", "onboard", "triage", "regress"]) {
@@ -320,6 +332,25 @@ export async function studio(flags = {}) {
   /** Where everything runs: the chosen worktree, else the project itself. */
   const cwd = () => activeWorktree() || activeProject()?.path || startedIn;
 
+  /** The agent terminals, one per flow, alive for as long as the studio is:
+   *  a session belongs to the process, not to the browser tab that opened it,
+   *  so closing the tab and coming back shows what happened meanwhile. */
+  const terms = new Map();                       // `${projectId}:${flowName}` → TerminalSession
+  const termKey = (name) => `${activeProject()?.id || "-"}:${name}`;
+  /** A flow of the active project, by name: its document and the checkout it
+   *  runs in — the worktree it asked for, or the project when that is gone. */
+  const resolveFlow = (name) => {
+    const p = activeProject();
+    if (!p || !NAME_RE.test(String(name || ""))) return null;
+    const st = projectState(p.path, config(p.path), activeEnv.name);
+    const file = path.join(p.path, st.flowsDir, `${name}.json`);
+    let flow;
+    try { flow = JSON.parse(fs.readFileSync(file, "utf8")); } catch { return null; }
+    const at = flow.worktree ? path.join(p.path, worktrees.WORKTREE_SUBDIR, flow.worktree) : p.path;
+    const exists = fs.existsSync(at);
+    return { project: p, flow, cwd: exists ? at : p.path, worktreeMissing: !!flow.worktree && !exists };
+  };
+
   // Re-read on every request rather than once at boot. aiqa.config.yaml is the
   // contract, it is a file a person edits while the studio is open — a new
   // environment, a spec they finally wrote down — and a page showing values the
@@ -350,6 +381,7 @@ export async function studio(flags = {}) {
       st.hasLane = fs.existsSync(configPath(at));
       st.home = os.homedir();
       st.clonesDir = projects.CLONES_DIR;
+      st.terminal = terminal.availability();
       st.projects = {
         list: reg.projects.map((x) => ({ id: x.id, name: x.name, path: x.path, agent: x.agent })),
         activeId: p?.id || null,
@@ -372,10 +404,12 @@ export async function studio(flags = {}) {
         return;
       }
       if (req.method === "GET" && route.startsWith("/assets/")) {
-        const name = path.basename(route);
-        const abs = path.join(ASSETS, name);
-        if (!fs.existsSync(abs) || !/^[a-z0-9._-]+$/i.test(name)) { res.writeHead(404).end(); return; }
-        res.writeHead(200, { "content-type": MIME[path.extname(name)] || "application/octet-stream", "cache-control": "no-store" }).end(fs.readFileSync(abs));
+        // our own files flat, and the vendored terminal emulator one level down
+        const rel = route.slice("/assets/".length);
+        if (!/^(vendor\/)?[a-z0-9._-]+$/i.test(rel)) { res.writeHead(404).end(); return; }
+        const abs = path.join(ASSETS, rel);
+        if (!fs.existsSync(abs)) { res.writeHead(404).end(); return; }
+        res.writeHead(200, { "content-type": MIME[path.extname(rel)] || "application/octet-stream", "cache-control": rel.startsWith("vendor/") ? "max-age=86400" : "no-store" }).end(fs.readFileSync(abs));
         return;
       }
 
@@ -436,8 +470,10 @@ export async function studio(flags = {}) {
         }
         let updated = null;
         try { updated = fs.statSync(path.join(flowsDir, `${name}.json`)).mtime.toISOString(); } catch { /* gone */ }
+        const t = terms.get(termKey(name));
         return { name, ticket: flow.ticket || "", title: flow.title || "", kind: flow.kind || "acceptance", agent: flow.agent || null,
-          worktree: flow.worktree || null, worktreeExists: !flow.worktree || fs.existsSync(at), steps: (flow.nodes || []).length, result, ranAt, updated };
+          worktree: flow.worktree || null, worktreeExists: !flow.worktree || fs.existsSync(at), steps: (flow.nodes || []).length, result, ranAt, updated,
+          terminal: t ? { running: t.running, exitCode: t.exitCode, startedAt: t.startedAt } : null };
       };
       if (req.method === "GET" && route === "/api/flows") {
         let names = [];
@@ -576,8 +612,8 @@ export async function studio(flags = {}) {
         const chosen = body.engine || projects.engineFor(resolved) || "claude";
         const engine = engines.find((e) => e.id === chosen) || engines[0];
         const avail = engine.availability();
-        if (!body.engine && resolved.reason && (!resolved.installed || resolved.drive === "custom")) {
-          json(res, 424, { error: `${resolved.label || resolved.id}: ${resolved.reason}` }); return;
+        if (!body.engine && !resolved.chat) {
+          json(res, 424, { error: `${resolved.label || resolved.id}: ${resolved.reason || "the fenced chat has no adapter for this agent — use the Terminal, or give the exact command in Project settings"}` }); return;
         }
         if (!avail.available) { json(res, 424, { error: `${engine.label}: ${avail.reason}` }); return; }
         const send = sseStart(res);
@@ -724,12 +760,75 @@ export async function studio(flags = {}) {
         }
       }
 
+      // ---- terminals (the socket itself is on `upgrade`, below) ---------------
+      if (req.method === "GET" && route === "/api/term") {
+        const p = activeProject();
+        json(res, 200, { ...terminal.availability(), sessions: [...terms.values()].filter((s) => !p || s.id.startsWith(`${p.id}:`))
+          .map((s) => ({ flow: s.id.split(":").slice(1).join(":"), running: s.running, exitCode: s.exitCode, startedAt: s.startedAt, clients: s.clients.size, command: s.argv[0], cwd: s.cwd })) });
+        return;
+      }
+      {
+        const m = route.match(/^\/api\/term\/([a-z0-9][a-z0-9_-]{0,59})$/);
+        if (m && req.method === "DELETE") {
+          const s = terms.get(termKey(m[1]));
+          if (s) s.kill();
+          json(res, 200, { killed: !!(s && s.running) });
+          return;
+        }
+      }
+
       json(res, 404, { error: "no such route" });
     } catch (e) {
       if (!res.headersSent) json(res, 500, { error: e.message });
       else { try { res.end(); } catch { /* gone */ } }
     }
   });
+
+  // The agent's terminal: one WebSocket per open page, one pty per flow.
+  // Binary frames are keystrokes and output; text frames are small JSON
+  // controls (resize, kill) and status. `?restart=1` replaces the session.
+  server.on("upgrade", (req, socket, head) => {
+    const url = new URL(req.url, "http://127.0.0.1");
+    const refuse = (code, text) => { try { socket.write(`HTTP/1.1 ${code} ${text}\r\nConnection: close\r\n\r\n`); } catch { /* gone */ } socket.destroy(); };
+    if (!url.pathname.startsWith(`/${token}`) || url.pathname.slice(token.length + 1) !== "/api/term") { refuse(404, "Not Found"); return; }
+    const r = resolveFlow(url.searchParams.get("flow"));
+    if (!r) { refuse(404, "Not Found"); return; }
+    const ws = terminal.acceptWebSocket(req, socket, head);
+    if (!ws) return;
+    const say = (obj) => ws.send(JSON.stringify(obj));
+    const avail = terminal.availability();
+    if (!avail.available) { say({ type: "status", state: "unavailable", reason: avail.reason }); ws.close(); return; }
+    const key = `${r.project.id}:${r.flow.name}`;
+    let sess = terms.get(key);
+    if (sess && url.searchParams.get("restart") === "1") { sess.kill(); terms.delete(key); sess = null; }
+    if (!sess) {
+      const resolved = projects.resolveAgent(r.project, projects.detectAgents(), r.flow.agent || null);
+      const st = projectState(r.cwd, config(r.cwd), activeEnv.name);
+      const cmd = terminal.commandFor(resolved, r.project, { note: terminalNote(st, r) });
+      if (!cmd.ok) { say({ type: "status", state: "unavailable", reason: cmd.reason, agent: resolved.id || null }); ws.close(); return; }
+      sess = new terminal.TerminalSession({ id: key, argv: cmd.argv, cwd: r.cwd,
+        env: { ...envFor(r.cwd, config(r.cwd), activeEnv.name), AIQA_STUDIO: "1" },
+        cols: Number(url.searchParams.get("cols")) || 120, rows: Number(url.searchParams.get("rows")) || 36 }).start();
+      terms.set(key, sess);
+    }
+    const status = (state) => ({ type: "status", state, flow: r.flow.name, command: sess.argv[0], cwd: sess.cwd, worktree: r.flow.worktree || null, worktreeMissing: r.worktreeMissing, exitCode: sess.exitCode, startedAt: sess.startedAt });
+    sess.clients.add(ws);
+    say(status(sess.running ? "running" : "exited"));
+    const replay = sess.replay();
+    if (replay.length) ws.send(replay);
+    const onData = (chunk) => ws.send(chunk);
+    const onExit = () => say(status("exited"));
+    sess.on("data", onData); sess.on("exit", onExit);
+    ws.on("message", (data, isBinary) => {
+      if (isBinary) { sess.write(data); return; }
+      let m; try { m = JSON.parse(String(data)); } catch { return; }
+      if (m.type === "resize") sess.resize(m.cols, m.rows);
+      else if (m.type === "input") sess.write(String(m.data || ""));
+      else if (m.type === "kill") sess.kill();
+    });
+    ws.on("close", () => { sess.clients.delete(ws); sess.off("data", onData); sess.off("exit", onExit); });
+  });
+  server.on("close", () => { for (const s of terms.values()) s.kill(); });
 
   await new Promise((resolve, reject) => { server.on("error", reject); server.listen(port, "127.0.0.1", resolve); });
   const url = `http://127.0.0.1:${server.address().port}/${token}/`;
@@ -748,6 +847,8 @@ export async function studio(flags = {}) {
   console.log(`  ${c.cyan(url)}`);
   console.log(`  ${c.gray("local only · the path token is the key · Ctrl+C to stop")}`);
   for (const e of describeEngines(engines)) console.log(`  ${e.available ? c.green("✓") : c.gray("·")} ${e.label}${e.available ? "" : c.gray(`  — ${e.reason}`)}`);
+  const ta = terminal.availability();
+  console.log(`  ${ta.available ? c.green("✓") : c.gray("·")} embedded terminal${ta.available ? c.gray("  — the agent runs in a real pty (python3), one per flow") : c.gray(`  — ${ta.reason}`)}`);
   console.log();
   if (flags.json) console.log(JSON.stringify({ url, port: server.address().port }));
   return { url, server, close: () => server.close() };

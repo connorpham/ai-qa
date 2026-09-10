@@ -1119,6 +1119,41 @@ for (const [label, cmd, args] of [
     "the Claude Code allow-list does not match the rule that product code is never written");
 }
 
+// ---- studio: the agent's terminal — frames, commands, a real pty --------------
+{
+  const T = await import("../src/ui/studio/terminal.mjs");
+  for (const n of [0, 125, 126, 65535, 65536]) {
+    const payload = Buffer.alloc(n, 0x5a);
+    const srv = T.decodeFrames(T.encodeFrame(2, payload)).frames[0];
+    const cli = T.decodeFrames(T.clientFrame(2, payload)).frames[0];
+    check(srv && srv.fin && srv.opcode === 2 && srv.payload.equals(payload), `a server frame of ${n} bytes did not round-trip`);
+    check(cli && cli.payload.equals(payload), `a masked client frame of ${n} bytes did not unmask to what was sent`);
+  }
+  const partial = T.decodeFrames(Buffer.concat([T.clientFrame(1, "one"), T.clientFrame(1, "two").subarray(0, 3)]));
+  check(partial.frames.length === 1 && partial.frames[0].payload.toString() === "one" && partial.rest.length === 3, "a frame split across TCP chunks was not held back whole");
+  check(JSON.stringify(T.splitCommand(`codex exec --flag "two words" {prompt}`)) === JSON.stringify(["codex", "exec", "--flag", "two words", "{prompt}"]), "command splitting broke on quotes");
+  const claude = T.commandFor({ id: "claude", cmd: "claude", installed: true }, { model: "opus" }, { note: "N" });
+  check(claude.ok && claude.argv.join(" ") === "claude --model opus --append-system-prompt N", `claude's terminal argv: ${JSON.stringify(claude)}`);
+  check(T.commandFor({ id: "anthropic", cmd: null, installed: true, label: "Anthropic API" }, {}).ok === false, "an agent with no CLI was given a terminal");
+  check(T.commandFor({ id: "codex", cmd: "codex", installed: false, reason: "not on PATH" }, {}).ok === false, "an agent that is not installed was given a terminal");
+  const custom = T.commandFor({ id: "codex", cmd: "codex", installed: true }, { agent: "codex", customCommand: "codex exec --full-auto {prompt}" });
+  check(custom.ok && custom.argv.join(" ") === "codex exec --full-auto", "the project's custom command was not used, minus {prompt}, for the terminal");
+  check(T.commandFor({ id: "gemini", cmd: "gemini", installed: true }, {}).argv.join(" ") === "gemini", "an agent with no adapter must run as itself in the terminal");
+  if (T.availability().available) {
+    const s = new T.TerminalSession({ id: "t", argv: ["sh", "-c", "printf ready; read x; printf \"got:$x \"; stty size; exit 3"], cwd: pkgRoot, cols: 100, rows: 30 }).start();
+    let out = ""; const exits = [];
+    s.on("data", (c) => { out += c.toString(); }); s.on("exit", (c) => exits.push(c));
+    const until = (re, ms = 8000) => new Promise((res) => { const t0 = Date.now(); const i = setInterval(() => { if (re.test(out) || Date.now() - t0 > ms) { clearInterval(i); res(re.test(out)); } }, 20); });
+    check(await until(/ready/), `the pty bridge never printed the prompt: ${JSON.stringify(out)}`);
+    s.resize(80, 24); s.write("hi\n");
+    check(await until(/got:hi/), `input typed into the pty did not reach the program: ${JSON.stringify(out)}`);
+    check(await until(/24 80/), `a resize did not reach the pty (stty size said ${JSON.stringify(out.match(/\d+ \d+/)?.[0])})`);
+    const t0 = Date.now(); while (!exits.length && Date.now() - t0 < 8000) await new Promise((r) => setTimeout(r, 20));
+    check(exits[0] === 3, `the program's exit code did not come back through the bridge (${exits[0]})`);
+    check(s.replay().toString().includes("got:hi"), "the replay buffer does not hold what the pty printed");
+  }
+}
+
 // ---- report -------------------------------------------------------------------
 if (fails.length) {
   console.error(`conformance: ${fails.length} FAILED of ${checks} checks\n`);

@@ -16,8 +16,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawn, spawnSync } from "node:child_process";
+import net from "node:net";
 import { pkgRoot } from "../src/cli/util.mjs";
 import { hashFile } from "../src/cli/manifest.mjs";
+import { clientFrame, decodeFrames } from "../src/ui/studio/terminal.mjs";
 
 const fails = [];
 let checks = 0;
@@ -460,8 +462,14 @@ for (const [label, cmd, args] of [
   // AIQA_HOME: the studio's registry goes into the fixture's temp dir, not
   // into ~/.ai-qa on whoever runs the suite. (It used to. Quietly.)
   const aiqaHome = path.join(tmp, "aiqa-home");
+  // A fake agent CLI on PATH: the terminal must be provable without a real
+  // agent, a network, or an account. `codex` is one of the names the studio
+  // looks for; this one greets, echoes one line back, and exits 0.
+  const fakeBin = path.join(tmp, "fakebin");
+  fs.mkdirSync(fakeBin, { recursive: true });
+  fs.writeFileSync(path.join(fakeBin, "codex"), "#!/bin/sh\nprintf 'fake codex ready\\n'\nread line\nprintf 'you said: %s\\n' \"$line\"\nexit 0\n", { mode: 0o755 });
   const studio = spawn(process.execPath, [CLI, "studio", "--port", "0", "--no-open"],
-    { cwd: repo, env: { ...process.env, NO_COLOR: "1", AIQA_NO_OPEN: "1", AIQA_HOME: aiqaHome } });
+    { cwd: repo, env: { ...process.env, NO_COLOR: "1", AIQA_NO_OPEN: "1", AIQA_HOME: aiqaHome, PATH: `${fakeBin}:${process.env.PATH}` } });
   let out = "";
   const url = await new Promise((resolve) => {
     const t = setTimeout(() => resolve(null), 25_000);
@@ -537,6 +545,61 @@ for (const [label, cmd, args] of [
     const opened = await fetch(`${url.base}/${url.token}/api/flows/shop_1_acceptance/open`, { method: "POST" }).then((r) => r.json());
     check(opened.agent && opened.agent.id === "claude" && opened.agent.chosen === true, `opening the flow did not resolve its own agent: ${JSON.stringify(opened.agent)}`);
     check(opened.state.cwd === fs.realpathSync(repo), "opening a flow with no worktree moved the cwd somewhere else");
+
+    // -- the agent's terminal: a real pty over a WebSocket, driving the fake agent on PATH
+    check(st.state.agents.find((a) => a.id === "codex")?.installed === true, "the fake codex on PATH was not detected as installed");
+    const putTerm = await put("shop_3_terminal", { version: 1, name: "shop_3_terminal", ticket: "SHOP-3", kind: "acceptance", agent: "codex", nodes: [], edges: [] });
+    check(putTerm.status === 200, `could not save the terminal test flow (${putTerm.status})`);
+    const port = Number(new URL(url.base).port);
+    /** Open the socket by hand: the upgrade request, then frames. Resolves with the
+     *  HTTP status line, every status message, and the bytes the pty printed. */
+    const wsSession = (query, { onText = () => {}, until = () => false, timeout = 15000 } = {}) => new Promise((resolve) => {
+      const sock = net.connect(port, "127.0.0.1");
+      const statuses = []; let buf = Buffer.alloc(0); let httpLine = null; let text = ""; let sentHello = false;
+      const finish = (why) => { clearTimeout(timer); try { sock.destroy(); } catch { /* closed */ } resolve({ httpLine, statuses, text, why }); };
+      const timer = setTimeout(() => finish("timeout"), timeout);
+      sock.on("connect", () => sock.write(`GET /${url.token}/api/term?${query} HTTP/1.1\r\nHost: 127.0.0.1\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: ${Buffer.from("0123456789abcdef").toString("base64")}\r\nSec-WebSocket-Version: 13\r\n\r\n`));
+      sock.on("data", (chunk) => {
+        buf = Buffer.concat([buf, chunk]);
+        if (httpLine === null) {
+          const i = buf.indexOf("\r\n\r\n"); if (i < 0) return;
+          httpLine = buf.subarray(0, i).toString().split("\r\n")[0]; buf = buf.subarray(i + 4);
+          if (!/ 101 /.test(httpLine)) { finish("not upgraded"); return; }
+        }
+        const { frames, rest } = decodeFrames(buf); buf = Buffer.from(rest);
+        for (const f of frames) {
+          if (f.opcode === 1) { try { statuses.push(JSON.parse(f.payload.toString())); } catch { /* not json */ } }
+          else if (f.opcode === 2) text += f.payload.toString();
+        }
+        if (!sentHello && /fake codex ready/.test(text)) { sentHello = true; onText(sock); }
+        if (until({ statuses, text })) finish("done");
+      });
+      sock.on("error", (e) => finish(`socket error: ${e.message}`));
+      sock.on("close", () => finish("closed"));
+    });
+    const run1 = await wsSession("flow=shop_3_terminal&cols=80&rows=24", {
+      onText: (sock) => sock.write(clientFrame(2, "hello\r")),
+      until: ({ statuses, text }) => statuses.some((s) => s.state === "exited") && /you said: hello/.test(text),
+    });
+    check(run1.httpLine === "HTTP/1.1 101 Switching Protocols", `the terminal socket did not upgrade: ${run1.httpLine} (${run1.why})`);
+    check(run1.statuses.some((s) => s.state === "running" && s.command === "codex"), `the terminal did not report the fake agent running: ${JSON.stringify(run1.statuses.map((s) => [s.state, s.command]))}`);
+    check(/fake codex ready/.test(run1.text), `the agent's output did not reach the socket: ${JSON.stringify(run1.text.slice(0, 120))}`);
+    check(/you said: hello/.test(run1.text), `keystrokes sent over the socket did not reach the agent's pty: ${JSON.stringify(run1.text.slice(0, 200))} (${run1.why})`);
+    check(run1.statuses.some((s) => s.state === "exited" && s.exitCode === 0), `the agent's exit was not reported with its code: ${JSON.stringify(run1.statuses.map((s) => [s.state, s.exitCode]))}`);
+    // reattaching to the finished session replays what it printed, and says it exited
+    const run2 = await wsSession("flow=shop_3_terminal", { until: ({ statuses, text }) => statuses.length > 0 && /you said: hello/.test(text), timeout: 5000 });
+    check(run2.statuses[0]?.state === "exited" && /fake codex ready/.test(run2.text) && /you said: hello/.test(run2.text), `reattaching did not replay the finished session: ${run2.why} ${JSON.stringify(run2.statuses[0])}`);
+    // ?restart=1 starts the agent again
+    const run3 = await wsSession("flow=shop_3_terminal&restart=1", { until: ({ statuses, text }) => statuses.some((s) => s.state === "running") && /fake codex ready/.test(text), timeout: 8000 });
+    check(run3.statuses.some((s) => s.state === "running") && (run3.text.match(/fake codex ready/g) || []).length === 1, `restart did not start a fresh session: ${run3.why} ${JSON.stringify(run3.text.slice(0, 80))}`);
+    const termList = JSON.parse((await get(`/${url.token}/api/term`)).text);
+    check(termList.available === true && termList.sessions.some((s) => s.flow === "shop_3_terminal" && s.running === true), `the session list does not show the restarted terminal: ${JSON.stringify(termList).slice(0, 200)}`);
+    const flowsAfter = JSON.parse((await get(`/${url.token}/api/flows`)).text).flows.find((f) => f.name === "shop_3_terminal");
+    check(flowsAfter?.terminal?.running === true, "the flow list does not carry the terminal's state");
+    const killed = await fetch(`${url.base}/${url.token}/api/term/shop_3_terminal`, { method: "DELETE" }).then((r) => r.json());
+    check(killed.killed === true, "DELETE /api/term/<flow> did not stop the running agent");
+    const noFlow = await wsSession("flow=does_not_exist", { timeout: 3000 });
+    check(/ 404 /.test(noFlow.httpLine || ""), `a terminal for a flow that does not exist was opened: ${noFlow.httpLine}`);
   }
   studio.kill("SIGTERM");
 }

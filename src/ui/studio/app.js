@@ -36,7 +36,7 @@
   let themeMode = (() => { try { return localStorage.getItem("aiqa.theme") || "system"; } catch { return "system"; } })();
   applyTheme(themeMode);
   window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { if (themeMode === "system") applyTheme("system"); });
-  $("themeBtn").addEventListener("click", () => { themeMode = THEMES[(THEMES.indexOf(themeMode) + 1) % THEMES.length]; applyTheme(themeMode); });
+  $("themeBtn").addEventListener("click", () => { themeMode = THEMES[(THEMES.indexOf(themeMode) + 1) % THEMES.length]; applyTheme(themeMode); if (TERM) TERM.options.theme = termTheme(); });
 
   // ---- small helpers --------------------------------------------------------------
   const el = (tag, attrs = {}, ...kids) => {
@@ -141,7 +141,7 @@
   // ---- screens -----------------------------------------------------------------
   function showScreen(name) {
     for (const s of ["home", "project", "flow"]) $(`scr-${s}`).hidden = s !== name;
-    if (name !== "flow") openName = null;
+    if (name !== "flow") { openName = null; detachTerminal(); }
     renderTree();
   }
 
@@ -165,7 +165,7 @@
     const a = agentById(f.agent || activeProject()?.agent);
     const agentId = f.agent || activeProject()?.agent || STATE.projects?.active?.agentResolved?.id;
     const mainBranch = (STATE.worktrees?.list || []).find((w) => w.isMain)?.branch || "";
-    const live = runningFlow === f.name;
+    const live = runningFlow === f.name || !!f.terminal?.running;
     const card = el("div", { class: `card${f.name === openName ? " on" : ""}`, title: f.title || f.name, onclick: () => openFlow(f.name) },
       el("div", { class: "l1" },
         el("span", { class: `dot ${live ? "live" : (f.result || "")}` }),
@@ -180,7 +180,7 @@
         el("span", { class: "branch" }, f.worktree ? `worktree ${f.worktree}${f.worktreeExists ? "" : " (missing)"}` : (mainBranch || "the project checkout"))),
       el("div", { class: "l3" },
         el("span", { class: `agent ${agentId || ""}${a && !a.installed ? " missing" : ""}` }, a ? a.label : (agentId || "agent: project default")),
-        el("span", { class: "when" }, live ? "running…" : f.result ? `${f.result}${f.ranAt ? ` · ${ago(f.ranAt)}` : ""}` : f.steps ? `${f.steps} steps · not run` : "empty")));
+        el("span", { class: "when" }, runningFlow === f.name ? "running…" : f.terminal?.running ? "agent running" : f.result ? `${f.result}${f.ranAt ? ` · ${ago(f.ranAt)}` : ""}` : f.steps ? `${f.steps} steps · not run` : "empty")));
     return card;
   }
 
@@ -235,7 +235,7 @@
     $("pjSub").textContent = `${short(p.path)}${main?.branch ? ` · ${main.branch}` : ""}`;
     const r = p.agentResolved || {};
     $("pjAgentChip").textContent = r.id ? `default AI: ${agentLabel(r.id)}${r.chosen ? "" : " (auto)"}` : "no AI available";
-    $("pjAgentChip").className = `chip${r.reason && (!r.installed || r.drive === "custom") ? " warnchip" : ""}`;
+    $("pjAgentChip").className = `chip${r.id && !r.installed ? " warnchip" : ""}`;
     $("laneNotice").hidden = STATE.hasLane !== false || !!STATE.worktrees?.activePath;
     $("flowCount").textContent = FLOWS.length ? `(${FLOWS.length})` : "";
     const cards = $("flowCards"); cards.replaceChildren();
@@ -251,7 +251,7 @@
     $("flowTicketChip").textContent = flow.ticket || ""; $("flowTicketChip").hidden = !flow.ticket;
     const a = AGENT || {};
     $("flowAgentChip").textContent = a.id ? `${agentLabel(a.id)}${a.chosen ? "" : " (project default)"}` : "no agent";
-    $("flowAgentChip").className = `chip${a.reason && (!a.installed || a.drive === "custom") ? " warnchip" : ""}`;
+    $("flowAgentChip").className = `chip${a.id && !a.installed ? " warnchip" : ""}`;
     $("flowAgentChip").title = a.reason || `this flow uses ${agentLabel(a.id)}`;
     const W = STATE.worktrees || {};
     $("flowWtChip").textContent = W.activeName ? `worktree ${W.activeName}` : `${(W.list || []).find((w) => w.isMain)?.branch || "checkout"} · ${short(STATE.cwd)}`;
@@ -352,26 +352,28 @@
   function agentNote(a, project) {
     if (!a) return { cls: "probe", text: "" };
     if (!a.installed) return { cls: "probe bad", text: a.cmd ? `\`${a.cmd}\` is not on PATH — install it, or pick another agent.` : "ANTHROPIC_API_KEY is not set in the studio's shell." };
-    if (a.drive === "custom") return project?.customCommand
-      ? { cls: "probe ok", text: `${a.label} runs through the command in this project's settings: ${project.customCommand}` }
-      : { cls: "probe warn", text: `${a.label} is installed, but the studio has no adapter for its flags. Give the exact command in Project settings first, and it will be run as-is — nothing is guessed.` };
-    // nothing to warn about: the radio row already carries the agent's note
+    if (!a.cmd) return { cls: "probe", text: `${a.label} has no command-line program, so it runs in the fenced Chat only — the Terminal needs a CLI.` };
+    if (a.drive === "custom") return project?.customCommand && project?.agent === a.id
+      ? { cls: "probe", text: `Terminal: runs your command from Project settings (${project.customCommand}). Chat: the same command, with {prompt} filled in.` }
+      : { cls: "probe", text: `Terminal: runs \`${a.cmd}\` as itself — no adapter needed. The fenced Chat has no adapter for it; give a command in Project settings if you want that mode too.` };
+    // nothing to add: the radio row already carries the agent's note
     return { cls: "probe ok", text: "" };
   }
   function renderAgentRadios(container, name, chosenId, { project = null, note = null } = {}) {
     container.replaceChildren();
     const agents = STATE.agents || [];
-    const usable = (a) => a.installed && (a.drive === "stream" || project?.customCommand);
+    const usable = (a) => a.installed;
     const first = agents.filter(usable); const rest = agents.filter((a) => !usable(a));
-    const pick = chosenId && agents.some((a) => a.id === chosenId) ? chosenId : (first[0]?.id || agents[0]?.id);
+    const pick = chosenId && agents.some((a) => a.id === chosenId) ? chosenId : (first.find((a) => a.cmd)?.id || first[0]?.id || agents[0]?.id);
+    const badge = (a) => !a.installed ? "not installed" : !a.cmd ? "chat only" : a.drive === "stream" ? "terminal + chat" : "terminal";
     const row = (a) => el("label", { class: `radio${usable(a) ? "" : " dim"}` },
       el("input", { type: "radio", name, value: a.id, checked: a.id === pick, onchange: () => { if (note) { const n = agentNote(a, project); note.className = n.cls; note.textContent = n.text; } } }),
-      el("span", {}, el("b", {}, a.label, el("span", { class: "badge" }, !a.installed ? "not installed" : a.drive === "stream" ? "ready" : project?.customCommand ? "via your command" : "needs a command")),
+      el("span", {}, el("b", {}, a.label, el("span", { class: "badge" }, badge(a))),
         el("small", {}, a.note || (a.cmd ? `looks for \`${a.cmd}\` on PATH` : ""))));
     for (const a of first) container.append(row(a));
     if (rest.length) {
       const more = el("div", { class: "radios", hidden: true }); for (const a of rest) more.append(row(a));
-      const tog = el("button", { class: "ghost mini", style: "align-self:flex-start", onclick: (e) => { e.preventDefault(); more.hidden = !more.hidden; tog.textContent = more.hidden ? `Show ${rest.length} more (not installed, or no adapter)` : "Show fewer"; } }, `Show ${rest.length} more (not installed, or no adapter)`);
+      const tog = el("button", { class: "ghost mini", style: "align-self:flex-start", onclick: (e) => { e.preventDefault(); more.hidden = !more.hidden; tog.textContent = more.hidden ? `Show ${rest.length} more (not installed on this machine)` : "Show fewer"; } }, `Show ${rest.length} more (not installed on this machine)`);
       container.append(tog, more);
     }
     if (note) { const n = agentNote(agents.find((a) => a.id === pick), project); note.className = n.cls; note.textContent = n.text; }
@@ -497,7 +499,91 @@
     if (name === "canvas") { drawEdges(); requestAnimationFrame(() => fitView({ min: 0.6 })); }
     if (name === "spec") loadSpecTab();
     if (name === "evidence") loadEvd();
+    if (name === "agent" && openName && agentMode === "term") requestAnimationFrame(() => attachTerminal());
   }
+
+  // ---------------------------------------------------------------------------
+  // the agent's terminal — the agent CLI in a real pty, drawn by xterm.js
+  // ---------------------------------------------------------------------------
+  let TERM = null, termFit = null, termWs = null, termFor = null, termRO = null;
+  let agentMode = (() => { try { return localStorage.getItem("aiqa.agentMode") || "term"; } catch { return "term"; } })();
+  const cssVar = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+  function termTheme() {
+    const dark = document.documentElement.getAttribute("data-theme") === "dark";
+    const base = { background: cssVar("--background"), foreground: cssVar("--foreground"), cursor: cssVar("--foreground"), cursorAccent: cssVar("--background") };
+    return dark
+      ? { ...base, selectionBackground: "#ffffff33", black: "#0a0a0a", red: "#ff6568", green: "#00c758", yellow: "#fcbb00", blue: "#54a2ff", magenta: "#a685ff", cyan: "#5ad1e6", white: "#e5e5e5",
+          brightBlack: "#737373", brightRed: "#ff8a8c", brightGreen: "#4fe08a", brightYellow: "#ffd54f", brightBlue: "#8ec0ff", brightMagenta: "#c2a9ff", brightCyan: "#8fe3f0", brightWhite: "#fafafa" }
+      : { ...base, selectionBackground: "#0000001f", black: "#0a0a0a", red: "#e40014", green: "#00a544", yellow: "#b75000", blue: "#155dfc", magenta: "#7f22fe", cyan: "#0e7490", white: "#737373",
+          brightBlack: "#525252", brightRed: "#f0424f", brightGreen: "#22b85e", brightYellow: "#dd7400", brightBlue: "#3b7cff", brightMagenta: "#9c5cff", brightCyan: "#1a9bb5", brightWhite: "#0a0a0a" };
+  }
+  function setTermStatus(text, cls) { const s = $("termStatus"); s.textContent = text; s.className = `term-status ${cls || ""}`; }
+  function detachTerminal() {
+    if (termWs) { try { termWs.onclose = null; termWs.close(); } catch { /* gone */ } termWs = null; }
+    if (termRO) { termRO.disconnect(); termRO = null; }
+    if (TERM) { TERM.dispose(); TERM = null; termFit = null; }
+    $("term").replaceChildren(); termFor = null;
+  }
+  /** Attach the page to this flow's terminal session. The session lives in the
+   *  studio process: leaving the flow detaches the page, the agent keeps
+   *  running, and coming back replays what it printed meanwhile. */
+  function attachTerminal({ restart = false } = {}) {
+    if (!openName || agentMode !== "term") return;
+    if (typeof Terminal === "undefined") { setTermStatus("xterm.js did not load", "unavailable"); return; }
+    if (TERM && termFor === openName && !restart) { try { termFit.fit(); } catch { /* not laid out yet */ } TERM.focus(); return; }
+    detachTerminal();
+    termFor = openName;
+    $("termNote").hidden = true;
+    TERM = new Terminal({ fontFamily: cssVar("--mono") || "monospace", fontSize: 12, lineHeight: 1.25, cursorBlink: true, scrollback: 5000, theme: termTheme(), allowTransparency: true });
+    termFit = new FitAddon.FitAddon(); TERM.loadAddon(termFit);
+    TERM.open($("term")); try { termFit.fit(); } catch { /* zero-size until laid out */ }
+    const proto = location.protocol === "https:" ? "wss" : "ws";
+    const ws = new WebSocket(`${proto}://${location.host}/${TOKEN}/api/term?flow=${encodeURIComponent(openName)}&cols=${TERM.cols}&rows=${TERM.rows}${restart ? "&restart=1" : ""}`);
+    ws.binaryType = "arraybuffer"; termWs = ws;
+    const enc = new TextEncoder();
+    setTermStatus("connecting…");
+    ws.onmessage = (e) => {
+      if (typeof e.data !== "string") { TERM.write(new Uint8Array(e.data)); return; }
+      let m; try { m = JSON.parse(e.data); } catch { return; }
+      if (m.type !== "status") return;
+      if (m.state === "unavailable") {
+        setTermStatus("terminal unavailable", "unavailable");
+        const n = $("termNote"); n.hidden = false;
+        n.replaceChildren(el("b", {}, "The terminal cannot start this agent here."), el("div", {}, m.reason || ""),
+          el("div", { class: "row" }, el("button", { class: "bd", onclick: () => setAgentMode("chat") }, "Use Chat instead"), el("button", { class: "bd", onclick: openSettings }, "Project settings")));
+        return;
+      }
+      const where = m.worktree ? `worktree ${m.worktree}${m.worktreeMissing ? " (missing → project checkout)" : ""}` : short(m.cwd);
+      if (m.state === "running") setTermStatus(`${m.command} · running in ${where}`, "running");
+      else setTermStatus(`${m.command} exited${m.exitCode != null ? ` (${m.exitCode})` : ""} — restart to run it again`, "exited");
+      loadFlows();
+    };
+    ws.onclose = () => { if (termWs === ws && !$("termStatus").classList.contains("exited")) setTermStatus("disconnected — reopen the flow to reconnect", "exited"); };
+    TERM.onData((d) => { if (ws.readyState === 1) ws.send(enc.encode(d)); });
+    TERM.onBinary((d) => { if (ws.readyState === 1) ws.send(Uint8Array.from(d, (ch) => ch.charCodeAt(0))); });
+    TERM.onResize(({ cols, rows }) => { if (ws.readyState === 1) ws.send(JSON.stringify({ type: "resize", cols, rows })); });
+    const refit = debounce(() => { try { termFit?.fit(); } catch { /* hidden */ } }, 60);
+    termRO = new ResizeObserver(refit); termRO.observe($("termWrap"));
+    TERM.focus();
+  }
+  /** Type into the agent's terminal as a person would: the text, then Enter. */
+  function termType(text) {
+    if (!termWs || termWs.readyState !== 1) return false;
+    const enc = new TextEncoder();
+    termWs.send(enc.encode(text));
+    setTimeout(() => { if (termWs?.readyState === 1) termWs.send(enc.encode("\r")); }, 250);
+    TERM?.focus();
+    return true;
+  }
+  function setAgentMode(mode) {
+    agentMode = mode; try { localStorage.setItem("aiqa.agentMode", mode); } catch { /* private window */ }
+    $("agentMode").querySelectorAll("button").forEach((b) => b.classList.toggle("on", b.dataset.mode === mode));
+    $("termWrap").hidden = mode !== "term"; $("chatPane").hidden = mode !== "chat";
+    $("termRestart").hidden = mode !== "term"; $("termStatus").hidden = mode !== "term"; $("newChat").hidden = mode !== "chat";
+    if (mode === "term") requestAnimationFrame(() => attachTerminal()); else detachTerminal();
+  }
+  $("agentMode").addEventListener("click", (e) => { const m = e.target.closest("button")?.dataset.mode; if (m) setAgentMode(m); });
+  $("termRestart").addEventListener("click", () => attachTerminal({ restart: true }));
 
   async function openFlow(name) {
     const r = await sendJSON(`/flows/${name}/open`, {});
@@ -509,17 +595,19 @@
     messages.replaceChildren(); sessionsNote();
     if (r.worktreeMissing) addMsg("studio", "assistant").textContent = `This flow was made for worktree "${flow.worktree}", which no longer exists. It is running in the project checkout instead. Create the worktree again from Project settings if that matters here.`;
     showTab("agent");
-    $("chatInput").focus();
+    // an agent with no CLI (the API) only has the chat; everything else opens in the terminal
+    setAgentMode(AGENT?.id && !AGENT.cmd ? "chat" : agentMode);
+    if (agentMode === "chat") $("chatInput").focus();
   }
   function sessionsNote() {
     const p = activeProject(); const a = AGENT || {}; const W = STATE.worktrees || {};
     const where = W.activeName ? `worktree ${W.activeName}` : `${short(STATE.cwd)} (${(W.list || []).find((w) => w.isMain)?.branch || "checkout"})`;
     const intro = el("div", { class: "intro" });
-    if (a.id && !(a.reason && (!a.installed || a.drive === "custom"))) {
-      intro.append(`This flow talks to `, el("b", {}, agentLabel(a.id)), ` in ${where}.`,
-        flow.ticket ? ` Start with /qa ${flow.ticket}, or ask what the specification says.` : " Give it a ticket in Steps → Ticket, then start with /qa.");
+    if (a.id && a.chat) {
+      intro.append(`Fenced chat with `, el("b", {}, agentLabel(a.id)), ` in ${where}: the engine can only reach the lane's own tools. `,
+        flow.ticket ? `Start with /qa ${flow.ticket}, or ask what the specification says.` : "Give it a ticket in Steps → Ticket, then start with /qa.");
     } else {
-      intro.className = "intro"; intro.append(el("span", { class: "warnchip" }, "no agent"), ` ${a.reason || "no agent is available for this flow"}. `, el("a", { href: "#", onclick: (e) => { e.preventDefault(); openSettings(); } }, "Project settings"));
+      intro.append(el("span", { class: "warnchip" }, "no chat"), ` ${a.reason || `the fenced chat has no adapter for ${agentLabel(a.id)} — use the Terminal, where it runs as itself`}. `, el("a", { href: "#", onclick: (e) => { e.preventDefault(); openSettings(); } }, "Project settings"));
     }
     if (STATE.hasLane === false) intro.append(el("div", { class: "notice warn", style: "margin-top:8px" }, el("b", {}, `No aiqa.config.yaml in ${short(STATE.cwd)}.`), el("span", {}, ` Run \`ai-qa init\` there before asking the agent to verify anything; the workflows it needs are installed by init.`)));
     messages.append(intro);
@@ -894,7 +982,7 @@
   function addMsg(who, cls) { const m = el("div", { class: `msg ${cls}` }, el("div", { class: "who" }, who), el("div", { class: "bubble" })); messages.append(m); messages.scrollTop = messages.scrollHeight; return m.querySelector(".bubble"); }
   async function sendChat(text, opts = {}) {
     const a = AGENT || {};
-    if (!a.id || (a.reason && (!a.installed || a.drive === "custom"))) { addMsg("studio", "assistant").textContent = a.reason ? `${agentLabel(a.id)}: ${a.reason}` : "No agent is available for this flow — pick one in Project settings, or create the flow again with a different agent."; return; }
+    if (!a.id || !a.chat) { addMsg("studio", "assistant").textContent = a.reason ? `${agentLabel(a.id)}: ${a.reason}` : `The fenced chat has no adapter for ${agentLabel(a.id)} — switch to Terminal, where it runs as itself.`; return; }
     if (!opts.silentUser) addMsg("you", "user").textContent = text;
     const bubble = addMsg(opts.label || agentLabel(a.id), "assistant");
     let acc = ""; const live = el("div", { style: "white-space:pre-wrap" }); bubble.append(live);
@@ -930,6 +1018,12 @@
     const t = (flow.ticket || ticketInput.value).trim();
     const text = q.replace("{ticket}", t || "<ticket>");
     if (q.includes("{ticket}") && !t) { $("chatInput").value = text; showTab("canvas"); ticketInput.focus(); return; }
+    if (agentMode === "term") {
+      // typed into the real terminal; a command that wants an argument is left for the person to finish
+      if (!termWs || termWs.readyState !== 1) { attachTerminal(); return; }
+      if (q.endsWith(" ")) { termWs.send(new TextEncoder().encode(text)); TERM?.focus(); return; }
+      termType(text); return;
+    }
     if (q.endsWith(" ")) { $("chatInput").value = text; $("chatInput").focus(); return; }
     sendChat(text);
   });
