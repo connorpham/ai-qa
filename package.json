@@ -21,6 +21,7 @@
     "node": ">=20"
   },
   "scripts": {
+    "studio": "node bin/ai-qa.mjs studio",
     "prepublishOnly": "npm test",
     "test": "node tests/conformance.mjs && node tests/e2e.mjs",
     "selftest": "node src/cli/scan.mjs --selftest"

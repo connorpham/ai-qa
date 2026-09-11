@@ -82,7 +82,10 @@
         <div class="section-head" id="pastHead" hidden><span>Run one again</span><span class="muted" id="pastSub"></span></div>
         <div class="cards" id="pastCases"></div>
 
-        <div class="section-head"><span>Flows <span class="muted" id="flowCount"></span></span></div>
+        <div class="section-head">
+          <span>Flows <span class="muted" id="flowCount"></span></span>
+          <button class="mini bd" id="runAllBtn" title="Run every flow in this project sequentially">▶ Run all flows</button>
+        </div>
         <div class="cards" id="flowCards"></div>
         <div class="empty" id="flowsEmpty" hidden>
           <h3>No flows yet</h3>
@@ -106,13 +109,14 @@
           <span class="writes" id="writesBadge" hidden>writes: forbidden</span>
           <span class="warnchip" id="laneChip" hidden title="This checkout has no aiqa.config.yaml">no lane here</span>
           <span class="result" id="flowResult"></span>
+          <button id="flowQuickRunBtn" class="primary mini" title="Run this flow immediately">▶ Run test</button>
         </div>
       </header>
       <nav class="tabs">
-        <button data-tab="agent" class="on">Agent</button>
+        <button data-tab="run" class="on">Run</button>
         <button data-tab="canvas">Steps</button>
-        <button data-tab="run">Run</button>
         <button data-tab="evidence">Evidence</button>
+        <button data-tab="agent">Agent (AI)</button>
         <button data-tab="spec">Ticket &amp; spec</button>
       </nav>
 
@@ -120,7 +124,7 @@
            by xterm.js. The flow's agent command is typed into it — `claude`,
            `codex`, `gemini` — exactly as the person would type it, nothing
            added. Choose another agent and a fresh terminal opens with it. -->
-      <div class="tab on" id="tab-agent">
+      <div class="tab" id="tab-agent">
         <div class="agent-pane">
           <div class="agent-bar">
             <label class="inline">Agent <select id="termAgent" title="The agent whose command is typed into this terminal. Changing it opens a fresh terminal."></select></label>
@@ -179,13 +183,14 @@
         </div>
       </div>
 
-      <div class="tab" id="tab-run">
+      <div class="tab on" id="tab-run">
         <div class="run-head">
-          <button class="bd" id="compileBtn">Compile</button>
-          <button id="runBtn" class="primary">Run for real</button>
+          <button id="runBtn" class="primary">▶ Run test</button>
+          <button class="bd" id="compileBtn" title="Check &amp; compile to evd/ files without running">Compile only</button>
           <button class="bd" id="stopBtn" disabled>Stop</button>
           <span class="run-status" id="runStatus"></span>
         </div>
+        <div class="run-banner" id="runBanner" hidden></div>
         <div class="run-grid">
           <div class="steps" id="runSteps"><div class="muted">Compile writes evd/&lt;ticket&gt;/TC_n_&lt;name&gt;/ — manifest.md, run.sh, flow.json and, for web flows, journey.mjs. Run executes those steps here and records the outcome.</div></div>
           <pre class="log" id="runLog"></pre>
@@ -200,10 +205,11 @@
         </div>
         <div class="evd-main">
           <div class="run-head">
-            <button class="bd" id="gateBtn">Run the gate (evd_check)</button>
-            <button class="bd" id="exportBtn">Export spreadsheet</button>
+            <button class="primary mini" id="exportBtn">📥 Export spreadsheet</button>
+            <button class="bd" id="gateBtn">Run gate (evd_check)</button>
             <span class="run-status" id="evdStatus"></span>
           </div>
+          <div class="evd-summary-card" id="evdSummary" hidden></div>
           <div class="evd-view" id="evdView"><div class="muted">Pick a file on the left. The report, each case's manifest, request/response pairs, screenshots.</div></div>
         </div>
       </div>
@@ -258,23 +264,28 @@
     <label style="flex:1.4">Name <input id="nfName" placeholder="shop_142_acceptance" spellcheck="false" autocomplete="off"></label>
     <label style="width:130px">Kind <select id="nfKind"></select></label>
   </div>
-  <div class="field">
-    <span class="field-label">AI agent</span>
-    <div class="radios" id="nfAgents"></div>
-    <div class="probe" id="nfAgentNote"></div>
-  </div>
-  <div class="field">
-    <span class="field-label">Where it runs</span>
-    <div class="radios">
-      <label class="radio"><input type="radio" name="nfWhere" value="project" checked><span><b>The project checkout</b><small id="nfMainBranch"></small></span></label>
-      <label class="radio"><input type="radio" name="nfWhere" value="worktree"><span><b>A new worktree</b><small>An isolated checkout under <code>.ai-qa/worktrees/</code>. The branch you are working on is left alone.</small></span></label>
+  <details class="adv-toggle" id="nfAdvDetails">
+    <summary class="adv-summary">⚙ Advanced options (AI agent &amp; Git worktree)</summary>
+    <div class="adv-content">
+      <div class="field">
+        <span class="field-label">AI agent</span>
+        <div class="radios" id="nfAgents"></div>
+        <div class="probe" id="nfAgentNote"></div>
+      </div>
+      <div class="field">
+        <span class="field-label">Where it runs</span>
+        <div class="radios">
+          <label class="radio"><input type="radio" name="nfWhere" value="project" checked><span><b>The project checkout</b><small id="nfMainBranch"></small></span></label>
+          <label class="radio"><input type="radio" name="nfWhere" value="worktree"><span><b>A new worktree</b><small>An isolated checkout under <code>.ai-qa/worktrees/</code>. The branch you are working on is left alone.</small></span></label>
+        </div>
+        <div class="sub-fields" id="nfWtFields" hidden>
+          <label>Worktree name <input id="nfWtName" placeholder="verify-shop-142" spellcheck="false" autocomplete="off"></label>
+          <label>Checks out <select id="nfWtBase"></select></label>
+          <label class="cb"><input type="checkbox" id="nfWtNewBranch"> create a new branch with this name, from the ref above</label>
+        </div>
+      </div>
     </div>
-    <div class="sub-fields" id="nfWtFields" hidden>
-      <label>Worktree name <input id="nfWtName" placeholder="verify-shop-142" spellcheck="false" autocomplete="off"></label>
-      <label>Checks out <select id="nfWtBase"></select></label>
-      <label class="cb"><input type="checkbox" id="nfWtNewBranch"> create a new branch with this name, from the ref above</label>
-    </div>
-  </div>
+  </details>
   <div class="probe" id="nfProbe"></div>
   <div class="row dlg-actions">
     <button class="bd" data-close>Cancel</button>
