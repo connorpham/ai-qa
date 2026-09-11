@@ -1503,6 +1503,69 @@ for (const [label, cmd, args] of [
   fs.rmSync(tmp, { recursive: true, force: true });
 }
 
+
+// ---- a past verification, offered back as a flow -----------------------------
+// /regress has always said it: promote the journeys past verifications left
+// behind. The value is in what a finished case already encodes — which
+// account, which click path, which value mattered. The danger is inheriting
+// its VERDICT, which belongs to the build it ran against.
+{
+  const { pastCases, flowFromCase, freeName } = await import("../src/ui/studio/promote.mjs");
+  const os2 = await import("node:os");
+  const tmp = fs.mkdtempSync(path.join(os2.tmpdir(), "aiqa-promote-"));
+  const put = (rel, text) => { const abs = path.join(tmp, rel); fs.mkdirSync(path.dirname(abs), { recursive: true }); fs.writeFileSync(abs, text); };
+
+  const manifest = (verdict) => `TITLE: A gold order of exactly 500,000\nRESULT: ${verdict}\nRAN-AT: 2026-09-11T02:00:41Z\nKIND: boundary\nAS: customer, tier gold\n`;
+  const flowDoc = { version: 1, name: "boundary_exactly_500000", ticket: "SHOP-142", kind: "boundary",
+    nodes: [{ id: "n1", type: "actor", x: 0, y: 0, data: { role: "customer" } },
+            { id: "n2", type: "api", x: 0, y: 0, data: { path: "/orders" } }],
+    edges: [{ from: "n1", to: "n2" }], result: "FAIL", ranAt: "2026-09-11T02:00:41Z", worktree: "verify-shop-142" };
+
+  // a studio-authored case: flow.json travels with the evidence
+  put("evd/SHOP-142/TC_2_boundary_exactly_500000/manifest.md", manifest("FAIL"));
+  put("evd/SHOP-142/TC_2_boundary_exactly_500000/flow.json", JSON.stringify(flowDoc));
+  // an agent-authored case: journey.mjs, no flow.json
+  put("evd/SHOP-143/TC_1/manifest.md", manifest("PASS"));
+  put("evd/SHOP-143/TC_1/journey.mjs", "import { launch } from '../../../.ai-qa/scripts/browser.mjs';");
+  // a folder with neither
+  put("evd/SHOP-144/TC_1/manifest.md", manifest("BLOCKED"));
+
+  const cases = pastCases(tmp);
+  check(cases.length === 3, `pastCases found ${cases.length} cases, expected 3`);
+
+  const studioCase = cases.find((c) => c.ticket === "SHOP-142");
+  check(studioCase.importable === true, "a case carrying flow.json should be importable");
+  check(studioCase.steps === 2 && studioCase.result === "FAIL" && studioCase.kind === "boundary",
+    "the manifest fields were not read back");
+
+  // The agent case must be refused, and the refusal must name the real fix.
+  const agentCase = cases.find((c) => c.ticket === "SHOP-143");
+  check(agentCase.importable === false, "a journey.mjs with no flow.json must NOT be importable — re-parsing an agent's JavaScript could hand back a flow that tests something else");
+  check(/flow\.json/.test(agentCase.reason) && /\/qa/.test(agentCase.reason),
+    `the refusal should say what is missing and where the fix belongs: ${JSON.stringify(agentCase.reason)}`);
+  const bareCase = cases.find((c) => c.ticket === "SHOP-144");
+  check(bareCase.importable === false && /nothing runnable/.test(bareCase.reason), "a manifest alone is not importable");
+
+  // THE ONE THAT MATTERS: a fork must not inherit the verdict.
+  const forked = flowFromCase(tmp, studioCase, ["boundary_exactly_500000"]);
+  check(!!forked, "flowFromCase returned nothing for an importable case");
+  check(forked.result === undefined, "the fork INHERITED a verdict — that is a claim about a build nobody has tested");
+  check(forked.ranAt === undefined, "the fork inherited a run timestamp");
+  check(forked.worktree === undefined, "the fork inherited a worktree that may not exist");
+  check(forked.nodes.length === 2 && forked.edges.length === 1, "the fork lost its steps");
+  check(forked.name === "boundary_exactly_500000_2", `a colliding name should fork to _2, got ${forked.name}`);
+  check(forked.promotedFrom === "evd/SHOP-142/TC_2_boundary_exactly_500000", "the fork does not record where it came from");
+  check(typeof forked.promotedAt === "string", "the fork does not record when it was promoted");
+
+  // names keep forking rather than overwriting
+  check(freeName("x", []) === "x", "freeName changed a free name");
+  check(freeName("x", ["x", "x_2"]) === "x_3", `freeName gave ${freeName("x", ["x", "x_2"])}`);
+  check(freeName("Bad Name!", []) === "bad_name", `freeName did not clean: ${freeName("Bad Name!", [])}`);
+
+  check(pastCases(path.join(tmp, "nope")).length === 0, "a missing evidence dir should yield nothing, not throw");
+  fs.rmSync(tmp, { recursive: true, force: true });
+}
+
 // ---- report -------------------------------------------------------------------
 if (fails.length) {
   console.error(`conformance: ${fails.length} FAILED of ${checks} checks\n`);

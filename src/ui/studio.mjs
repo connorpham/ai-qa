@@ -30,6 +30,7 @@ import * as worktrees from "./studio/worktrees.mjs";
 import * as terminal from "./studio/terminal.mjs";
 import * as agents from "./studio/agents.mjs";
 import { inventory } from "./studio/inventory.mjs";
+import { pastCases, flowFromCase } from "./studio/promote.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ASSETS = path.join(HERE, "studio");
@@ -480,6 +481,32 @@ export async function studio(flags = {}) {
           worktree: flow.worktree || null, worktreeExists: !flow.worktree || fs.existsSync(at), steps: (flow.nodes || []).length, result, ranAt, updated,
           terminal: t ? { running: t.running, exitCode: t.exitCode, startedAt: t.startedAt } : null };
       };
+      // Past verifications, and which of them can come back as a flow.
+      // The arrow /regress has always described: a case that ran once already
+      // encodes which account, which click path, which value mattered.
+      if (req.method === "GET" && route === "/api/past-cases") {
+        const at = cwd();
+        const evdDir = String(get(config(at), "paths.evidence", "evd") || "evd");
+        json(res, 200, { cases: pastCases(at, evdDir) });
+        return;
+      }
+      if (req.method === "POST" && route === "/api/past-cases/import") {
+        const body = JSON.parse((await readBody(req)) || "{}");
+        const at = cwd();
+        const evdDir = String(get(config(at), "paths.evidence", "evd") || "evd");
+        const entry = pastCases(at, evdDir).find((c) => c.ticket === body.ticket && c.case === body.case);
+        if (!entry) { json(res, 404, { error: "no such case" }); return; }
+        if (!entry.importable) { json(res, 422, { error: entry.reason }); return; }
+        let taken = [];
+        try { taken = fs.readdirSync(flowsDir).filter((f) => f.endsWith(".json")).map((f) => f.replace(/\.json$/, "")); } catch { /* none yet */ }
+        const flow = flowFromCase(at, entry, taken, evdDir);
+        if (!flow) { json(res, 422, { error: "flow.json could not be read" }); return; }
+        fs.mkdirSync(flowsDir, { recursive: true });
+        fs.writeFileSync(path.join(flowsDir, `${flow.name}.json`), `${JSON.stringify(flow, null, 2)}\n`);
+        json(res, 200, { flow, name: flow.name });
+        return;
+      }
+
       if (req.method === "GET" && route === "/api/flows") {
         let names = [];
         try { names = fs.readdirSync(flowsDir).filter((f) => f.endsWith(".json")).map((f) => f.replace(/\.json$/, "")).sort(); } catch { names = []; }
