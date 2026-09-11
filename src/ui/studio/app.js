@@ -275,8 +275,56 @@
     }));
   }
 
+  /** Past verifications, offered back as flows.
+   *
+   *  /regress has always said it: promote the journeys past verifications left
+   *  behind. A case that ran once already encodes which account, which click
+   *  path and which value mattered — re-deriving that by hand for the next
+   *  build is the manual work this tool exists to remove.
+   *
+   *  It forks rather than reopens: a past verification is a record. And the
+   *  verdict does NOT come with it — inheriting "PASS" into a fresh flow would
+   *  be a claim about a build nobody has tested yet. */
+  async function renderPastCases() {
+    const host = $("pastCases"); const head = $("pastHead");
+    if (!host || !head) return;
+    let cases = [];
+    try { cases = (await getJSON("/past-cases")).cases || []; } catch { /* no lane, or no evidence yet */ }
+    if (!cases.length) { head.hidden = true; host.replaceChildren(); return; }
+
+    const can = cases.filter((c) => c.importable).length;
+    head.hidden = false;
+    $("pastSub").textContent = can === cases.length
+      ? `${cases.length} finished` : `${can} of ${cases.length} can come back as a flow`;
+
+    host.replaceChildren(...cases.slice(0, 12).map((c) => el("div", { class: "past" },
+      el("div", { class: "l1" },
+        el("b", {}, `${c.ticket} · ${c.case.replace(/^TC_\d+_?/, "") || c.case}`),
+        c.result ? el("span", { class: `verdict ${c.result}` }, c.result) : null),
+      c.title ? el("div", { class: "meta" }, c.title.slice(0, 110)) : null,
+      el("div", { class: "meta" }, [c.kind, c.as, c.ranAt && `ran ${c.ranAt.slice(0, 10)}`].filter(Boolean).join(" · ")),
+      c.importable
+        ? el("div", { class: "row" },
+            el("button", { class: "bd", type: "button", onclick: (e) => importCase(c, e.target) },
+              `Run it again — ${c.steps} steps`),
+            el("span", { class: "meta" }, "opens as a new flow; the old verdict stays with the old run"))
+        : el("div", { class: "why" }, c.reason))));
+  }
+
+  async function importCase(c, btn) {
+    if (btn) { btn.disabled = true; btn.textContent = "importing…"; }
+    try {
+      const r = await sendJSON("/past-cases/import", { ticket: c.ticket, case: c.case });
+      await loadFlows();
+      await openFlow(r.name);
+    } catch (e) {
+      if (btn) { btn.disabled = false; btn.textContent = "could not import"; btn.title = String(e.message || e); }
+    }
+  }
+
   function renderProjectScreen() {
     renderInventory();
+    renderPastCases();
     const p = activeProject(); if (!p) return;
     const main = (STATE.worktrees?.list || []).find((w) => w.isMain);
     $("pjTitle").textContent = p.name;
