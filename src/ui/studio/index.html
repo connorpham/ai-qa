@@ -72,12 +72,35 @@
         </div>
       </header>
       <div class="pj-body">
-        <div class="notice warn" id="laneNotice" hidden>
-          <b>No <code>aiqa.config.yaml</code> in this checkout.</b>
-          <span>Run <code>ai-qa init</code> in that folder first; the studio does not install the lane into someone's codebase on its own.</span>
+        <div class="setup" id="setupPanel" hidden>
+          <h3>Set this project up</h3>
+          <p class="sub" id="setupReadiness"></p>
+          <div class="setup-form">
+            <label>Ticket key <input id="suKey" spellcheck="false" autocomplete="off" placeholder="SHOP"></label>
+            <label>Start command <input id="suStart" spellcheck="false" autocomplete="off" placeholder="npm run dev"></label>
+            <label>URL it answers on <input id="suUrl" spellcheck="false" autocomplete="off" placeholder="http://localhost:3000"></label>
+          </div>
+          <div class="setup-surfaces" id="suSurfaces"></div>
+          <p class="sub">This runs in a terminal you can watch. Nothing is written into your repository that you have not seen the command for.</p>
+          <pre class="setup-cmd" id="suPreview"></pre>
+          <div class="row">
+            <button class="primary" id="suRun" type="button">Set it up</button>
+            <span class="muted" id="suNote"></span>
+          </div>
         </div>
+
+        <div class="task-term" id="taskTerm" hidden>
+          <div class="task-bar"><span id="taskStatus">…</span><button class="mini bd" id="taskClose" type="button">Close</button></div>
+          <div class="term-host" id="taskTermHost"></div>
+        </div>
+
         <div class="section-head"><span>What this project has</span><span class="muted" id="invSub"></span></div>
         <div class="inventory" id="inventory"></div>
+
+        <div class="envbar" id="envBar" hidden>
+          <span class="muted" id="envWhat"></span>
+          <button class="bd" id="envStart" type="button">Start the app</button>
+        </div>
 
         <div class="section-head" id="pastHead" hidden><span>Run one again</span><span class="muted" id="pastSub"></span></div>
         <div class="cards" id="pastCases"></div>

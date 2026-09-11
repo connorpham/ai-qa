@@ -327,7 +327,120 @@
     }
   }
 
+  /** A gate never starts a server — it probes one. The STUDIO is not a gate: it
+   *  is the operator's console, and it starts the app the way a person would,
+   *  by typing app.start into a shell you can watch. Without this, "add a
+   *  project and run it" ends at a case that BLOCKS because nothing answers. */
+  function renderEnvBar() {
+    const bar = $("envBar");
+    if (!bar) return;
+    const url = STATE?.project?.appUrl || "";
+    if (STATE.hasLane === false || !url) { bar.hidden = true; return; }
+    bar.hidden = false;
+    $("envWhat").textContent = `The app is expected at ${url}. A verification that finds nothing there is BLOCKED, not failed — start it here, or in your own terminal.`;
+    $("envStart").onclick = () => openTaskTerminal("app", "starting the app");
+  }
+
+  // ---- setting a project up, without sending anyone to a terminal ----------
+  const SURFACES_UI = [["web", "Web app"], ["api", "API"], ["database", "Database"], ["mobile", "Mobile"]];
+  let SETUP = null;
+
+  async function renderSetup() {
+    const panel = $("setupPanel");
+    if (!panel) return;
+    if (STATE.hasLane !== false) { panel.hidden = true; return; }
+    let d = null;
+    try { d = await getJSON("/setup/detect"); } catch { panel.hidden = true; return; }
+    if (d.hasLane) { panel.hidden = true; return; }
+    SETUP = d;
+    panel.hidden = false;
+
+    $("setupReadiness").textContent =
+      `This repository scores ${d.readiness.score}/100 for testability today. `
+      + `Setting the lane up installs the gates and the four workflows; it does not change your code.`;
+    $("suKey").value = d.suggested.key || "QA";
+    $("suStart").value = d.suggested.start || "";
+    $("suUrl").value = d.suggested.url || "";
+
+    const chosen = new Set(d.suggested.surfaces || ["web"]);
+    $("suSurfaces").replaceChildren(...SURFACES_UI.map(([id, label]) => {
+      const cb = el("input", { type: "checkbox", value: id, checked: chosen.has(id) });
+      const lab = el("label", { class: chosen.has(id) ? "on" : "" }, cb, label);
+      cb.addEventListener("change", () => { lab.classList.toggle("on", cb.checked); previewSetup(); });
+      return lab;
+    }));
+    previewSetup();
+    for (const id of ["suKey", "suStart", "suUrl"]) $(id).oninput = previewSetup;
+    $("suRun").onclick = runSetup;
+  }
+
+  const setupFields = () => ({
+    key: $("suKey").value.trim().toUpperCase(),
+    surfaces: [...$("suSurfaces").querySelectorAll("input:checked")].map((i) => i.value),
+    start: $("suStart").value.trim(),
+    url: $("suUrl").value.trim(),
+  });
+
+  /** Show the command BEFORE it runs. Someone who would rather paste it into
+   *  their own terminal should be able to read it and do exactly that. */
+  async function previewSetup() {
+    const note = $("suNote"); note.textContent = "";
+    try {
+      const r = await sendJSON("/setup/prepare", setupFields());
+      $("suPreview").textContent = r.preview;
+      $("suRun").disabled = false;
+    } catch (e) {
+      $("suPreview").textContent = "";
+      note.textContent = e.message || String(e);
+      $("suRun").disabled = true;
+    }
+  }
+
+  async function runSetup() {
+    try { await sendJSON("/setup/prepare", setupFields()); } catch (e) { $("suNote").textContent = e.message; return; }
+    openTaskTerminal("setup", "installing the lane");
+  }
+
+  /** A one-shot terminal for a project-level task. Deliberately NOT the flow
+   *  terminal: that one persists and replays, this one you open, watch, and
+   *  close. Separate state, so neither can disturb the other. */
+  let taskWs = null, taskTerm = null, taskFit = null;
+  function closeTaskTerminal() {
+    if (taskWs) { try { taskWs.onclose = null; taskWs.close(); } catch { /* gone */ } taskWs = null; }
+    if (taskTerm) { taskTerm.dispose(); taskTerm = null; taskFit = null; }
+    $("taskTermHost").replaceChildren();
+    $("taskTerm").hidden = true;
+    refreshState().then(() => { renderProjectScreen(); });
+  }
+
+  function openTaskTerminal(task, what) {
+    if (typeof Terminal === "undefined") { $("suNote").textContent = "xterm.js did not load — run the command above in your own terminal"; return; }
+    if (taskWs) closeTaskTerminal();
+    $("taskTerm").hidden = false;
+    $("taskStatus").textContent = `${what}…`;
+    $("taskClose").onclick = closeTaskTerminal;
+    taskTerm = new Terminal({ fontFamily: cssVar("--mono") || "monospace", fontSize: 12, lineHeight: 1.25,
+      cursorBlink: true, scrollback: 5000, theme: termTheme(), allowTransparency: true });
+    taskFit = new FitAddon.FitAddon(); taskTerm.loadAddon(taskFit);
+    taskTerm.open($("taskTermHost")); try { taskFit.fit(); } catch { /* not laid out yet */ }
+    const proto = location.protocol === "https:" ? "wss" : "ws";
+    const ws = new WebSocket(`${proto}://${location.host}/${TOKEN}/api/term?task=${task}&cols=${taskTerm.cols}&rows=${taskTerm.rows}`);
+    ws.binaryType = "arraybuffer"; taskWs = ws;
+    const enc = new TextEncoder();
+    ws.onmessage = (e) => {
+      if (typeof e.data !== "string") { taskTerm.write(new Uint8Array(e.data)); return; }
+      let m; try { m = JSON.parse(e.data); } catch { return; }
+      if (m.type !== "status") return;
+      if (m.state === "running") $("taskStatus").textContent = `${m.shell} in ${short(m.cwd)}${m.typed ? ` · typed ${m.typed}` : ""}`;
+      else $("taskStatus").textContent = m.note || `finished${m.exitCode != null ? ` (${m.exitCode})` : ""} — close to refresh`;
+    };
+    taskTerm.onData((d) => { if (ws.readyState === 1) ws.send(enc.encode(d)); });
+    taskTerm.onResize(({ cols, rows }) => { if (ws.readyState === 1) ws.send(JSON.stringify({ type: "resize", cols, rows })); });
+  }
+
   function renderProjectScreen() {
+    renderSetup();
+    renderEnvBar();
     renderInventory();
     renderPastCases();
     const p = activeProject(); if (!p) return;
@@ -337,7 +450,6 @@
     const r = p.agentResolved || {};
     $("pjAgentChip").textContent = r.id ? `default AI: ${agentLabel(r.id)}${r.chosen ? "" : " (auto)"}` : "no AI available";
     $("pjAgentChip").className = `chip${r.id && !r.installed ? " warnchip" : ""}`;
-    $("laneNotice").hidden = STATE.hasLane !== false || !!STATE.worktrees?.activePath;
     $("flowCount").textContent = FLOWS.length ? `(${FLOWS.length})` : "";
     const cards = $("flowCards"); cards.replaceChildren();
     for (const f of FLOWS) cards.append(flowCard(f, { big: true }));

