@@ -167,10 +167,15 @@
     const agentId = shellOnly ? null : (f.agent || activeProject()?.agent || STATE.projects?.active?.agentResolved?.id);
     const mainBranch = (STATE.worktrees?.list || []).find((w) => w.isMain)?.branch || "";
     const live = runningFlow === f.name || !!f.terminal?.running;
+    const runBtn = el("button", { class: "btn-card-run", title: "Run this test immediately", onclick: async (e) => {
+      e.stopPropagation();
+      await openFlow(f.name, { autoRun: true });
+    } }, "▶ Run");
     const card = el("div", { class: `card${f.name === openName ? " on" : ""}`, title: f.title || f.name, onclick: () => openFlow(f.name) },
       el("div", { class: "l1" },
         el("span", { class: `dot ${live ? "live" : (f.result || "")}` }),
         el("span", { class: "name" }, f.name),
+        runBtn,
         big ? el("button", { class: "ghost del", title: "Delete this flow (evidence already in evd/ stays)", onclick: async (e) => {
           e.stopPropagation();
           if (!confirm(`Delete flow "${f.name}"?\n\nCompiled evidence in evd/ stays.`)) return;
@@ -308,6 +313,31 @@
     $("flowResult").className = `result ${sum?.result || ""}`;
   }
   $("crumbProject").addEventListener("click", (e) => { e.preventDefault(); showScreen("project"); loadFlows(); });
+  $("flowQuickRunBtn")?.addEventListener("click", () => {
+    showTab("run");
+    if (!runningFlow) $("runBtn").click();
+  });
+
+  let isRunningAll = false;
+  $("runAllBtn")?.addEventListener("click", async () => {
+    if (isRunningAll) return;
+    if (!FLOWS.length) { alert("No flows yet to run. Click '+ New flow' first."); return; }
+    if (!confirm(`Run all ${FLOWS.length} test flow(s) sequentially?`)) return;
+    isRunningAll = true;
+    $("runAllBtn").textContent = "Running all…";
+    $("runAllBtn").disabled = true;
+    for (const f of FLOWS) {
+      await openFlow(f.name, { autoRun: true });
+      while (runningFlow) {
+        await new Promise((r) => setTimeout(r, 400));
+      }
+    }
+    $("runAllBtn").textContent = "▶ Run all flows";
+    $("runAllBtn").disabled = false;
+    isRunningAll = false;
+    await loadFlows();
+    showScreen("project");
+  });
 
   // ---------------------------------------------------------------------------
   // dialogs
@@ -432,12 +462,14 @@
     $("nfTicket").value = ""; $("nfName").value = ""; $("nfName").dataset.edited = "";
     const k = $("nfKind"); if (!k.options.length) k.replaceChildren(...SCHEMA.kinds.map((x) => el("option", { value: x }, x)));
     k.value = "acceptance";
+    if ($("nfAdvDetails")) $("nfAdvDetails").open = false;
     renderAgentRadios($("nfAgents"), "nfAgent", p.agentResolved?.id || p.agent, { project: p, note: $("nfAgentNote") });
     document.querySelector('input[name="nfWhere"][value="project"]').checked = true; $("nfWtFields").hidden = true;
     const main = (STATE.worktrees?.list || []).find((w) => w.isMain);
     $("nfMainBranch").textContent = `${main?.branch || "the current branch"} · ${short(p.path)}. Fine when the change under test is already merged there.`;
     $("nfWtName").value = ""; $("nfWtNewBranch").checked = false;
-    const box = $("nfProbe"); box.className = "probe"; box.replaceChildren();
+    const box = $("nfProbe"); box.className = "probe";
+    box.textContent = "acceptance — verify core user journey against specification";
     if (STATE.hasLane === false) { box.className = "probe warn"; box.textContent = "This project has no aiqa.config.yaml. The flow can be created, but nothing will run until `ai-qa init` has been run in that folder."; }
     openDialog("dlgFlow"); $("nfTicket").focus();
     const sel = $("nfWtBase"); sel.replaceChildren(el("option", { value: "" }, "loading branches…"));
@@ -452,8 +484,21 @@
   }
   $("newFlowBtn").addEventListener("click", openNewFlow);
   $("newFlowBtn2").addEventListener("click", openNewFlow);
-  $("nfTicket").addEventListener("input", () => { if (!$("nfName").dataset.edited) $("nfName").value = flowNameFor($("nfTicket").value.trim(), $("nfKind").value); if (!$("nfWtName").dataset.edited) $("nfWtName").value = `verify-${$("nfTicket").value.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-")}`.replace(/-+$/, ""); });
-  $("nfKind").addEventListener("change", () => { if (!$("nfName").dataset.edited) $("nfName").value = flowNameFor($("nfTicket").value.trim(), $("nfKind").value); });
+  const KIND_HINTS = {
+    acceptance: "acceptance — verify core user journey against specification",
+    boundary: "boundary — test edge values (threshold, empty field, maximums)",
+    "whole-screen": "whole-screen — full screen audit, all fields and buttons",
+    "write-readback": "write-readback — verify a write is actually persisted in database",
+    exploratory: "exploratory — free-form investigation without strict oracle"
+  };
+  $("nfKind").addEventListener("change", () => {
+    if (!$("nfName").dataset.edited) $("nfName").value = flowNameFor($("nfTicket").value.trim(), $("nfKind").value);
+    const box = $("nfProbe");
+    if (box && (!box.classList.contains("bad") || !box.textContent)) {
+      box.className = "probe";
+      box.textContent = KIND_HINTS[$("nfKind").value] || "";
+    }
+  });
   $("nfName").addEventListener("input", () => { $("nfName").dataset.edited = $("nfName").value ? "1" : ""; });
   $("nfWtName").addEventListener("input", () => { $("nfWtName").dataset.edited = $("nfWtName").value ? "1" : ""; });
   document.querySelectorAll('input[name="nfWhere"]').forEach((r) => r.addEventListener("change", () => { $("nfWtFields").hidden = document.querySelector('input[name="nfWhere"]:checked').value !== "worktree"; }));
@@ -639,7 +684,7 @@
   });
   $("termRestart").addEventListener("click", () => attachTerminal({ restart: true }));
 
-  async function openFlow(name) {
+  async function openFlow(name, { autoRun = false } = {}) {
     const r = await sendJSON(`/flows/${name}/open`, {});
     flow = r.flow; STATE = r.state; AGENT = r.agent; openName = name;
     selected = { node: null, edge: null };
@@ -647,7 +692,14 @@
     ticketInput.value = flow.ticket || "";
     showScreen("flow"); renderBars(); renderNodes(); renderInspector(); scheduleValidate();
     fillTermAgents();
-    showTab("agent");
+    if (autoRun) {
+      showTab("run");
+      setTimeout(() => { if (!runningFlow) $("runBtn")?.click(); }, 120);
+    } else if ((flow.nodes || []).length > 0) {
+      showTab("run");
+    } else {
+      showTab("canvas");
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -961,8 +1013,48 @@
     }
   });
 
+  function showRunBanner(result, caseDir, extra = "") {
+    const banner = $("runBanner");
+    if (!banner) return;
+    banner.replaceChildren();
+    const r = String(result || "").toUpperCase();
+    banner.className = `run-banner ${r.toLowerCase()}`;
+    if (r === "PASS") {
+      banner.append(
+        el("div", { class: "banner-msg" },
+          el("b", {}, "✓ Test Passed"),
+          el("span", {}, `All verifications succeeded against specification. Evidence saved in ${caseDir || "evd/"}.`)),
+        el("div", { class: "banner-act" },
+          el("button", { class: "primary mini", onclick: () => showTab("evidence") }, "View evidence & report →"))
+      );
+      banner.hidden = false;
+    } else if (r === "FAIL") {
+      banner.append(
+        el("div", { class: "banner-msg" },
+          el("b", {}, "✗ Test Failed"),
+          el("span", {}, extra || "One or more checks did not match expected values or spec requirements.")),
+        el("div", { class: "banner-act" },
+          el("button", { class: "primary mini", onclick: () => showTab("evidence") }, "Inspect failure evidence →"))
+      );
+      banner.hidden = false;
+    } else if (r === "BLOCKED") {
+      banner.append(
+        el("div", { class: "banner-msg" },
+          el("b", {}, "⚠ Test Blocked"),
+          el("span", {}, extra || "Preflight check failed. Ensure the app is running (e.g. npm run dev) and environment allows writes.")),
+        el("div", { class: "banner-act" },
+          el("button", { class: "bd mini", onclick: () => $("runBtn").click() }, "↻ Retry run"),
+          el("button", { class: "ghost mini", onclick: () => showTab("evidence") }, "View details"))
+      );
+      banner.hidden = false;
+    } else {
+      banner.hidden = true;
+    }
+  }
+
   $("runBtn").addEventListener("click", async () => {
     showTab("run"); $("runLog").replaceChildren(); $("runFiles").replaceChildren();
+    if ($("runBanner")) { $("runBanner").hidden = true; $("runBanner").replaceChildren(); }
     const statuses = {}; let steps = [];
     runAbort = new AbortController(); $("stopBtn").disabled = false; $("runBtn").disabled = true;
     runningFlow = openName; renderTree(); setRunStatus("running…");
@@ -973,9 +1065,20 @@
         else if (ev.type === "out") { for (const l of String(ev.text).split(/(?<=\n)/)) logLine(l, classify(l)); }
         else if (ev.type === "gate") { logLine(`\n${ev.text}\n`, ev.ok ? "ok" : ""); }
         else if (ev.type === "error") { logLine(`x ${ev.message}\n`, "bad"); }
-        else if (ev.type === "done") { setRunStatus(`RESULT: ${ev.result}${ev.caseDir ? ` · ${ev.caseDir}` : ""}`, ev.result === "PASS" ? "pass" : ev.result === "FAIL" ? "fail" : "blocked"); }
+        else if (ev.type === "done") {
+          setRunStatus(`RESULT: ${ev.result}${ev.caseDir ? ` · ${ev.caseDir}` : ""}`, ev.result === "PASS" ? "pass" : ev.result === "FAIL" ? "fail" : "blocked");
+          showRunBanner(ev.result, ev.caseDir);
+        }
       }, runAbort.signal);
-    } catch (e) { if (e.name !== "AbortError") { logLine(`x ${e.message}\n`, "bad"); setRunStatus("run failed to start", "fail"); } else setRunStatus("stopped", "blocked"); }
+    } catch (e) {
+      if (e.name !== "AbortError") {
+        logLine(`x ${e.message}\n`, "bad"); setRunStatus("run failed to start", "fail");
+        showRunBanner("FAIL", null, e.message);
+      } else {
+        setRunStatus("stopped", "blocked");
+        showRunBanner("BLOCKED", null, "Run was stopped by user");
+      }
+    }
     $("stopBtn").disabled = true; $("runBtn").disabled = false; runAbort = null; runningFlow = null;
     await loadFlows(); renderFlowBar(); loadEvd();
   });
@@ -984,6 +1087,25 @@
   // ---------------------------------------------------------------------------
   // evidence
   // ---------------------------------------------------------------------------
+  function renderEvdSummary() {
+    const box = $("evdSummary");
+    if (!box) return;
+    const sum = FLOWS.find((f) => f.name === openName);
+    if (!sum || !sum.result) { box.hidden = true; return; }
+    box.hidden = false;
+    box.replaceChildren(
+      el("div", { class: "sum-title" },
+        el("div", { class: "row nowrap" },
+          el("span", { class: `sum-badge ${sum.result}` }, sum.result),
+          el("b", {}, flow.name || openName),
+          flow.ticket ? el("span", { class: "chip ticket" }, flow.ticket) : null),
+        el("span", { class: "muted small" }, sum.ranAt ? `Last run: ${ago(sum.ranAt)}` : "Recorded run")),
+      el("div", { class: "sum-acts" },
+        el("button", { class: "primary mini", onclick: () => $("exportBtn").click() }, "📥 Export Excel"),
+        el("button", { class: "bd mini", onclick: () => $("gateBtn").click() }, "Run verification gate"))
+    );
+  }
+
   async function loadEvd() {
     const { tree } = await getJSON("/evd").catch(() => ({ tree: [] }));
     const ul = $("evdTree"); ul.replaceChildren();
@@ -995,6 +1117,7 @@
     };
     walk(tree, 0);
     if (!tree.length) ul.append(el("li", { class: "muted" }, "no evidence yet — compile or run a flow, or ask the agent to /qa"));
+    renderEvdSummary();
   }
   async function openEvidence(rel) {
     showTab("evidence");
