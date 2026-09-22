@@ -357,14 +357,14 @@ for (const [label, cmd, args] of [
     for (const [dir, kind] of [[TC1, "acceptance"], [TC2, "boundary"], [TC3, "whole-screen"]]) {
       const caseDir = path.join(evd, dir);
       fs.mkdirSync(caseDir, { recursive: true });
-      fs.writeFileSync(path.join(caseDir, "manifest.md"), CASE(kind));
+      fs.writeFileSync(path.join(caseDir, "case.md"), CASE(kind));
       // The ONLY evidence in this case is whatever api_check.mjs decides to write.
       const r2 = await run("node", [path.join(pkgRoot, "core/scripts/api_check.mjs"),
         "POST", "/orders", "--base", base, "--out", caseDir,
         "--expect-status", "201", "--expect", "discount=50000"]);
       check(r2.status === 0, `api_check failed while building the pack: ${r2.out}`);
     }
-    fs.writeFileSync(path.join(evd, "manifest.md"), "# SHOP-1\nWhat was checked, in plain language.\n\n"
+    fs.writeFileSync(path.join(evd, "index.md"), "# SHOP-1\nWhat was checked, in plain language.\n\n"
       + "COVERAGE:\n- security: n/a — backend-only recorder pack, no auth or session surface\n"
       + "- accessibility: n/a — no UI in this change\n");
     // The index describes the folder, so it is rewritten whenever the folder
@@ -723,7 +723,7 @@ for (const [label, cmd, args] of [
       `import evd_check; evd_check._green_fixture(${JSON.stringify(evd)})`], { encoding: "utf8" });
     check(built.status === 0, `could not build the gate's own green fixture: ${built.stderr}`);
     for (const d of fs.readdirSync(evd).filter((x) => /^TC_\d+/.test(x))) {
-      const mf = path.join(evd, d, "manifest.md");
+      const mf = path.join(evd, d, "case.md");
       fs.appendFileSync(mf, [
         "PERSONA: the interrupted one — leaves after step 1, returns after the session expired",
         "HEURISTIC: interruptions — refresh between Save and the confirmation",
@@ -848,7 +848,7 @@ for (const [label, cmd, args] of [
                                 ["ACTUAL", "failed"], ["ACTUAL", "OK"], ["EXPECTED", "no errors"]]) {
       const d = path.join(root, `vague_${key}_${value.replace(/\W+/g, "_")}`);
       check(fixture(d).status === 0, "could not build the green fixture");
-      setField(path.join(d, caseDirs(d)[0], "manifest.md"), key, value);
+      setField(path.join(d, caseDirs(d)[0], "case.md"), key, value);
       reindex(d);
       const g = gateRun(d);
       check(g.status !== 0, `the gate accepted ${key}: ${JSON.stringify(value)} — a judgement, not a value`);
@@ -858,7 +858,7 @@ for (const [label, cmd, args] of [
     {
       const d = path.join(root, "contains_word");
       fixture(d);
-      setField(path.join(d, caseDirs(d)[0], "manifest.md"), "EXPECTED", "the total reads 450,000 (spec 3.2) and the screen works offline");
+      setField(path.join(d, caseDirs(d)[0], "case.md"), "EXPECTED", "the total reads 450,000 (spec 3.2) and the screen works offline");
       reindex(d);
       check(gateRun(d).status === 0, "a concrete EXPECTED was refused because it contained the word 'works'");
     }
@@ -867,7 +867,7 @@ for (const [label, cmd, args] of [
     const d = path.join(root, "report_shape");
     fixture(d);
     const dirs = caseDirs(d).sort();
-    const c2 = path.join(d, dirs[1], "manifest.md");
+    const c2 = path.join(d, dirs[1], "case.md");
     fs.writeFileSync(c2, fs.readFileSync(c2, "utf8").replace("RESULT: PASS", "RESULT: FAIL") +
       "TITLE: A quantity of 0 is refused with a message naming the minimum\n" +
       "SEVERITY: Critical\nORIGIN: DEV\nFINDING: [Order edit] Quantity 0 is saved — when Save is pressed with Enter\n");

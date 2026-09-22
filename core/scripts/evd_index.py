@@ -32,6 +32,22 @@ STEP_IMAGE = re.compile(r"^(?:TC\d+_)?\d{2}_.+\.(?:png|jpg|jpeg)$", re.I)
 BOXED = re.compile(r"_boxed\.(?:png|jpg|jpeg)$", re.I)
 
 
+# `manifest.md` meant two different things — the ticket index and a single
+# case — so it is now `index.md` and `case.md`. Both old names are still read:
+# every evidence folder written before this exists, and is still evidence.
+def _pick(folder, new, old):
+    p = os.path.join(folder, new)
+    return p if os.path.exists(p) else os.path.join(folder, old)
+
+
+def _case_doc(evd, dirname):
+    return _pick(os.path.join(evd, dirname), "case.md", "manifest.md")
+
+
+def _index_doc(evd):
+    return _pick(evd, "index.md", "manifest.md")
+
+
 def read(path):
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as fh:
@@ -103,7 +119,7 @@ def render(evd):
     rows = []
     tally = {"PASS": 0, "FAIL": 0, "BLOCKED": 0, "OTHER": 0}
     for num, slug, dirname in cases(evd):
-        f = fields(read(os.path.join(evd, dirname, "manifest.md")))
+        f = fields(read(_case_doc(evd, dirname)))
         result = (f.get("RESULT") or "?").upper()
         tally[result if result in tally else "OTHER"] += 1
         note = ""
@@ -140,7 +156,7 @@ def apply(evd, text=None):
     block yet gets one after the title, not at the end — an index below the
     tracker attachments is an index nobody scrolls to."""
     block = render(evd) if text is None else text
-    path = os.path.join(evd, "manifest.md")
+    path = _index_doc(evd)
     cur = read(path)
     if BEGIN in cur and END in cur:
         head, rest = cur.split(BEGIN, 1)
@@ -165,7 +181,7 @@ def write(evd):
 
 def stale(evd):
     """The reason the gate can trust the index: '' when current, else why not."""
-    cur = read(os.path.join(evd, "manifest.md"))
+    cur = read(_index_doc(evd))
     if BEGIN not in cur or END not in cur:
         return "manifest.md carries no index block"
     want = render(evd).strip()
@@ -186,7 +202,7 @@ def selftest():
             ("TC_10_the_orders_screen_is_intact", "RESULT: BLOCKED\nKIND: whole-screen\nREASON: no staff account\n", None),
         ):
             os.makedirs(os.path.join(evd, d))
-            with open(os.path.join(evd, d, "manifest.md"), "w") as fh:
+            with open(os.path.join(evd, d, "case.md"), "w") as fh:
                 fh.write(man)
             if extra:
                 open(os.path.join(evd, d, extra), "w").close()
@@ -217,7 +233,7 @@ def selftest():
         with open(path, "a") as fh:
             fh.write("\n## TRACKER ATTACHMENTS\n- SHOP-142_TC1.png\n")
         os.makedirs(os.path.join(evd, "TC_3_totals_survive_a_reload"))
-        with open(os.path.join(evd, "TC_3_totals_survive_a_reload", "manifest.md"), "w") as fh:
+        with open(os.path.join(evd, "TC_3_totals_survive_a_reload", "case.md"), "w") as fh:
             fh.write("RESULT: PASS\nKIND: acceptance\n")
         ck(stale(evd) != "", "a new case folder did not make the index stale")
         write(evd)
@@ -226,7 +242,7 @@ def selftest():
         ck(stale(evd) == "", "still stale after a rewrite")
 
         # A pipe in a value must not blow a column out of the table.
-        with open(os.path.join(evd, "TC_3_totals_survive_a_reload", "manifest.md"), "w") as fh:
+        with open(os.path.join(evd, "TC_3_totals_survive_a_reload", "case.md"), "w") as fh:
             fh.write("RESULT: PASS\nKIND: acceptance\nTITLE: total | subtotal both update\n")
         row = [l for l in render(evd).splitlines() if "TC_3" in l][0]
         cells = len(re.findall(r"(?<!\\)\|", row))

@@ -54,7 +54,7 @@ Then read the record of what has actually gone wrong:
 - `docs/qa/lessons.md` — entries tagged as gate-shaped were waiting for exactly
   this workflow.
 - The `OBSERVATIONS:` lines in past case manifests
-  (`grep -rh "^OBSERVATIONS:" evd/*/TC_*/manifest.md`). An observation that
+  (`grep -rh "^OBSERVATIONS:" evd/*/TC_*/case.md`). An observation that
   recurs across tickets is a defect nobody filed, and a candidate for a case.
 
 ## R2 — RANK THE CANDIDATES

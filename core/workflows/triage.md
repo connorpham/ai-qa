@@ -75,8 +75,15 @@ or paste, or come back after ten minutes, disappears for a tester who types the
 perfect value once and waits. Borrow the persona from
 `docs/qa/method/user-mindset.md` that fits the CONTEXT.
 
-Walk the reported path exactly, from a click entry. Screenshot each step under
-`evd/<TICKET>/repro/`.
+Walk the reported path exactly, from a click entry, and record it as a case:
+`evd/<TICKET>/TC_1_<what_you_were_reproducing>/`.
+
+**One shape for everything that happened.** A reproduction IS a case — it has
+an actor, a precondition, an entry, steps, an expected value and an actual one.
+It used to land in a folder of its own called `repro/`, which meant a reader
+had to learn two layouts and the evidence gate knew only one of them. Write
+`case.md` with the same fields `/qa` uses, and take the pictures with
+`shotAnnotated` so each one says what it shows.
 
 Three possible outcomes, all legitimate:
 
@@ -164,7 +171,7 @@ own report — it does not ride along.
 [Frequency]     always | intermittent (n of m attempts) | once
 [Started]       <release/commit where it first appears, or "unknown">
 [Severity]      <level> · [Origin] DEV | SPEC
-[Evidence]      evd/<TICKET>/repro/… (boxed image; db_verify.md if a write is involved)
+[Evidence]      evd/<TICKET>/TC_1_…/ (boxed image; db_verify.md if a write is involved)
 [Suspect area]  <where to look first — labelled a HINT, never a diagnosis>
 [Observations]  <seen on the way, not part of this defect — filed separately if it matters>
 ```

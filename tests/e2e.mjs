@@ -285,7 +285,7 @@ for (const [label, cmd, args] of [
 {
   const evd = path.join(repo, "evd", "SHOP-1", "TC_1");
   fs.mkdirSync(evd, { recursive: true });
-  fs.writeFileSync(path.join(evd, "manifest.md"), "RESULT: PASS\n");
+  fs.writeFileSync(path.join(evd, "case.md"), "RESULT: PASS\n");
   const r = spawnSync("python3", [".ai-qa/scripts/evd_check.py", "--evd", "evd/SHOP-1", "--expect-tcs", "3"],
     { cwd: repo, encoding: "utf8" });
   check(r.status === 1, `a half-finished evidence folder should exit 1, got ${r.status}`);
