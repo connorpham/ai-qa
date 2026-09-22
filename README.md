@@ -500,102 +500,6 @@ Written with nothing but the Python standard library — no `openpyxl`, no
 produces the same file, so a workbook whose bytes changed is telling you the
 evidence changed.
 
-## `ai-qa studio` — the lane without a terminal
-
-```bash
-ai-qa studio            # opens http://127.0.0.1:<port>/<token>/ in your browser
-ai-qa studio --port 4399 --no-open
-```
-
-A local page, served from your own repository, behind a random path token — the
-same shape as the setup wizard, and the same promise: **no dependencies, no
-build step, nothing leaves the machine.** It exists because the people a verdict
-is *for* — a QA who does not live in a terminal, a product owner, a client — can
-read a report but were never going to run one.
-
-The shape is the [Orca](https://github.com/stablyai/orca) desktop app's, because
-its users already have that vocabulary: a sidebar of **projects**, under each
-project its **flows** as cards, and the work itself in the main pane. Three
-steps, in the order a first-time user meets them:
-
-1. **Add a project** — a folder on this machine (a picker that marks the
-   repositories ◆), or a git URL the studio clones with the credentials the
-   machine already has. The registry is `~/.ai-qa/studio.json`: paths and
-   choices, never a token.
-2. **Create a flow** — one ticket, **the AI agent that will verify it** (the
-   agents found on `PATH`, each marked *installed* / *not installed*; the
-   terminal will type exactly its command), and where it runs: the project
-   checkout, or a fresh **worktree** under `.ai-qa/worktrees/` so the branch
-   you are working on is left alone.
-3. **Work inside the flow** — five tabs, each mapping onto something the lane
-   already does:
-
-| Tab | What it is |
-|---|---|
-| **Agent** | **The machine's own terminal**, opened in the flow's checkout and drawn by xterm.js. The flow's agent is typed into it — `claude`, `codex`, `gemini` — exactly the command you would type, nothing added. It is your shell: `git status`, `npm test`, anything. Pick another agent from the bar and a fresh terminal opens with that one. `/qa SHOP-142`, `/triage`, `/regress`, `/onboard` are one click, typed into the real thing. The session belongs to the studio process, so leaving the flow and coming back shows what happened meanwhile. |
-| **Steps** | Drag the steps of a test onto a graph and wire them: *as* whom, what must already be true, the click path, what is typed, **what must be read and which spec section says so**, the read-back, the clean-up. Or ask the agent to draft the graph from the ticket and the spec. |
-| **Run** | The drawing becomes the files the gate already reads, then runs for real — streaming `APP: UP`, `API: FAIL  x discount: expected "50000", got 0`, `DB: OK`, and the gate's verdict. |
-| **Evidence** | `evd/` as a tree: the report rendered, screenshots, the recorded request and response, `evd_check` green or red, and the spreadsheet export. |
-| **Ticket & spec** | The ticket as the tracker holds it, beside the specification that is the oracle. |
-
-Each flow card shows its verdict (a green, red or amber dot from the compiled
-case's `RESULT:`), its ticket, where it runs, and which agent. A project with no
-`aiqa.config.yaml` is added and **reported** — the studio never runs `init` on
-someone's codebase by itself.
-
-### What the canvas compiles into
-
-A flow is a graph, but a test case is a sequence, so the compiler walks the
-graph in dependency order and writes the case in the gate's own vocabulary —
-`AS · PRECONDITION · ENTRY · STEPS · EXPECTED · ACTUAL · AFTER · BACK`:
-
-```
-evd/SHOP-142/TC_2_boundary_exactly_500000/
-├── manifest.md     the case, in the fields evd_check reads
-├── flow.json       the drawing that produced it, so the two travel together
-├── run.sh          the same steps as a script a human or CI can re-run
-└── journey.mjs     for web flows: the browser run, driving browser.mjs
-```
-
-There is deliberately **no branching**. A case that decides what to check based
-on what it finds is not a case, it is an exploration — and the lane has a
-separate word for that.
-
-### The rules do not soften because there is a mouse
-
-- **A compiled case starts `RESULT: BLOCKED`,** with a REASON and an UNBLOCK
-  path, and only becomes PASS or FAIL when a run has actually happened. A plan
-  is not evidence, and drawing one is not running it.
-- **An expected value with no citation is a warning on the canvas, in the
-  compiled manifest, and in the report** — it reports a *difference*, never a
-  *defect*. The studio cannot invent an oracle any more than the CLI can.
-- **A `writes: forbidden` environment refuses a flow that creates data** before
-  the first call, and records BLOCKED with the reason. It is not attempted.
-- **The terminal is not fenced by the studio.** It is your shell, and the agent
-  in it is your own Claude Code (or Codex, or Gemini…) session with that tool's
-  own permission prompts — exactly as if you had opened a terminal in the
-  worktree, because that is what it is. The one fenced engine left is behind
-  **Draft from ticket**: a one-off, non-interactive call (Claude Code `--print`
-  or the Anthropic API) that may only read the repo and the spec and returns a
-  drawing. `.env` is unreadable to it.
-- **Nothing typed on the canvas becomes a command.** Values are passed as
-  their own argv elements to the gates and quoted when a script is written;
-  conformance asserts a quote in a SQL string cannot escape into the shell.
-
-### The engine behind the chat
-
-Two, behind one small interface, chosen in the page:
-
-- **Claude Code** — spawns `claude -p` in your repository, so it reuses your
-  existing login, the four skills `init` installed, and every gate. This is the
-  capable one.
-- **Anthropic API** — `ANTHROPIC_API_KEY`, with a tool loop of its own over the
-  same allow-list, for a machine with no Claude Code. It has no skills, so the
-  method is inlined into its system prompt; the page labels it honestly.
-
-Whichever is missing says why, in the page and in the terminal, rather than
-failing at the first message.
-
 ## Gates that can actually go red
 
 <p align="center">
@@ -803,12 +707,9 @@ whole tree before and after.
 ## Layout
 
 ```
-bin/ai-qa.mjs        scan · init · doctor · update · studio
+bin/ai-qa.mjs        scan · init · doctor · update
 src/cli/             the CLI; scan.mjs holds the readiness rubric
 src/ui/server.mjs    the browser wizard (local, single-use, no dependencies)
-src/ui/studio.mjs    the studio server: chat, canvas, runner, evidence viewer
-src/ui/studio/       compile.mjs (flow → case files) · engines.mjs (the LLM,
-                     behind one interface) · the page itself (no build step)
 core/workflows/      onboard · qa · triage · regress   (tool-neutral)
 core/doctrine/       the QA method: roles (the index), severity, evidence, test design,
                      red flags — the tester's mind: user-mindset, heuristics,
@@ -830,7 +731,7 @@ loud BLOCKED with the install command rather than degrading quietly.
 ## Tests
 
 ```bash
-npm test        # 576 conformance checks + 134 end-to-end checks
+npm test        # 476 conformance checks + 124 end-to-end checks
 ```
 
 The e2e suite installs into a scratch repository and then tries to break each
