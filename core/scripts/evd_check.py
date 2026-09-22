@@ -17,6 +17,7 @@ not exist.
 Python 3.9 compatible.
 """
 import argparse
+import json
 import os
 import re
 import sys
@@ -274,11 +275,64 @@ def check_case(case_dir, res, opts):
             res.err(name, "no *_boxed image — an unannotated screenshot makes the reader guess "
                           "which pixels carried the verdict")
 
+        # A filename is not an annotation. `03_result_boxed.png` can be a bare
+        # screenshot somebody renamed, and for a long time this gate accepted
+        # exactly that: the rule was on the NAME, not on the picture.
+        #
+        # browser.mjs's shotAnnotated writes shots.json beside the images,
+        # declaring for each one what it proves. That declaration is what makes
+        # "the image explains itself" a thing a machine can check — and what a
+        # reader of the FOLDER (not just the image) can read.
+        if boxed and opts["require_annotation"]:
+            declared = read_shots(case_dir)
+            if declared is None:
+                res.warn(name, "no shots.json beside the images — the boxes were drawn by hand, so "
+                               "nothing here says what each one proves. Drive the run through "
+                               "browser.mjs's shotAnnotated() and it is written for you.")
+            else:
+                for img in boxed:
+                    d = declared.get(img)
+                    if d is None:
+                        res.err(name, "{} is not declared in shots.json — an image nobody said "
+                                      "anything about is an image nobody can use".format(img))
+                    elif not str(d.get("proves", "")).strip():
+                        res.err(name, "{} declares no `proves` — one line saying what it shows is "
+                                      "the whole difference between evidence and a screenshot".format(img))
+                    elif d.get("annotated") is False:
+                        res.err(name, "{}: the overlay failed to draw ({}) — the file is named "
+                                      "_boxed but the picture is bare. An image that claims an "
+                                      "annotation it does not carry is worse than no image"
+                                      .format(img, d.get("overlayError", "reason not recorded")))
+                    elif d.get("selectorFound") is False:
+                        res.warn(name, "{}: the selector {!r} matched nothing, so the image is boxed on "
+                                       "nothing and says so — honest, but it proves nothing yet"
+                                       .format(img, d.get("selector", "")))
+
     if opts["require_db_verify"] and kind == "write-readback":
         if not db_verify_files(case_dir):
             res.err(name, "KIND: write-readback with no db_verify.md — the interface saying "
                           "'Saved' is a claim about the interface, not about the data")
     return kind
+
+
+def read_shots(case_dir):
+    """What each annotated image declares it proves, keyed by filename.
+
+    Returns None when there is no sidecar at all — a hand-annotated folder,
+    which is warned about rather than failed: the older `annotate.py box`
+    path is still legitimate, it just cannot say what it drew.
+    """
+    path_ = os.path.join(case_dir, "shots.json")
+    if not os.path.exists(path_):
+        return None
+    try:
+        with open(path_, "r", encoding="utf-8") as fh:
+            rows = json.load(fh)
+    except Exception:
+        return {}
+    if not isinstance(rows, list):
+        return {}
+    return {str(r.get("file", "")): r for r in rows if isinstance(r, dict)}
 
 
 def _why(key):
@@ -517,6 +571,14 @@ def _mkcase(root, name, manifest, images=True):
         for fn in ("01_orders_list.png", "03_total_after_save.png", "03_total_after_save_boxed.png"):
             with open(os.path.join(d, pre + fn), "wb") as fh:
                 fh.write(b"\x89PNG\r\n\x1a\n")
+        # An annotated image DECLARES what it proves. Without this the fixture
+        # would only exercise the filename rule — which is the rule that turned
+        # out not to be enough.
+        with open(os.path.join(d, "shots.json"), "w", encoding="utf-8") as fh:
+            json.dump([{"file": pre + "03_total_after_save_boxed.png",
+                        "proves": "the total recalculated after Save",
+                        "selector": "#total", "expected": "450,000", "actual": "450,000",
+                        "cite": "spec 3.2", "verdict": "PASS", "selectorFound": True}], fh)
     return d
 
 
@@ -587,6 +649,14 @@ def selftest():
         ("AFTER never reloads", lambda d: _rewrite(d, C1 + "/manifest.md",
             lambda t: re.sub(r"(?m)^AFTER:.*$", "AFTER: the list row shows 3", t))),
         ("no boxed image", lambda d: os.remove(os.path.join(d, C1, "TC1_03_total_after_save_boxed.png"))),
+        # A filename is not an annotation. These two are the rules that stop a
+        # renamed screenshot from passing as evidence.
+        ("a boxed image nobody declared", lambda d: _rewrite(d, os.path.join(C1, "shots.json"),
+            lambda t: t.replace("TC1_03_total_after_save_boxed.png", "something_else.png"))),
+        ("a declared image that proves nothing", lambda d: _rewrite(d, os.path.join(C1, "shots.json"),
+            lambda t: t.replace("the total recalculated after Save", "   "))),
+        ("an image that admits it was never annotated", lambda d: _rewrite(d, os.path.join(C1, "shots.json"),
+            lambda t: t.replace('"selectorFound": true', '"selectorFound": true, "annotated": false'))),
         ("no step screenshots", lambda d: [os.remove(os.path.join(d, C1, f))
                                            for f in os.listdir(os.path.join(d, C1)) if f.endswith(".png")]),
         ("bad RESULT value", lambda d: _rewrite(d, C1 + "/manifest.md", lambda t: t.replace("RESULT: PASS", "RESULT: OK"))),

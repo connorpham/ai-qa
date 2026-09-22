@@ -355,18 +355,40 @@ would stop and look. **The script stays in the folder**:
 it is evidence, and the next round re-runs the same journey against a new build
 instead of re-improvising it.
 
-Then box the region that carries the verdict — required on every executed case,
-not only failures (`evidence.require_annotation`):
+**Every check photographs itself.** Required on every executed case, not only
+failures (`evidence.require_annotation`) — and taken with `shotAnnotated`
+rather than a plain `shot`, so the image carries its own context:
 
-```bash
-python3 .ai-qa/scripts/annotate.py box \
-  --img evd/<TICKET>/TC_<n>/03_result.png --rect X,Y,W,H \
-  --label "TC_<n>: <what this proves, or what diverges>" \
-  --out evd/<TICKET>/TC_<n>/03_result_boxed.png
+```js
+await shotAnnotated(page, HERE, ++n, "discount_at_threshold", {
+  selector: "#discount",                       // the box is drawn from THIS
+  proves:   "the discount line after an order of exactly 500,000",
+  expected: "50,000",
+  actual:   await read(page, "#discount"),
+  cite:     "spec 3.2 R1",
+  verdict:  ok ? "PASS" : "FAIL",              // green or red, on sight
+});
 ```
 
-An unannotated full-page screenshot makes the reader guess which pixels
-mattered; the caption is what a stranger reads instead of asking you.
+The image comes out carrying a header — ticket, case, step, verdict — and a
+line reading *what it proves · must read · actually read · where that is
+written*. A ring is drawn on the element the check actually read.
+
+**The box comes from the SELECTOR the check already uses.** Nobody measures
+pixels, and nobody can box the wrong element — which is the flaw in picking
+`--rect X,Y,W,H` by hand. A selector that matches nothing does not quietly
+produce a clean screenshot: the header says `COULD NOT FIND`, in red, because
+"I could not find what I was told to look at" is a finding.
+
+`shotAnnotated` also writes `shots.json` beside the images, declaring what each
+one proves. **`evd_check` reads it**: a `*_boxed.png` that nothing declares, or
+one that declares an empty `proves`, is RED. The old rule was satisfied by any
+file whose name ended in `_boxed` — including a plain screenshot somebody
+renamed.
+
+`annotate.py box --rect …` remains for evidence that did not come from a
+browser — a PDF, a native app, a photograph. There the gate warns rather than
+fails, because that path cannot say what it drew.
 <!-- /surface -->
 
 <!-- surface:api -->
