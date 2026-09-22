@@ -62,6 +62,24 @@ ORIGINS = ("DEV", "SPEC")
 # person who already knows which file it lives in, and that person is never the
 # one reading the report six weeks later.
 CITE_FLOOR = re.compile(r"(?i)^floor\b[\s:]*(.*)$")
+# The floor is a SHORT, NAMED list, not a blank line to write a reason on.
+#
+# Free text was the hole: "FLOOR user can click save" cited nothing, invented a
+# baseline nobody agreed, and let a case skip the specification entirely. These
+# seven are outcomes no specification anywhere permits — five from
+# security-probes.md, plus the two general ones the workflow has always named.
+# Anything else is a requirement, and a requirement is cited from a document.
+FLOOR_IDS = {
+    "auth-bypass": "a path into a session without valid credentials",
+    "authz-bypass": "one role or user reaching another's data or another's action",
+    "injection-executed": "a payload runs as SQL, HTML/JS, a template or a command",
+    "secret-leaked": "a password, hash, token, session id or another user's data in a "
+                     "response, a URL, a log line or an error message",
+    "session-outlives": "logout, password change or reset, or an admin lock — and the old "
+                        "session still works",
+    "unhandled-error": "a valid request answered with a 5xx or a stack trace",
+    "data-loss": "a saved value gone after a reload, or a record destroyed without asking",
+}
 # `;` and a newline separate sources. NOT the word "and": "orders.md 3.2 and
 # 3.3" is one citation of two sections written the way people write, and a gate
 # that reds on it has taught the writer to distrust the gate rather than to cite
@@ -593,9 +611,19 @@ def check_citation(where, label, value, res, opts):
     for part in parts:
         floor = CITE_FLOOR.match(part)
         if floor:
-            if not floor.group(1).strip():
-                res.err(where, "{} says FLOOR and stops — name which floor rule this rests on, "
-                               "e.g. 'FLOOR: no unhandled 500 on a valid request'".format(label))
+            rest = floor.group(1).strip()
+            # Split on whitespace and punctuation, but NOT on the hyphen: the ids
+            # contain one, and splitting there turned "unhandled-error" into
+            # "unhandled" and rejected the only spelling the gate accepts.
+            ident = re.split(r"[\s,;:—]", rest, 1)[0].strip().lower() if rest else ""
+            if not rest:
+                res.err(where, "{} says FLOOR and stops — name which floor rule this rests on: {}"
+                        .format(label, ", ".join(sorted(FLOOR_IDS))))
+            elif ident not in FLOOR_IDS:
+                res.err(where, "{} claims the floor as {!r}, which is not one of them. The floor is "
+                               "seven outcomes no specification permits: {}. Anything else is a "
+                               "requirement, and a requirement is cited from a document"
+                        .format(label, rest, ", ".join(sorted(FLOOR_IDS))))
             continue
         # The path anywhere in the part, not only at the front. "See
         # docs/specs/orders.md 3.2" is a citation; refusing it teaches people to
@@ -784,6 +812,14 @@ def check_report(evd, res, opts):
 # with a reason. A waiver is a five-second, honest answer ("no UI in this
 # change"); the silent skip is the failure this rule exists to make impossible.
 REQUIRED_COVERAGE = ("security", "accessibility")
+# Accessibility is decided by numbers, and numbers survive translation. The
+# previous rule looked for English words anywhere in the file, so "the Save
+# label is visible" passed — and a case measured properly in Vietnamese failed.
+# A contrast ratio is always against 1; a target size is WxH or a pixel count.
+A11Y_MEASURE = re.compile(r"\d+(?:[.,]\d+)?\s*:\s*1\b"
+                          r"|\b\d{2,4}\s*[x\u00d7]\s*\d{2,4}\b"
+                          r"|\b\d{1,4}\s*px\b", re.I)
+
 _WAIVER = re.compile(r"(?i)\b(n/?a|not applicable|out of scope|kh[oô]ng áp d[uụ]ng|khong ap dung)\b")
 
 
@@ -826,26 +862,16 @@ def check_coverage(evd, res, cases):
             if lens == "accessibility":
                 c_dir = os.path.join(evd, present[no])
                 c_doc, _ = resolve_doc(c_dir, CASE_FILE, CASE_FILE_OLD)
-                has_a11y = False
-                if c_doc and os.path.exists(c_doc):
-                    c_text = read(c_doc)
-                    has_a11y = bool(re.search(
-                        r"(?i)\b(contrast|wcag|a11y|accessibility|focus|keyboard|aria|label|"
-                        r"target size|computed style|\bpx\b|border-radius|24x24|4\.5:1|3:1)\b",
-                        c_text
-                    ))
-                if not has_a11y:
-                    shots_f = os.path.join(c_dir, "shots.json")
-                    if os.path.exists(shots_f):
-                        s_text = read(shots_f)
-                        has_a11y = bool(re.search(
-                            r"(?i)\b(contrast|wcag|a11y|focus|keyboard|label|target|px)\b",
-                            s_text
-                        ))
-                if not has_a11y:
-                    res.err(INDEX_FILE, "COVERAGE cites {} for accessibility, but that case does not check "
-                                           "any measurable accessibility or UI fidelity criteria (contrast, "
-                                           "focus ring, keyboard, target size, labels, WCAG)".format(present[no]))
+                hay = (read(c_doc) if c_doc and os.path.exists(c_doc) else "")
+                shots_f = os.path.join(c_dir, "shots.json")
+                if os.path.exists(shots_f):
+                    hay += "\n" + read(shots_f)
+                if not A11Y_MEASURE.search(hay):
+                    res.err(INDEX_FILE, "COVERAGE cites {} for accessibility, and that case measures "
+                                        "nothing. Accessibility is decided by numbers: a contrast "
+                                        "ratio (4.5:1), a target size (44x44 or 44px). A sentence "
+                                        "saying the button is visible is an opinion about a screen"
+                                        .format(present[no]))
             continue
         if _WAIVER.search(value):
             reason = _WAIVER.sub("", value).strip(" -—:.,").strip()
@@ -857,10 +883,37 @@ def check_coverage(evd, res, cases):
                                "(n/a — reason): {!r}".format(lens, value))
 
 
+# A checklist row: an id in the first column, then the criterion. The id is the
+# whole point — "we audited the checklist" is a sentence, "CL-03 is covered by
+# TC_2" is a fact somebody can check. A checklist with no ids cannot be mapped,
+# and the gate says so instead of pretending.
+CHECKLIST_ROW = re.compile(r"(?m)^\s*\|\s*\**\s*(?:`)?((?:CL[-_]?)?\d{1,3}|CL[-_]?[A-Za-z0-9]{1,8})(?:`)?\s*\**\s*\|")
+CHECKLIST_BOX = re.compile(r"(?m)^\s*-\s*\[[ xX]?\]")
+
+
+def checklist_ids(text):
+    """The ids this checklist defines, in order, deduplicated."""
+    out = []
+    for m in CHECKLIST_ROW.finditer(text):
+        i = m.group(1).strip()
+        if i.lower() in ("no", "id", "stt"):
+            continue
+        if i not in out:
+            out.append(i)
+    return out
+
+
 def check_checklist(evd, root, res, opts, cases):
-    """When a project defines acceptance checklists (docs/qa/checklists.md),
-    the pack must audit them — mapping each to a case or waiving it with reason.
-    Silently ignoring checklist items is forbidden."""
+    """A project's own acceptance criteria, mapped item by item.
+
+    The rule is the one COVERAGE already proves works: the gate cannot decide
+    whether an item applies — that is judgement — but it refuses SILENCE. Every
+    id the checklist defines gets a case or a waiver with a reason.
+
+    It used to accept any sentence of ten characters. "CHECKLIST: all items
+    covered" passed while two items went untested, which is worse than no rule
+    at all: it puts a tick next to work nobody did.
+    """
     chk = opts.get("checklists")
     candidates = [chk] if chk else ["docs/qa/checklists.md", "docs/qa/checklist_master.md"]
     checklist_path = None
@@ -871,38 +924,98 @@ def check_checklist(evd, root, res, opts, cases):
                 checklist_path = p
                 break
     if not checklist_path:
-        return
+        return          # no checklist is not a failing; most projects have none
 
     c_content = read(checklist_path)
-    has_items = bool(re.search(r"(?m)^\s*\|?\s*(?:CL[-_]?\d+|\d{1,3})\s*\|", c_content)
-                     or re.search(r"(?m)^\s*-\s*\[[ xX]?\]", c_content))
-    if not has_items:
-        return
+    ids = checklist_ids(c_content)
+    rel = os.path.relpath(checklist_path, root)
+    if not ids:
+        if CHECKLIST_BOX.search(c_content):
+            res.warn(INDEX_FILE, "{} lists criteria with no id in the first column, so nothing "
+                                 "here can be mapped to a case. Give each row an id (CL-01, 1, …) "
+                                 "and the gate can hold the pack to it".format(rel))
+        return          # an empty checklist asks nothing of anybody
 
     path, _ = resolve_doc(evd, INDEX_FILE, INDEX_FILE_OLD)
     index_text = read(path) if path and os.path.exists(path) else ""
-    has_audit = False
+    if not re.search(r"(?im)^\s*#*\s*CHECKLIST\s*:", index_text):
+        res.err(INDEX_FILE, "{} defines {} acceptance criteria and this pack declares none of them. "
+                            "Add a CHECKLIST: block naming each id and the case that covered it, or "
+                            "waiving it with a reason:\n"
+                            "    CHECKLIST:\n    - {}: TC_1\n    - {}: n/a — <why this one does not apply>"
+                            .format(rel, len(ids), ids[0], ids[1] if len(ids) > 1 else "CL-02"))
+        return
 
-    if re.search(r"(?im)^\s*#*\s*CHECKLIST\s*:", index_text):
-        after = re.split(r"(?im)^\s*#*\s*CHECKLIST\s*:", index_text, maxsplit=1)[1]
-        block = re.split(r"(?im)^\s*#{1,6}\s+\S", after, maxsplit=1)[0]
-        if len(block.strip()) >= 10:
-            has_audit = True
+    after = re.split(r"(?im)^\s*#*\s*CHECKLIST\s*:", index_text, maxsplit=1)[1]
+    block = re.split(r"(?im)^\s*#{1,6}\s+\S", after, maxsplit=1)[0]
+    present = {int(CASE_DIR.match(c).group(1).lstrip("0") or "0"): c for c in cases}
 
-    if not has_audit:
-        for c in cases:
-            c_doc, _ = resolve_doc(os.path.join(evd, c), CASE_FILE, CASE_FILE_OLD)
-            if c_doc and os.path.isfile(c_doc):
-                if re.search(r"(?im)^\s*CHECKLIST\s*:\s*\S+", read(c_doc)):
-                    has_audit = True
-                    break
+    missing = []
+    for i in ids:
+        m = re.search(r"(?im)^\s*[-*]?\s*(?:`)?{}(?:`)?\s*[:\-—]\s*(.+?)\s*$".format(re.escape(i)), block)
+        if not m:
+            missing.append(i)
+            continue
+        value = m.group(1)
+        tc = re.search(r"\bTC[_-]?(\d+)\b", value, re.I)
+        if tc:
+            if int(tc.group(1)) not in present:
+                res.err(INDEX_FILE, "CHECKLIST says '{}: {}' but there is no such case folder — a "
+                                    "citation to a case that does not exist".format(i, value))
+        elif _WAIVER.search(value):
+            reason = _WAIVER.sub("", value).strip(" -—:.,").strip()
+            if len(reason) < 8:
+                res.err(INDEX_FILE, "CHECKLIST waives '{}' with no reason. A waiver a reader cannot "
+                                    "weigh is a silent skip with punctuation".format(i))
+        else:
+            res.err(INDEX_FILE, "CHECKLIST says '{}: {}' — name the case (TC_n) that covered it, or "
+                                "waive it out loud (n/a — reason)".format(i, value))
 
-    if not has_audit:
-        rel = os.path.relpath(checklist_path, root)
-        res.err(INDEX_FILE, "the project defines acceptance checklists at {!r} but this pack does "
-                            "not declare a CHECKLIST: audit. Add a CHECKLIST: block to index.md "
-                            "(declaring which items were covered or waived with reasons) — no checklist "
-                            "item silently omitted".format(rel))
+    if missing:
+        shown = ", ".join(missing[:6]) + ("…" if len(missing) > 6 else "")
+        res.err(INDEX_FILE, "{} of {} checklist items are not declared anywhere: {}. Silence is the "
+                            "way an acceptance criterion goes untested while the pack looks finished"
+                            .format(len(missing), len(ids), shown))
+
+
+def check_debate(evd, res):
+    """The challenger's card, with something in it.
+
+    The gate used to check only that `debate.md` existed. A file containing the
+    word "ok" satisfied the one step of this workflow whose entire purpose is
+    that somebody tried to break the verdict — and on a tool that cannot spawn a
+    subagent, the same model writes both cards, so an empty ritual is the
+    default outcome rather than the unlucky one.
+
+    Three things, because V6 asks for exactly three: the verifier's own weak
+    spot written down BEFORE the challenger arrives, a challenge that names a
+    case, and how it was settled. None of this proves the challenge was honest.
+    It does mean the file cannot be a word.
+    """
+    path = os.path.join(evd, "debate.md")
+    if not os.path.exists(path):
+        return                              # its absence is reported upstream
+    text = read(path)
+
+    if not re.search(r"(?im)^\s*[-*#\s]*MY WEAK SPOT\s*:\s*\S", text):
+        res.err("debate.md", "no 'MY WEAK SPOT:' line — the verifier is supposed to name the one "
+                             "thing most likely to be wrong BEFORE the challenger arrives. Writing "
+                             "it afterwards is defending, not thinking")
+
+    # A challenge is about something. A card that names no case is a card about
+    # nothing, and the cheapest one to write.
+    if not re.search(r"\bTC[_-]?\d+\b", text, re.I):
+        res.err("debate.md", "the challenger's card names no case. A challenge that points at no "
+                             "TC_n is agreement with extra steps")
+
+    if not re.search(r"(?im)^\s*[-*#\s]*(RESOLUTION|RESOLVED|REMAINING DISSENT)\s*:\s*\S", text):
+        res.err("debate.md", "no 'RESOLUTION:' or 'Remaining dissent:' line — a challenge nobody "
+                             "settled is an open question the report is answering anyway")
+
+    body = re.sub(r"\s+", " ", text).strip()
+    if len(body) < 120:
+        res.err("debate.md", "{} characters of debate. Whatever happened here, it was not an "
+                             "attempt to falsify a verdict".format(len(body)))
 
 
 def run(evd, expect_tcs, opts):
@@ -1006,6 +1119,7 @@ def run(evd, expect_tcs, opts):
     check_findings(evd, res, verdict)
     check_coverage(evd, res, cases)
     check_checklist(evd, opts.get("root") or ".", res, opts, cases)
+    check_debate(evd, res)
 
     for name, why in (("verifysheet.md", "where expected values are derived and cited"),
                       ("debate.md", "the challenger's card — a verdict nobody tried to break")):
@@ -1048,9 +1162,10 @@ BACK: Back returns to Orders with the Pending filter intact
 """
 
 BOUNDARY_CASE = GREEN_CASE.replace("KIND: acceptance", "KIND: boundary")
-SCREEN_CASE = GREEN_CASE.replace("KIND: acceptance", "KIND: whole-screen").replace(
-    "total recalculates to 450,000 (spec 3.2)",
-    "total recalculates to 450,000 (spec 3.2); focus visible on Tab (WCAG 2.4.7)")
+# The fixture is also the worked example, so the case COVERAGE cites for
+# accessibility measures something: a ratio and a target size, in numbers.
+SCREEN_CASE = (GREEN_CASE.replace("KIND: acceptance", "KIND: whole-screen")
+               + "A11Y: Save contrast 7.1:1 against the panel; target 44x44; focus ring 2px\n")
 
 GREEN_REPORT = """# SHOP-142 — PASS
 COMMIT: abc1234
@@ -1135,7 +1250,8 @@ def _fake_project(tmp):
     os.makedirs(os.path.join(tmp, "docs", "specs"), exist_ok=True)
     os.makedirs(os.path.join(tmp, "docs", "qa"), exist_ok=True)
     for rel, body in (("docs/specs/orders.md", "# Orders\n## 3.2 Totals\nR1 total = qty x price\n"),
-                      ("docs/qa/checklists.md", "# Checklists\n| ID | Criteria |\n|---|---|\n| 01 | valid total |\n"),
+                      ("docs/qa/checklists.md", "# Checklists\n| ID | Criteria |\n|---|---|\n"
+                       "| 01 | the total is recalculated |\n| 02 | the export button downloads a file |\n"),
                       ("README.md", "# demo\n")):
         with open(os.path.join(tmp, *rel.split("/")), "w", encoding="utf-8") as fh:
             fh.write(body)
@@ -1148,12 +1264,19 @@ def _green_fixture(root):
     # the gate does when nobody hands it a root.
     _fake_project(os.path.dirname(os.path.dirname(os.path.abspath(root))))
     for n, t in ((INDEX_FILE, "# SHOP-142\nWhat was checked, in plain language.\n\n"
-                  "CHECKLIST:\n- 01: TC_1\n- 02: waived — no table on this screen\n\n"
+                  "CHECKLIST:\n- 01: TC_1\n- 02: n/a — no export on this screen\n\n"
                   "COVERAGE:\n- security: n/a — read-only pricing display, no auth, session or "
                   "write path touched\n- accessibility: TC_3\n"),
                  ("REPORT.md", GREEN_REPORT),
                  ("verifysheet.md", "EXPECTED per spec 3.2\n"),
-                 ("debate.md", "verifier card\nchallenger card\nresolution\n")):
+                 ("debate.md",
+                  "## Verifier\nPASS. Strongest evidence: TC_1 shows the total at 450,000 after Save.\n"
+                  "MY WEAK SPOT: TC_2 uses quantity 0, and the spec's boundary is really the price, "
+                  "not the quantity — the case may be testing the wrong edge.\n\n"
+                  "## Challenger\nTC_3 never left the Orders screen, so 'the screen is intact' is "
+                  "about one tab. And TC_1 was walked with the same account throughout.\n\n"
+                  "RESOLUTION: re-ran TC_3 with the second tab open; the list still refreshed. "
+                  "Remaining dissent: the role question is real and is filed as an open item.\n")):
         with open(os.path.join(root, n), "w", encoding="utf-8") as fh:
             fh.write(t)
     # A finding the run saw but this ticket did not ask about. The green
@@ -1207,6 +1330,15 @@ def selftest():
     mutations = [
         ("missing REPORT.md", lambda d: os.remove(os.path.join(d, "REPORT.md"))),
         ("missing debate.md", lambda d: os.remove(os.path.join(d, "debate.md"))),
+        # A challenger card that is a word. Each of these satisfied the old rule,
+        # whose only question was whether the file existed.
+        ("debate.md is a word", lambda d: _rewrite_to(os.path.join(d, "debate.md"), "ok\n")),
+        ("debate names no weak spot", lambda d: _rewrite(d, "debate.md",
+            lambda t: re.sub(r"(?m)^MY WEAK SPOT:.*\n(.*\n)?", "", t))),
+        ("debate names no case", lambda d: _rewrite(d, "debate.md",
+            lambda t: re.sub(r"(?i)TC[_-]?\d+", "the case", t))),
+        ("debate was never settled", lambda d: _rewrite(d, "debate.md",
+            lambda t: re.sub(r"(?m)^RESOLUTION:.*\n(.*\n)?", "", t))),
         ("missing the root index", lambda d: os.remove(os.path.join(d, INDEX_FILE))),
         ("no COMMIT line", lambda d: _rewrite(d, "REPORT.md", lambda t: t.replace("COMMIT: abc1234\n", ""))),
         ("no ENVIRONMENT line", lambda d: _rewrite(d, "REPORT.md", lambda t: t.replace("ENVIRONMENT: local — http://localhost:3000\n", ""))),
@@ -1296,8 +1428,27 @@ def selftest():
             lambda t: re.sub(r"(?m)^REQUIREMENT:.*$", "REQUIREMENT: README.md intro", t))),
         ("REQUIREMENT says FLOOR and names no rule", lambda d: _rewrite(d, C1 + "/case.md",
             lambda t: re.sub(r"(?m)^REQUIREMENT:.*$", "REQUIREMENT: FLOOR", t))),
+        # The hole this closes: free text after FLOOR invented a baseline nobody
+        # agreed to, and let the case skip the specification entirely.
+        ("REQUIREMENT invents a floor rule", lambda d: _rewrite(d, C1 + "/case.md",
+            lambda t: re.sub(r"(?m)^REQUIREMENT:.*$", "REQUIREMENT: FLOOR user can click save", t))),
         ("ORACLE: NONE under a PASS verdict", lambda d: _rewrite(d, "REPORT.md",
             lambda t: t.replace("ORACLE: docs/specs/orders.md 3.2", "ORACLE: NONE"))),
+        # The checklist is MAPPED, not mentioned. Each of these passed the rule
+        # that only asked for ten characters of prose.
+        ("CHECKLIST declares nothing for one of the ids", lambda d: _rewrite(d, INDEX_FILE,
+            lambda t: re.sub(r"(?m)^- 01: TC_1\n", "", t))),
+        ("CHECKLIST is a sentence instead of a mapping", lambda d: _rewrite(d, INDEX_FILE,
+            lambda t: re.sub(r"(?s)CHECKLIST:.*?\n\n", "CHECKLIST: all items covered\n\n", t))),
+        ("CHECKLIST cites a case that does not exist", lambda d: _rewrite(d, INDEX_FILE,
+            lambda t: t.replace("- 01: TC_1", "- 01: TC_9"))),
+        ("CHECKLIST waives an item with no reason", lambda d: _rewrite(d, INDEX_FILE,
+            lambda t: t.replace("- 02: n/a — no export on this screen", "- 02: n/a"))),
+        ("CHECKLIST neither cites a case nor waives", lambda d: _rewrite(d, INDEX_FILE,
+            lambda t: t.replace("- 01: TC_1", "- 01: looked at it"))),
+        # Accessibility is decided by numbers, not by the word "label".
+        ("the accessibility case measures nothing", lambda d: _rewrite(d, C3 + "/case.md",
+            lambda t: re.sub(r"(?m)^A11Y:.*\n", "A11Y: the Save label is visible and looks fine\n", t))),
         ("ORACLE cites a file that does not exist", lambda d: _rewrite(d, "REPORT.md",
             lambda t: t.replace("ORACLE: docs/specs/orders.md 3.2", "ORACLE: docs/specs/gone.md 3.2"))),
         # The pixels. Every one of these passed every other rule in this gate
@@ -1315,8 +1466,6 @@ def selftest():
         ("all cases cite FLOOR when specs exist", lambda d: [
             _rewrite(d, c + "/case.md", lambda t: re.sub(r"(?m)^REQUIREMENT:.*$", "REQUIREMENT: FLOOR no unhandled 500", t))
             for c in (C1, C2, C3)]),
-        ("COVERAGE cites accessibility case with no a11y checks", lambda d: _rewrite(
-            d, C3 + "/case.md", lambda t: t.replace("focus visible on Tab (WCAG 2.4.7)", "nothing checked here"))),
         ("ENVIRONMENT has no URL", lambda d: _rewrite(
             d, "REPORT.md", lambda t: t.replace("ENVIRONMENT: local — http://localhost:3000", "ENVIRONMENT: local"))),
         ("project checklist present but pack omits audit", lambda d: _rewrite(
@@ -1353,7 +1502,7 @@ def selftest():
     #     does not produce citations, it produces invented ones.
     d = fresh("floor")
     _rewrite(d, C1 + "/case.md", lambda t: re.sub(
-        r"(?m)^REQUIREMENT:.*$", "REQUIREMENT: FLOOR no unhandled 500 on a valid request", t))
+        r"(?m)^REQUIREMENT:.*$", "REQUIREMENT: FLOOR unhandled-error", t))
     expect(run(d, None, DEFAULT_OPTS).ok, "a named floor rule is a legal citation and must pass")
 
     # A citation people actually write. Both of these were refused by the first
@@ -1361,6 +1510,7 @@ def selftest():
     for label, value in (
             ("two sections joined by 'and'", "docs/specs/orders.md 3.2 and 3.3"),
             ("a lead-in word before the path", "See docs/specs/orders.md 3.2"),
+            ("a named floor rule with a note", "FLOOR data-loss — the total is gone after F5"),
             ("the section in brackets", "docs/specs/orders.md (3.2)")):
         d = fresh("cite-{}".format(abs(hash(label)) % 10000))
         _rewrite(d, C1 + "/case.md", lambda t, v=value: re.sub(

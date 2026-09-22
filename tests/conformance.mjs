@@ -379,7 +379,15 @@ for (const [label, cmd, args] of [
     // changes — exactly what the gate insists on downstream.
     const reindex = () => run("python3", [path.join(pkgRoot, "core/scripts/evd_index.py"), "--evd", evd]);
     fs.writeFileSync(path.join(evd, "verifysheet.md"), "EXPECTED per spec 3.2 R1\n");
-    fs.writeFileSync(path.join(evd, "debate.md"), "my card\nchallenger card\nresolution\n");
+    // A real card, because the gate now reads this file instead of counting it:
+    // a weak spot named in advance, a challenge pointing at a case, a resolution.
+    fs.writeFileSync(path.join(evd, "debate.md"),
+      "## Verifier\nPASS on the discount path. Strongest evidence: TC_1's recorded response.\n"
+      + "MY WEAK SPOT: the threshold case uses exactly 500,000, and the spec's wording could be read "
+      + "as strictly greater than.\n\n"
+      + "## Challenger\nTC_2 proves the tier boundary but never checks a non-gold customer at the "
+      + "same amount, so the discount could be unconditional.\n\n"
+      + "RESOLUTION: re-ran TC_2 with a silver customer; discount 0. Remaining dissent: none.\n");
     fs.writeFileSync(path.join(evd, "REPORT.md"), [
       "# SHOP-1 — PASS", "COMMIT: abc1234", "VERIFIED-AT: 2026-09-04T00:00:00Z",
       "ENVIRONMENT: local — http://127.0.0.1:4319",
@@ -701,6 +709,27 @@ for (const [label, cmd, args] of [
     "qa.md no longer tells the verifier REQUIREMENT is enforced, only that it is nice to have");
   check(/FLOOR/.test(qa) && /FLOOR/.test(gate),
     "the floor-rule escape hatch exists in one of the gate and the workflow but not the other");
+  // The floor is a NAMED list. A list the gate enforces and the documents do
+  // not name is a rule people meet as a red they cannot act on.
+  {
+    const ids = [...gate.matchAll(/^\s{4}"([a-z-]+)":\s*"/gm)].map((m) => m[1])
+      .filter((x) => /^(auth|authz|injection|secret|session|unhandled|data)-/.test(x));
+    check(ids.length === 7, `FLOOR_IDS should name seven outcomes, the gate names ${ids.length}`);
+    const ev = readDoc("evidence.md");
+    for (const id of ids) {
+      check(ev.includes(id), `evidence.md never names the floor id \`${id}\` the gate demands`);
+      check(qa.includes(id), `qa.md never names the floor id \`${id}\` the gate demands`);
+    }
+  }
+  // Rules that read a file rather than count it. Each replaced a rule that a
+  // one-word file satisfied.
+  for (const [needle, why] of [
+    ["def check_debate(", "debate.md is counted again, not read"],
+    ["MY WEAK SPOT", "the gate stopped asking the verifier to name its weak spot in advance"],
+    ["def checklist_ids(", "the checklist is mentioned again, not mapped item by item"],
+    ["A11Y_MEASURE", "accessibility went back to matching English words instead of measurements"],
+  ]) check(gate.includes(needle), why);
+  check(/CHECKLIST:/.test(qa), "qa.md never tells the verifier to write a CHECKLIST: block");
   check(/ORACLE: NONE/.test(qa),
     "qa.md never says what ORACLE: NONE now costs — people will keep writing it under a PASS");
 
