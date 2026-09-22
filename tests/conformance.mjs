@@ -747,6 +747,29 @@ for (const [label, cmd, args] of [
   check(/MIN_IMAGE_W/.test(gate), "the gate no longer has a minimum screen size");
   check(/cat-file/.test(gate), "the gate stopped checking that COMMIT: resolves to a real commit");
 
+  // A gate trusted rather than tested is a gate that has quietly stopped
+  // working — doctor.mjs says so in its own header. Three scripts shipped a
+  // --selftest that nothing ever ran, which is the same failure wearing a
+  // tidier shirt. Every script that CAN prove itself must be made to.
+  {
+    const scripts = fs.readdirSync(path.join(pkgRoot, "core/scripts"))
+      .filter((f) => /\.(py|mjs)$/.test(f))
+      .filter((f) => fs.readFileSync(path.join(pkgRoot, "core/scripts", f), "utf8").includes("--selftest"));
+    // Two places run a selftest: a surface profile, and doctor's own
+    // surface-independent block. The guard has to read both, or it reports a
+    // wired gate as unwired and someone "fixes" it by wiring it twice.
+    const declared = [
+      ...fs.readdirSync(path.join(pkgRoot, "profiles"))
+        .map((s2) => fs.readFileSync(path.join(pkgRoot, "profiles", s2, "gates.yaml"), "utf8")),
+      fs.readFileSync(path.join(pkgRoot, "src/cli/doctor.mjs"), "utf8"),
+    ].join("\n");
+    for (const f of scripts) {
+      check(declared.includes(`${f} --selftest`),
+        `core/scripts/${f} can prove itself and no profile ever asks it to — doctor will report ` +
+        "green on a gate nobody has checked since it was written");
+    }
+  }
+
   // A real-user move is demanded of EVERY case, not delegated to a case of its own.
   check(/At least one step is a thing a real user does/.test(qa),
     "qa.md no longer requires a real-user move in every case's STEPS");

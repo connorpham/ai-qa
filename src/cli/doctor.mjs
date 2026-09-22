@@ -224,13 +224,27 @@ export async function doctor(flags) {
       recordGate(g.id, g.proves || "selftest", r, g.run);
     }
   }
-  // The tracker is not surface-specific — every install reads tickets from
-  // somewhere — so it is checked here rather than from a profile.
-  {
-    const cmd = "python3 .ai-qa/scripts/tracker.py --selftest";
+  // These are not surface-specific — every install reads tickets, indexes its
+  // evidence and may be handed a spec in a binary file — so they are checked
+  // here rather than repeated in four profiles. They used to be checked
+  // NOWHERE: three scripts shipped a --selftest that nothing ever ran, which is
+  // exactly the failure this section exists to catch, wearing a tidier shirt.
+  // Written out in full rather than built from a variable, so that `grep
+  // "<script> --selftest"` answers "is this gate ever proven?" — which is the
+  // question the conformance guard asks on every run.
+  for (const [id, proves, cmd] of [
+    ["tracker", "reads Jira/Backlog, and never writes a secret",
+     "python3 .ai-qa/scripts/tracker.py --selftest"],
+    ["evd-index", "the folder can introduce itself, and a stale index goes red",
+     "python3 .ai-qa/scripts/evd_index.py --selftest"],
+    ["specs-ingest", "a spec in a binary file becomes one that can be cited and diffed",
+     "python3 .ai-qa/scripts/specs_ingest.py --selftest"],
+  ]) {
+    const script = /scripts\/(\S+)/.exec(cmd)[1];
+    if (!fs.existsSync(path.join(root, ".ai-qa", "scripts", script))) continue;
     const r = runCmd(root, cmd);
-    seen.add("tracker");
-    recordGate("tracker", "reads Jira/Backlog, and never writes a secret", r, cmd);
+    seen.add(id);
+    recordGate(id, proves, r, cmd);
   }
 
   if (!seen.size) record("red", "gate selftests", "no gate ran a selftest — nothing here is proven to work");

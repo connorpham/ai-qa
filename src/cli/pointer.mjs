@@ -89,7 +89,11 @@ export function mergeSection(file, section, head = "") {
   const next = text.includes(SECTION_START)
     ? text.replace(new RegExp(`${SECTION_START}[\\s\\S]*?${SECTION_END}`), () => section)
     : `${(existed ? text : head).replace(/\s*$/, "")}\n\n${section}\n`.replace(/^\n+/, "");
+  // Unchanged means untouched. These are files a human owns; rewriting one with
+  // its own bytes on every update makes ai-qa show up in their git status for
+  // nothing, and a tool that does that gets uninstalled.
+  if (next === text) return false;
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(next === text ? file : file, next);
-  return next !== text;
+  fs.writeFileSync(file, next);
+  return true;
 }
