@@ -93,6 +93,7 @@ paths:
   onboarding: docs/qa/onboarding.md
   known_issues: docs/qa/known-issues.md
   lessons: docs/qa/lessons.md
+  checklists: docs/qa/checklists.md
 
 # Which surfaces this product presents. Each one activates its gates and its
 # branch of the /qa workflow — a migration is not verified the way a screen is.
