@@ -60,7 +60,7 @@ Every field is there because a verification went wrong without it:
 
 ## The coverage decision, per pack
 
-The root `manifest.md` carries one more thing the gate will not do without: a
+The `index.md` carries one more thing the gate will not do without: a
 `COVERAGE:` block that states, for the two lenses a verifier skips in silence
 more than any other — **security** and **accessibility** — either the case that
 covered it or an out-loud waiver with a reason.

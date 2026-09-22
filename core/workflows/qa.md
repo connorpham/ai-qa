@@ -434,22 +434,31 @@ images and no verification file is not verification.
 
 ```
 evd/<TICKET>/
-├── manifest.md          # plain language: the requirement, each verdict, the
-│                        # COVERAGE: block — and the generated index block (below)
+├── index.md             # generated: what is in here, case by case, plus the
+│                        # COVERAGE: block. Was `manifest.md` — which also
+│                        # named the file inside every case, so "open the
+│                        # manifest" always needed a follow-up question.
+├── REPORT.md            # V5b: the only thing a non-programmer reads
+├── ticket.md            # V0: what the ticket SAYS — data, never the oracle
 ├── verifysheet.md       # V1/V2: expected values with citations, the journeys
 ├── debate.md            # V6: your card, the challenger's card, the resolution
-├── REPORT.md            # V5b: what a non-programmer reads
-├── <TICKET>_testcases.xlsx  # V7: the same record as a spreadsheet (generated, never edited)
+├── <TICKET>_testcases.xlsx  # V7: the same record as a spreadsheet (generated)
 ├── data_prep/           # V3 runs, if any
+├── findings/            # V7.7: what this run SAW that the ticket did not ask
+│   └── F<n>_<what>/     #   about — the bug is filed elsewhere, the evidence
+│       ├── finding.md   #   stays here: SEVERITY · ORIGIN · DEDUP · FILED-AS
+│       └── …            #   and the image/query that made you believe it
 └── TC_<n>_<what_it_proves>/
-    ├── journey.mjs      # the run itself — re-runnable evidence
-    ├── manifest.md      # TITLE / KIND / RESULT / AS / PRECONDITION / ENTRY /
+    ├── case.md          # TITLE / KIND / RESULT / AS / PRECONDITION / ENTRY /
     │                    # STEPS / EXPECTED / REQUIREMENT / ACTUAL / AFTER /
     │                    # BACK — plus SEVERITY / ORIGIN / FINDING when it FAILED
+    ├── journey.mjs      # the run itself — re-runnable evidence
+    ├── shots.json       # what each annotated image declares it proves
     ├── TC<n>_01_*.png … # case number + step + what it shows, + *_boxed.png
     ├── request.http     # API cases: the real request
     ├── response.json    # API cases: the real response
     └── db_verify.md     # write cases: the read-only SELECT and the rows after
+    #   cmd_verify.md    # non-UI cases with no database: real command + output
 
 ```
 
@@ -459,18 +468,18 @@ does not. `shot()` stamps the case number into every filename for the same
 reason — a screenshot leaves its folder almost immediately, and out there
 `03_total.png` belongs to nothing. Both are gated.
 
-Write the index, then gate. The index is generated from the case manifests, so
+Write the index, then gate. The index is generated from the case records, so
 it cannot describe a folder that is no longer there:
 
 ```bash
 python3 .ai-qa/scripts/evd_index.py --evd evd/<TICKET>
 ```
 
-It rewrites one marked block inside `evd/<TICKET>/manifest.md` — a table of
+It rewrites one marked block inside `evd/<TICKET>/index.md` — a table of
 case, what it proves, kind, result, and which file to open — and leaves your
 prose alone. `evd_check.py` reds a stale one.
 
-**Declare the coverage decision.** In the prose of `evd/<TICKET>/manifest.md`
+**Declare the coverage decision.** In the prose of `evd/<TICKET>/index.md`
 (outside the generated block), write a `COVERAGE:` line for each lens the gate
 insists a verifier decide about — the two skipped in silence more than any
 other. Name the case that covered it, or waive it out loud with a reason:
@@ -617,7 +626,7 @@ in the template is for the person reading it.
    ```bash
    python3 .ai-qa/scripts/tracker.py comment <TICKET> --body-file evd/<TICKET>/REPORT.md
    python3 .ai-qa/scripts/tracker.py attach  <TICKET> evd/<TICKET>/TC_*/*_boxed.png \
-     evd/<TICKET>/<TICKET>_testcases.xlsx --record evd/<TICKET>/manifest.md
+     evd/<TICKET>/<TICKET>_testcases.xlsx --record evd/<TICKET>/index.md
    ```
 
    `--record` writes a TRACKER ATTACHMENTS section into the manifest, so a
@@ -638,9 +647,25 @@ in the template is for the person reading it.
    reproducible, and an unreproducible verdict is a fabricated one.
 6. **Clean up** the `ZZTEST` data through the product's reverse flow; record any
    residue in the manifest.
-7. **A finding outside this ticket's scope** gets its own bug report — deduped
-   against known-issues first, then filed with: environment, numbered steps to
-   reproduce, expected (cited), actual, severity, and the evidence path.
+7. **A finding outside this ticket's scope gets a folder here, and a ticket
+   there.** The bug lives in the tracker; the evidence stays where it was
+   captured, because a run's record must remain exactly as that run left it:
+
+   ```
+   evd/<TICKET>/findings/F1_<what_it_is>/
+     finding.md    SEVERITY · ORIGIN · DEDUP · FILED-AS  (+ what and where)
+     …             the image, query or recorded response that made you believe it
+   ```
+
+   `DEDUP:` names the known issue it duplicates, or says it is in none — check
+   `docs/qa/known-issues.md` BEFORE filing; re-reporting a KI costs the team
+   more than the report is worth. `FILED-AS:` is the ticket it became, or
+   `none — <why it is not worth one>`; silence there is how a finding
+   evaporates. **The gate reds on every one of those being absent.**
+
+   The bug ticket you file points back at this folder. Copying the evidence
+   into it would create two versions that can drift; leaving it unnamed inside
+   another ticket's folder is how it is lost.
 8. **Close the learning loop.** Append a lesson to `docs/qa/lessons.md`, even
    after a FAIL or a BLOCKED run — or state explicitly that there was none.
    Prefer graduating it: gate-shaped → into `evd_check.py`; recurring

@@ -40,6 +40,14 @@ VERDICTS = ("PASS", "FAIL", "PARTIAL", "NEW-BUG", "BLOCKED", "UNCLEAR")
 CASE_RESULTS = ("PASS", "FAIL", "BLOCKED")
 KINDS = ("acceptance", "boundary", "whole-screen", "write-readback", "exploratory", "security")
 
+# A finding is something the run SAW that this ticket did not ask about. The
+# doctrine has always said "a finding outside this ticket's scope gets its own
+# bug report" — and until now nothing checked the report was ever written, or
+# that the evidence for it survived anywhere a reader could find it.
+FINDING_DIR = re.compile(r"^F(\d+)(?:_([A-Za-z0-9][A-Za-z0-9_-]*))?$")
+SEVERITIES = ("Blocker", "Critical", "Major", "Minor")
+ORIGINS = ("DEV", "SPEC")
+
 # Fields every case manifest must carry. The names are the discipline: a field
 # you have to fill in is a question you cannot skip.
 REQUIRED_FIELDS = ("RESULT", "AS", "PRECONDITION", "ENTRY", "STEPS", "EXPECTED", "ACTUAL")
@@ -150,6 +158,44 @@ class Result:
         return not self.errors
 
 
+# ---------------------------------------------------------------------------
+# One name, one meaning
+#
+# `manifest.md` used to mean two different things: the index of a whole ticket
+# at the root, and the record of a single case inside a TC folder. Same name,
+# different content, different reader — so "open the manifest" always needed a
+# follow-up question, and half the time you opened the wrong one.
+#
+# They are now `index.md` and `case.md`. The old name is still read, with a
+# warning, because every evidence folder written before this exists and is
+# still evidence. Both names present at once IS an error: nobody can tell which
+# one the verdict came from.
+# ---------------------------------------------------------------------------
+CASE_FILE, CASE_FILE_OLD = "case.md", "manifest.md"
+INDEX_FILE, INDEX_FILE_OLD = "index.md", "manifest.md"
+
+
+def resolve_doc(folder, new, old, res=None, where=""):
+    """The path to read, preferring the new name. Returns (path, name) or
+    (None, None) when neither is there."""
+    p_new = os.path.join(folder, new)
+    p_old = os.path.join(folder, old)
+    has_new, has_old = os.path.exists(p_new), os.path.exists(p_old)
+    if has_new and has_old and res is not None:
+        res.err(where or folder, "both {} and {} are here — two records of the same thing, and "
+                                 "nothing says which one the verdict came from. Delete the old one"
+                                 .format(new, old))
+    if has_new:
+        return p_new, new
+    if has_old:
+        if res is not None:
+            res.warn(where or folder, "{} is the old name for {} — still read, but rename it: the "
+                                      "same word meant the ticket index and a single case"
+                                      .format(old, new))
+        return p_old, old
+    return None, None
+
+
 def read(path):
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as fh:
@@ -187,9 +233,9 @@ def check_case(case_dir, res, opts):
         res.err(name, "the folder is called {} and nothing else — name it TC_{}_<what_it_proves> "
                       "so the reader knows what was tested without opening a file"
                       .format(name, case_no))
-    man_path = os.path.join(case_dir, "manifest.md")
-    if not os.path.exists(man_path):
-        res.err(name, "no manifest.md — a folder of images is not a verification")
+    man_path, _which = resolve_doc(case_dir, CASE_FILE, CASE_FILE_OLD, res, name)
+    if not man_path:
+        res.err(name, "no case.md — a folder of images is not a verification")
         return None
 
     text = read(man_path)
@@ -200,7 +246,7 @@ def check_case(case_dir, res, opts):
     required = list(REQUIRED_FIELDS) + ([] if non_ui else list(UI_ONLY_FIELDS))
     for key in required:
         if key not in f or not f[key]:
-            res.err(name, "manifest.md is missing {} — {}".format(key, _why(key)))
+            res.err(name, "case.md is missing {} — {}".format(key, _why(key)))
 
     # Present is not the same as written. "EXPECTED: works as expected" passes
     # the line above and tells the reader nothing — see case-writing.md.
@@ -349,11 +395,81 @@ def _why(key):
     }.get(key, "required")
 
 
+def check_findings(evd, res, verdict):
+    """Things the run saw that this ticket did not ask about.
+
+    The verification of SHOP-142 is where a bug in SHOP-210's area gets noticed,
+    and the screenshot proving it is captured during SHOP-142's run. Filing the
+    bug and leaving its evidence unnamed inside another ticket's folder is how
+    it is lost: six months later somebody opens evd/SHOP-210/ and finds nothing.
+
+    So a finding gets a folder of its own, under the run that found it, and the
+    bug it was filed as points back here. Pointing rather than copying, because
+    the record of a run must stay exactly as that run left it.
+    """
+    root = os.path.join(evd, "findings")
+    dirs = []
+    if os.path.isdir(root):
+        dirs = sorted(d for d in os.listdir(root)
+                      if FINDING_DIR.match(d) and os.path.isdir(os.path.join(root, d)))
+
+    if verdict == "NEW-BUG" and not dirs:
+        res.err("findings/", "the verdict is NEW-BUG and there is no findings/ folder — the one "
+                             "thing that says what was found has not been written down")
+
+    for d in dirs:
+        fdir = os.path.join(root, d)
+        fpath = os.path.join(fdir, "finding.md")
+        where = "findings/{}".format(d)
+        if not os.path.exists(fpath):
+            res.err(where, "no finding.md — a folder of images nobody described is not a finding")
+            continue
+        text = read(fpath)
+        f = fields(text)
+
+        sev = f.get("SEVERITY", "")
+        if not sev:
+            res.err(where, "no SEVERITY — how much this hurts decides when anyone looks at it "
+                           "(docs/qa/method/severity.md)")
+        elif sev.split()[0].capitalize() not in SEVERITIES:
+            res.err(where, "SEVERITY is {!r}; must be one of {}".format(sev, ", ".join(SEVERITIES)))
+
+        origin = f.get("ORIGIN", "").upper()
+        if not origin:
+            res.err(where, "no ORIGIN — DEV (the code diverges from the spec) or SPEC (the spec "
+                           "itself is wrong or missing). A spec-origin finding sent to a developer "
+                           "produces a fix that is still wrong")
+        elif origin.split()[0] not in ORIGINS:
+            res.err(where, "ORIGIN is {!r}; must be DEV or SPEC".format(origin))
+
+        if not f.get("DEDUP", ""):
+            res.err(where, "no DEDUP — say which known issue this is, or that it is in none. "
+                           "Re-reporting a KI costs the team more than the report is worth")
+
+        filed = f.get("FILED-AS", "")
+        if not filed:
+            res.err(where, "no FILED-AS — either the ticket it became, or `none — <why it is not "
+                           "worth one>`. Silence here is how a finding evaporates")
+        elif not re.match(r"^(none\b|[A-Za-z][A-Za-z0-9]*-\d+)", filed):
+            res.err(where, "FILED-AS is {!r} — expected a ticket key, or `none — <reason>`".format(filed))
+
+        # An assertion with no artefact behind it is the thing this whole
+        # toolchain exists to refuse.
+        try:
+            files = os.listdir(fdir)
+        except OSError:
+            files = []
+        proof = [x for x in files if STEP_IMAGE.match(x) or x in ("db_verify.md", "cmd_verify.md", "response.json")]
+        if not proof:
+            res.err(where, "nothing here but words — a finding needs the image, query or recorded "
+                           "response that made you believe it")
+
+
 def check_report(evd, res):
     path = os.path.join(evd, "REPORT.md")
     if not os.path.exists(path):
         res.err("REPORT.md", "missing — the report is the deliverable; everything else is preparation")
-        return
+        return ""
     text = read(path)
 
     head = text.splitlines()[0] if text.splitlines() else ""
@@ -386,6 +502,9 @@ def check_report(evd, res):
         res.warn("REPORT.md", "technical vocabulary in the body ({}) — the bar is a non-programmer "
                               "reading it in two minutes; move it to the appendix".format(", ".join(jargon)))
 
+    # The verdict decides whether a findings/ folder is owed.
+    return verdict
+
 
 # The two lenses a verifier skips in silence more than any other, and always for
 # the same reason: nobody wrote them into the ticket, so nobody tested them, so
@@ -401,13 +520,15 @@ _WAIVER = re.compile(r"(?i)\b(n/?a|not applicable|out of scope|kh[oô]ng áp d[u
 def check_coverage(evd, res, cases):
     """The root manifest must declare, for each risk lens the framework insists on
     a decision about, either the case that covered it or an out-loud waiver."""
-    path = os.path.join(evd, "manifest.md")
+    path, _which = resolve_doc(evd, INDEX_FILE, INDEX_FILE_OLD)
+    if not path:
+        path = os.path.join(evd, INDEX_FILE)
     if not os.path.exists(path):
         return  # its absence is already reported upstream
     text = read(path)
 
     if not re.search(r"(?im)^\s*#*\s*COVERAGE\s*:", text):
-        res.err("manifest.md", "no COVERAGE: block — the pack never says whether {} were in scope. "
+        res.err(INDEX_FILE, "no COVERAGE: block — the pack never says whether {} were in scope. "
                                "Silent omission is exactly how a lens gets skipped: name the case that "
                                "covered each, or waive it with a reason.".format(" and ".join(REQUIRED_COVERAGE)))
         return
@@ -421,7 +542,7 @@ def check_coverage(evd, res, cases):
     for lens in REQUIRED_COVERAGE:
         m = re.search(r"(?im)^\s*[-*]?\s*{}\s*:\s*(.+?)\s*$".format(lens), block)
         if not m:
-            res.err("manifest.md", "COVERAGE names no line for '{}' — decide it: a case, or a waiver "
+            res.err(INDEX_FILE, "COVERAGE names no line for '{}' — decide it: a case, or a waiver "
                                    "with a reason".format(lens))
             continue
         value = m.group(1)
@@ -429,16 +550,16 @@ def check_coverage(evd, res, cases):
         if tc:
             no = int(tc.group(1))
             if no not in present:
-                res.err("manifest.md", "COVERAGE says '{}: {}' but there is no such case folder — a "
+                res.err(INDEX_FILE, "COVERAGE says '{}: {}' but there is no such case folder — a "
                                        "citation to a case that does not exist".format(lens, value))
             continue
         if _WAIVER.search(value):
             reason = _WAIVER.sub("", value).strip(" -—:.,").strip()
             if len(reason) < 10:
-                res.err("manifest.md", "COVERAGE waives '{}' with no reason — a waiver with no reason "
+                res.err(INDEX_FILE, "COVERAGE waives '{}' with no reason — a waiver with no reason "
                                        "is a silent skip wearing a label".format(lens))
             continue
-        res.err("manifest.md", "COVERAGE line for '{}' is neither a case (TC_n) nor a waiver "
+        res.err(INDEX_FILE, "COVERAGE line for '{}' is neither a case (TC_n) nor a waiver "
                                "(n/a — reason): {!r}".format(lens, value))
 
 
@@ -448,8 +569,8 @@ def run(evd, expect_tcs, opts):
         res.err(evd, "no such evidence folder")
         return res
 
-    if not os.path.exists(os.path.join(evd, "manifest.md")):
-        res.err("manifest.md", "missing at the evidence root — the plain-language index of what was checked")
+    if not resolve_doc(evd, INDEX_FILE, INDEX_FILE_OLD, res, INDEX_FILE)[0]:
+        res.err(INDEX_FILE, "missing at the evidence root — the plain-language index of what was checked")
 
     cases = sorted((d for d in os.listdir(evd)
                     if CASE_DIR.match(d) and os.path.isdir(os.path.join(evd, d))),
@@ -484,7 +605,7 @@ def run(evd, expect_tcs, opts):
             kinds.append(k)
 
     ran = [c for c in cases
-           if fields(read(os.path.join(evd, c, "manifest.md"))).get("RESULT", "").upper() != "BLOCKED"]
+           if fields(read(resolve_doc(os.path.join(evd, c), CASE_FILE, CASE_FILE_OLD)[0] or "")).get("RESULT", "").upper() != "BLOCKED"]
     if ran:
         if opts["require_boundary"] and "boundary" not in kinds:
             res.err(evd, "no case with KIND: boundary — the happy path passing tells you nothing "
@@ -494,13 +615,14 @@ def run(evd, expect_tcs, opts):
                          "neighbour is what users notice")
 
     # The index is only worth having if it cannot be out of date.
-    if evd_index is not None and os.path.exists(os.path.join(evd, "manifest.md")):
+    if evd_index is not None and resolve_doc(evd, INDEX_FILE, INDEX_FILE_OLD)[0]:
         why = evd_index.stale(evd)
         if why:
-            res.err("manifest.md", "{} — the folder cannot introduce itself. Run: "
+            res.err(INDEX_FILE, "{} — the folder cannot introduce itself. Run: "
                                    "python3 .ai-qa/scripts/evd_index.py --evd {}".format(why, evd))
 
-    check_report(evd, res)
+    verdict = check_report(evd, res)
+    check_findings(evd, res, verdict)
     check_coverage(evd, res, cases)
 
     for name, why in (("verifysheet.md", "where expected values are derived and cited"),
@@ -564,7 +686,7 @@ C3 = "TC_3_the_orders_screen_is_intact"
 def _mkcase(root, name, manifest, images=True):
     d = os.path.join(root, name)
     os.makedirs(d, exist_ok=True)
-    with open(os.path.join(d, "manifest.md"), "w", encoding="utf-8") as fh:
+    with open(os.path.join(d, CASE_FILE), "w", encoding="utf-8") as fh:
         fh.write(manifest)
     if images:
         pre = "TC{}_".format(CASE_DIR.match(name).group(1)) if CASE_DIR.match(name) else ""
@@ -584,7 +706,7 @@ def _mkcase(root, name, manifest, images=True):
 
 def _green_fixture(root):
     os.makedirs(root, exist_ok=True)
-    for n, t in (("manifest.md", "# SHOP-142\nWhat was checked, in plain language.\n\n"
+    for n, t in ((INDEX_FILE, "# SHOP-142\nWhat was checked, in plain language.\n\n"
                   "COVERAGE:\n- security: n/a — read-only pricing display, no auth, session or "
                   "write path touched\n- accessibility: TC_3\n"),
                  ("REPORT.md", GREEN_REPORT),
@@ -592,6 +714,16 @@ def _green_fixture(root):
                  ("debate.md", "verifier card\nchallenger card\nresolution\n")):
         with open(os.path.join(root, n), "w", encoding="utf-8") as fh:
             fh.write(t)
+    # A finding the run saw but this ticket did not ask about. The green
+    # fixture carries one so the happy path is exercised, not only the reds.
+    fdir = os.path.join(root, "findings", "F1_discount_rounds_down")
+    os.makedirs(fdir, exist_ok=True)
+    with open(os.path.join(fdir, "finding.md"), "w", encoding="utf-8") as fh:
+        fh.write("SEVERITY: Major\nORIGIN: DEV\nDEDUP: not in known-issues\n"
+                 "FILED-AS: SHOP-210\nWHAT: the discount rounds down on odd totals\n")
+    with open(os.path.join(fdir, "01_rounding.png"), "wb") as fh:
+        fh.write(b"\x89PNG\r\n\x1a\n")
+
     _mkcase(root, C1, GREEN_CASE)
     _mkcase(root, C2, BOUNDARY_CASE)
     _mkcase(root, C3, SCREEN_CASE)
@@ -630,24 +762,51 @@ def selftest():
     mutations = [
         ("missing REPORT.md", lambda d: os.remove(os.path.join(d, "REPORT.md"))),
         ("missing debate.md", lambda d: os.remove(os.path.join(d, "debate.md"))),
-        ("missing root manifest", lambda d: os.remove(os.path.join(d, "manifest.md"))),
+        ("missing the root index", lambda d: os.remove(os.path.join(d, INDEX_FILE))),
         ("no COMMIT line", lambda d: _rewrite(d, "REPORT.md", lambda t: t.replace("COMMIT: abc1234\n", ""))),
         ("no ENVIRONMENT line", lambda d: _rewrite(d, "REPORT.md", lambda t: t.replace("ENVIRONMENT: local — http://localhost:3000\n", ""))),
         ("no ORACLE line", lambda d: _rewrite(d, "REPORT.md", lambda t: t.replace("ORACLE: docs/specs/orders.md 3.2\n", ""))),
         ("FAIL without severity", lambda d: _rewrite(d, "REPORT.md", lambda t: t.replace("— PASS", "— FAIL"))),
-        ("no boundary case", lambda d: _rewrite(d, C2 + "/manifest.md", lambda t: t.replace("KIND: boundary", "KIND: acceptance"))),
-        ("no whole-screen case", lambda d: _rewrite(d, C3 + "/manifest.md", lambda t: t.replace("KIND: whole-screen", "KIND: acceptance"))),
-        ("case missing AS", lambda d: _rewrite(d, C1 + "/manifest.md", lambda t: re.sub(r"(?m)^AS:.*\n", "", t))),
-        ("case missing EXPECTED", lambda d: _rewrite(d, C1 + "/manifest.md", lambda t: re.sub(r"(?m)^EXPECTED:.*\n", "", t))),
-        ("EXPECTED is a wish, not a value", lambda d: _rewrite(d, C1 + "/manifest.md",
+        ("no boundary case", lambda d: _rewrite(d, C2 + "/case.md", lambda t: t.replace("KIND: boundary", "KIND: acceptance"))),
+        ("no whole-screen case", lambda d: _rewrite(d, C3 + "/case.md", lambda t: t.replace("KIND: whole-screen", "KIND: acceptance"))),
+        ("case missing AS", lambda d: _rewrite(d, C1 + "/case.md", lambda t: re.sub(r"(?m)^AS:.*\n", "", t))),
+        ("case missing EXPECTED", lambda d: _rewrite(d, C1 + "/case.md", lambda t: re.sub(r"(?m)^EXPECTED:.*\n", "", t))),
+        ("EXPECTED is a wish, not a value", lambda d: _rewrite(d, C1 + "/case.md",
             lambda t: re.sub(r"(?m)^EXPECTED:.*$", "EXPECTED: works as expected", t))),
-        ("ACTUAL is a judgement, not a value", lambda d: _rewrite(d, C2 + "/manifest.md",
+        ("ACTUAL is a judgement, not a value", lambda d: _rewrite(d, C2 + "/case.md",
             lambda t: re.sub(r"(?m)^ACTUAL:.*$", "ACTUAL: failed", t))),
-        ("case missing BACK", lambda d: _rewrite(d, C1 + "/manifest.md", lambda t: re.sub(r"(?m)^BACK:.*\n", "", t))),
-        ("ENTRY is only a URL", lambda d: _rewrite(d, C1 + "/manifest.md",
+        ("case missing BACK", lambda d: _rewrite(d, C1 + "/case.md", lambda t: re.sub(r"(?m)^BACK:.*\n", "", t))),
+        ("ENTRY is only a URL", lambda d: _rewrite(d, C1 + "/case.md",
             lambda t: re.sub(r"(?m)^ENTRY:.*$", "ENTRY: http://localhost:3000/orders/4102/edit", t))),
-        ("AFTER never reloads", lambda d: _rewrite(d, C1 + "/manifest.md",
+        ("AFTER never reloads", lambda d: _rewrite(d, C1 + "/case.md",
             lambda t: re.sub(r"(?m)^AFTER:.*$", "AFTER: the list row shows 3", t))),
+        # A finding with no severity, no origin, no dedup, no ticket and no
+        # artefact is an assertion. Each of those is now a red.
+        ("finding with no SEVERITY", lambda d: _rewrite(d, os.path.join("findings", "F1_discount_rounds_down", "finding.md"),
+            lambda t: re.sub(r"(?m)^SEVERITY:.*\n", "", t))),
+        ("finding with an invented SEVERITY", lambda d: _rewrite(d, os.path.join("findings", "F1_discount_rounds_down", "finding.md"),
+            lambda t: t.replace("SEVERITY: Major", "SEVERITY: Quite bad"))),
+        ("finding with no ORIGIN", lambda d: _rewrite(d, os.path.join("findings", "F1_discount_rounds_down", "finding.md"),
+            lambda t: re.sub(r"(?m)^ORIGIN:.*\n", "", t))),
+        ("finding with an ORIGIN that is neither DEV nor SPEC", lambda d: _rewrite(d, os.path.join("findings", "F1_discount_rounds_down", "finding.md"),
+            lambda t: t.replace("ORIGIN: DEV", "ORIGIN: QA"))),
+        ("finding never deduped against known-issues", lambda d: _rewrite(d, os.path.join("findings", "F1_discount_rounds_down", "finding.md"),
+            lambda t: re.sub(r"(?m)^DEDUP:.*\n", "", t))),
+        ("finding nobody said whether they filed", lambda d: _rewrite(d, os.path.join("findings", "F1_discount_rounds_down", "finding.md"),
+            lambda t: re.sub(r"(?m)^FILED-AS:.*\n", "", t))),
+        ("finding with no evidence behind it", lambda d: os.remove(
+            os.path.join(d, "findings", "F1_discount_rounds_down", "01_rounding.png"))),
+        ("finding folder with no finding.md", lambda d: os.remove(
+            os.path.join(d, "findings", "F1_discount_rounds_down", "finding.md"))),
+        ("NEW-BUG verdict with no findings at all", lambda d: [
+            _rewrite(d, "REPORT.md", lambda t: t.replace("— PASS", "— NEW-BUG")),
+            shutil.rmtree(os.path.join(d, "findings"))]),
+        # One name, one meaning. Two records of the same thing, and nothing
+        # says which one the verdict came from.
+        ("both case.md and manifest.md in one case", lambda d: _rewrite_to(
+            os.path.join(d, C1, "manifest.md"), read(os.path.join(d, C1, CASE_FILE)))),
+        ("both index.md and manifest.md at the root", lambda d: _rewrite_to(
+            os.path.join(d, "manifest.md"), read(os.path.join(d, INDEX_FILE)))),
         ("no boxed image", lambda d: os.remove(os.path.join(d, C1, "TC1_03_total_after_save_boxed.png"))),
         # A filename is not an annotation. These two are the rules that stop a
         # renamed screenshot from passing as evidence.
@@ -659,11 +818,11 @@ def selftest():
             lambda t: t.replace('"selectorFound": true', '"selectorFound": true, "annotated": false'))),
         ("no step screenshots", lambda d: [os.remove(os.path.join(d, C1, f))
                                            for f in os.listdir(os.path.join(d, C1)) if f.endswith(".png")]),
-        ("bad RESULT value", lambda d: _rewrite(d, C1 + "/manifest.md", lambda t: t.replace("RESULT: PASS", "RESULT: OK"))),
-        ("BLOCKED with no way out", lambda d: _rewrite(d, C1 + "/manifest.md", lambda t: t.replace("RESULT: PASS", "RESULT: BLOCKED"))),
-        ("write-readback with no db_verify", lambda d: _rewrite(d, C1 + "/manifest.md",
+        ("bad RESULT value", lambda d: _rewrite(d, C1 + "/case.md", lambda t: t.replace("RESULT: PASS", "RESULT: OK"))),
+        ("BLOCKED with no way out", lambda d: _rewrite(d, C1 + "/case.md", lambda t: t.replace("RESULT: PASS", "RESULT: BLOCKED"))),
+        ("write-readback with no db_verify", lambda d: _rewrite(d, C1 + "/case.md",
             lambda t: t.replace("KIND: acceptance", "KIND: write-readback"))),
-        ("non-UI with no verification file", lambda d: _rewrite(d, C1 + "/manifest.md",
+        ("non-UI with no verification file", lambda d: _rewrite(d, C1 + "/case.md",
             lambda t: t.replace("KIND: acceptance", "KIND: acceptance\nTYPE: NON-UI"))),
         ("only one case", lambda d: [shutil.rmtree(os.path.join(d, C2)), shutil.rmtree(os.path.join(d, C3))]),
         ("case folder with no name", lambda d: os.rename(os.path.join(d, C2), os.path.join(d, "TC_2"))),
@@ -672,13 +831,13 @@ def selftest():
         ("an image from another case", lambda d: shutil.copyfile(
             os.path.join(d, C1, "TC1_01_orders_list.png"),
             os.path.join(d, C1, "TC9_01_orders_list.png"))),
-        ("no COVERAGE block", lambda d: _rewrite(d, "manifest.md",
+        ("no COVERAGE block", lambda d: _rewrite(d, INDEX_FILE,
             lambda t: re.sub(r"(?is)\nCOVERAGE:.*$", "\n", t))),
-        ("COVERAGE names no security line", lambda d: _rewrite(d, "manifest.md",
+        ("COVERAGE names no security line", lambda d: _rewrite(d, INDEX_FILE,
             lambda t: re.sub(r"(?im)^\s*-\s*security:.*\n", "", t))),
-        ("COVERAGE waives a lens with no reason", lambda d: _rewrite(d, "manifest.md",
+        ("COVERAGE waives a lens with no reason", lambda d: _rewrite(d, INDEX_FILE,
             lambda t: re.sub(r"(?im)^(\s*-\s*security:).*$", r"\1 n/a", t))),
-        ("COVERAGE cites a case that does not exist", lambda d: _rewrite(d, "manifest.md",
+        ("COVERAGE cites a case that does not exist", lambda d: _rewrite(d, INDEX_FILE,
             lambda t: t.replace("accessibility: TC_3", "accessibility: TC_9"))),
     ]
     for i, (label, mutate) in enumerate(mutations):
@@ -700,7 +859,7 @@ def selftest():
 
     # 3. a legitimately blocked case, fully declared, must still pass
     d = fresh("blocked")
-    _rewrite(d, C1 + "/manifest.md", lambda t: t.replace("RESULT: PASS", "RESULT: BLOCKED")
+    _rewrite(d, C1 + "/case.md", lambda t: t.replace("RESULT: PASS", "RESULT: BLOCKED")
              + "REASON: no account has refund permission\nUNBLOCK: ops to grant refund role to qa@demo\n")
     if evd_index is not None:
         evd_index.write(d)
@@ -708,7 +867,7 @@ def selftest():
 
     # 4. a non-UI case WITH its verification file must pass
     d = fresh("nonui")
-    _rewrite(d, C1 + "/manifest.md", lambda t: t.replace("KIND: acceptance", "KIND: acceptance\nTYPE: NON-UI"))
+    _rewrite(d, C1 + "/case.md", lambda t: t.replace("KIND: acceptance", "KIND: acceptance\nTYPE: NON-UI"))
     with open(os.path.join(d, C1, "db_verify.md"), "w", encoding="utf-8") as fh:
         fh.write("SELECT total FROM orders WHERE id=4102;\n-> 450000\n")
     if evd_index is not None:
@@ -720,7 +879,7 @@ def selftest():
     #    them. This gate used to demand a file the toolchain never produced.
     def _api_case(root, where):
         case = os.path.join(root, C1)
-        _rewrite(root, C1 + "/manifest.md",
+        _rewrite(root, C1 + "/case.md",
                  lambda t: t.replace("KIND: acceptance", "KIND: acceptance\nTYPE: NON-UI"))
         for f in os.listdir(case):
             if f.lower().endswith(".png"):
@@ -755,7 +914,7 @@ def selftest():
     # product is the claim being checked, not the check.
     d = fresh("api_readback")
     _api_case(d, "root")
-    _rewrite(d, C1 + "/manifest.md", lambda t: t.replace("KIND: acceptance", "KIND: write-readback"))
+    _rewrite(d, C1 + "/case.md", lambda t: t.replace("KIND: acceptance", "KIND: write-readback"))
     if evd_index is not None:
         evd_index.write(d)
     expect(not run(d, None, DEFAULT_OPTS).ok,
@@ -769,6 +928,11 @@ def selftest():
         return 1
     print("evd_check --selftest passed  ({} mutations, each went red)".format(len(mutations)))
     return 0
+
+
+def _rewrite_to(path, text):
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(text)
 
 
 def _rewrite(root, rel, fn):

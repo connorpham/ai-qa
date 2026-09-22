@@ -322,7 +322,7 @@ def _classify(name):
         return "re-runnable journey script"
     if low == "cmd_verify.md":
         return "command and its real output"
-    if low == "manifest.md":
+    if low in ("case.md", "index.md", "manifest.md"):
         return "case record"
     if low.endswith(".json"):
         return "recorded data"
@@ -503,10 +503,15 @@ def _read_case(pack, dirname, titles):
     case_dir = os.path.join(pack.dir, dirname)
     case = Case(name, case_dir)
     case.dirname = dirname
-    man = os.path.join(case_dir, "manifest.md")
+    # `manifest.md` meant the ticket index AND a single case. It is `case.md` now;
+    # the old name is still read, because folders written before this are still
+    # evidence.
+    man = os.path.join(case_dir, "case.md")
+    if not os.path.exists(man):
+        man = os.path.join(case_dir, "manifest.md")
     text = read(man)
     if not text:
-        pack.gap(name, "no manifest.md — a folder of files is not a test case, and nothing "
+        pack.gap(name, "no case.md — a folder of files is not a test case, and nothing "
                        "about this case can be reported")
         return case
 
@@ -638,7 +643,12 @@ def read_pack(evd, project=None):
         pack.gap(pack.key, "no such evidence folder")
         return pack
 
-    root_man = read(os.path.join(pack.dir, "manifest.md"))
+    # The root index: `index.md` now, `manifest.md` before. Both are read —
+    # a folder written before the rename is still evidence.
+    _root = os.path.join(pack.dir, "index.md")
+    if not os.path.exists(_root):
+        _root = os.path.join(pack.dir, "manifest.md")
+    root_man = read(_root)
     if not root_man:
         pack.gap("manifest.md", "missing at the evidence root — the plain-language index of "
                                 "what was checked")
