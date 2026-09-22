@@ -4,6 +4,19 @@
 > walking. `/triage` opens it in T3 to size the blast radius. Find the shape
 > the ticket touches; walk that list; ignore the others.
 
+## Project-specific checklists (`docs/qa/checklists.md`)
+
+The sections below describe generic reflex checks by feature shape (forms, tables, search).
+Every project may additionally maintain a concrete acceptance and UAT checklist in `docs/qa/checklists.md` — the **Single Source of Truth** for what this team insists on verifying.
+
+### The Auto-Sync and Standardization Rule
+When `docs/qa/checklists.md` is present:
+1. **Audit before design:** In V1/V2, read `docs/qa/checklists.md` and count applicable items for the feature or screen under test.
+2. **Detect discrepancies:** If `docs/qa/checklists.md` contains more criteria than the currently planned test cases, the AI MUST NOT silently ignore them. AI must alert: *"Detected N checklist items in docs/qa/checklists.md not yet covered by test cases"*.
+3. **Auto-standardize:** Expand the verification plan or test scripts to cover every applicable item, execute with real evidence, and update the status in `docs/qa/checklists.md` (or waive explicitly with reason).
+4. **No silent skips:** Silently ignoring a checklist item is an incomplete verification that invalidates the verdict.
+
+
 A seasoned tester does not think about these. They see a table and their eyes
 go to the empty state, the sort arrows, the page count. They see a form and
 their hand goes to Enter. This file is that reflex, written down, so that a

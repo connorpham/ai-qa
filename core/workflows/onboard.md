@@ -93,6 +93,10 @@ trustworthy:
    the changelog say more about this than the README does. Read every spec you
    find against `docs/qa/method/requirement-smells.md` as you go — a spec made
    of "should" and "appropriate" is an oracle in name only, and §4 must say so.
+   If specifications exist outside git or in binary formats (e.g. Excel design sheets, Word docs):
+   run `python3 .ai-qa/scripts/specs_ingest.py --source <dir>` to convert them into git-tracked
+   Markdown in `docs/specs/` with YAML timestamps and changelog tracking. The spec is the oracle;
+   an oracle sitting in an unsearchable binary cannot be cited, diffed, or trusted across machines.
 3. **The contract** — OpenAPI/GraphQL/proto, and the schema (Prisma, migrations,
    models). These are the least likely to lie, because code depends on them.
 4. **The surface** — routes, pages, screens, controllers, jobs. Enumerate them.

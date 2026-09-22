@@ -193,6 +193,11 @@ Required shapes:
   list of specific looks, not a glance: open `docs/qa/method/checklists.md`,
   find the shape the screen is — a form, a list, a money screen, a lifecycle, a
   delete — and walk that list. Record what you looked at even when it was fine.
+  Also read the project's own checklist at `docs/qa/checklists.md` if present:
+  count the applicable items against your planned cases. If `checklists.md`
+  contains criteria not yet covered by your cases, you MUST expand your plan
+  to cover each applicable item (or waive out loud with a reason) — a checklist
+  item silently ignored invalidates the verification.
   On a screen with a design source or a user-facing surface, open
   `docs/qa/method/ui-fidelity.md`: measure computed style against the design
   token (not the code), confirm the fonts actually loaded, and prove the
@@ -725,6 +730,7 @@ in the template is for the person reading it.
 - [ ] Boundary case and whole-screen case both ran — not only the happy path;
       the boundary value came from `hostile-inputs.md`, the whole-screen case
       walked the `checklists.md` shape for that screen
+- [ ] Project checklist (`docs/qa/checklists.md`) audited if present; every applicable item covered with evidence or waived with reason — no item silently omitted
 - [ ] Ticket touches auth / sessions / roles / money / personal data / uploads →
       at least one `security-probes.md` probe ran (lockout real, enumeration by
       message *and* timing, session invalidation, server-side authorization,
