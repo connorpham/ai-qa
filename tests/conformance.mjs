@@ -1613,6 +1613,60 @@ for (const [label, cmd, args] of [
   check(SURF.join(",") === "web,api,mobile,database", "the surface list drifted from the installer's");
 }
 
+
+// ---- evidence that explains itself -------------------------------------------
+// "evd thiếu khoanh vùng chỗ kiểm thử · nhìn vào hình ảnh không biết đang làm
+// gì cả." Both halves were true: a check read a value and recorded a verdict,
+// and the screenshot beside it was a plain picture of a whole page.
+//
+// The regression this guards actually happened: `cite` was dropped on its way
+// into the journey, so the image that proves a check could never say where the
+// rule is written — which is the one field that separates a defect from a
+// difference.
+{
+  const { compile } = await import("../src/ui/studio/compile.mjs");
+  const flow = {
+    version: 1, name: "boundary_exactly_500000", ticket: "SHOP-142", kind: "boundary",
+    title: "exactly 500,000 gets 50,000 off",
+    nodes: [
+      { id: "a", type: "actor", x: 0, y: 0, data: { role: "customer" } },
+      { id: "o", type: "open", x: 0, y: 0, data: { path: "New order" } },
+      { id: "t", type: "type", x: 0, y: 0, data: { selector: "#subtotal", value: "500000", why: "at the threshold" } },
+      { id: "c", type: "click", x: 0, y: 0, data: { selector: "text=Place order", why: "place it" } },
+      { id: "e", type: "expect", x: 0, y: 0, data: { what: "the Discount line", selector: "#discount", value: "50000", cite: "docs/spec/discounts.md 3.2 R1" } },
+      { id: "r", type: "reload", x: 0, y: 0, data: { what: "the Discount line still reads 50000" } },
+      { id: "k", type: "back", x: 0, y: 0, data: { what: "Back returns to the form" } },
+    ],
+    edges: [["a","o"],["o","t"],["t","c"],["c","e"],["e","r"],["r","k"]].map(([from,to])=>({from,to})),
+  };
+  const out = compile(flow, { appUrl: "http://localhost:4410", root: "/tmp/x", env: { name: "local", url: "http://localhost:4410", writes: "allowed" } });
+  const journey = Object.entries(out.files).find(([k]) => k.endsWith("journey.mjs"))?.[1] || "";
+  check(!!journey, "no journey.mjs was compiled for a web flow");
+
+  check(/shotAnnotated/.test(journey), "the journey never takes an annotated screenshot — a check with no picture of itself is the complaint that started this");
+  check(/import \{[^}]*shotAnnotated[^}]*\}/.test(journey), "shotAnnotated is used but not imported");
+
+  // The box comes from the selector the case ALREADY declares, so nobody picks
+  // coordinates by hand and nobody can box the wrong element.
+  check(/selector: "#discount"/.test(journey), "the annotated shot does not box the selector the check read");
+
+  // THE REGRESSION: the citation must reach the image.
+  check(/cite: "docs\/spec\/discounts\.md 3\.2 R1"/.test(journey),
+    "the citation was dropped on its way to the evidence image — that is the field that makes a difference a DEFECT");
+
+  // The caption must carry expected AND actual, so the picture is readable
+  // without opening checks.json beside it.
+  check(/caption: "the Discount line"/.test(journey) && /must read/.test(journey),
+    "the caption does not say what the check expected");
+  check(/actually read/.test(journey), "the caption does not say what was actually read");
+  check(/verdict: ok \? "PASS" : "FAIL"/.test(journey), "the image does not carry the verdict, so a red result is not red on sight");
+
+  // One image per check. A second unboxed copy of the same moment is noise in
+  // a folder someone has to read.
+  const plainAfterExpect = /record\([^)]*\)[\s\S]{0,400}?shot\(page, HERE, \+\+n, "the_discount_line"\)/.test(journey);
+  check(!plainAfterExpect, "an expect still emits a duplicate unboxed screenshot beside its annotated one");
+}
+
 // ---- report -------------------------------------------------------------------
 if (fails.length) {
   console.error(`conformance: ${fails.length} FAILED of ${checks} checks\n`);

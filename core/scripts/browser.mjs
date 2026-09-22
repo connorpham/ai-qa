@@ -224,6 +224,107 @@ export async function shot(page, dir, n, what) {
   return file;
 }
 
+/**
+ * A screenshot that explains itself.
+ *
+ * The complaint that produced this was exact: "evd thiếu khoanh vùng chỗ kiểm
+ * thử · nhìn vào hình ảnh không biết đang làm gì cả." Both halves were true.
+ * A plain screenshot of a whole page asks the reader to guess which pixels
+ * carried the verdict, and tells them nothing about what was being checked —
+ * and the reader is usually the person who was not there, months later.
+ *
+ * So the image carries its own context, burned in:
+ *
+ *   a header strip   which ticket, which case, which step of how many, and
+ *                    what this step was trying to establish
+ *   a box            on the element the check actually read — drawn from the
+ *                    SELECTOR the case already declares, so nobody picks
+ *                    coordinates by hand and nobody can box the wrong thing
+ *   a caption        expected · actual · where it is written down · the verdict
+ *
+ * Drawn in the page before the shutter rather than composited afterwards:
+ * pixel-exact by construction, no image library, no second process. The
+ * overlay is `position: fixed`, `pointer-events: none`, and removed straight
+ * after — it cannot move the layout it is describing.
+ *
+ * A selector that matches nothing does NOT fall back to an unboxed image: the
+ * header says so, in red. "I could not find what I was told to look at" is a
+ * finding, and hiding it behind a clean screenshot is the failure this whole
+ * tool exists to refuse.
+ */
+export async function shotAnnotated(page, dir, n, what, opts = {}) {
+  const { selector = "", title = "", caption = "", verdict = "", cite = "" } = opts;
+  let missing = false;
+
+  if (PACE.settle) await page.waitForTimeout(PACE.settle);
+  try {
+    missing = await page.evaluate(({ selector, title, caption, verdict, cite }) => {
+      const OLD = document.getElementById("__aiqa_overlay__");
+      if (OLD) OLD.remove();
+      const box = document.createElement("div");
+      box.id = "__aiqa_overlay__";
+      box.style.cssText = "position:fixed;inset:0;z-index:2147483647;pointer-events:none;font:13px/1.45 -apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif";
+
+      let el = null;
+      try { el = selector ? document.querySelector(selector.replace(/^text=/, "")) : null; } catch { el = null; }
+      if (!el && selector.startsWith("text=")) {
+        const needle = selector.slice(5).toLowerCase();
+        el = [...document.querySelectorAll("button,a,label,span,div,td,th,p,h1,h2,h3")]
+          .find((x) => x.textContent.trim().toLowerCase() === needle) || null;
+      }
+      const notFound = !!selector && !el;
+
+      const ok = String(verdict).toUpperCase() === "PASS";
+      const accent = notFound ? "#e40014" : ok ? "#00a544" : verdict ? "#e40014" : "#dd7400";
+
+      // The header carries EVERYTHING a reader needs, and carries it in the
+      // same place every time. The first version floated the caption next to
+      // the box, where it sat on top of the very content the reader was trying
+      // to check — the line below the one being verified.
+      // If the thing being checked sits at the very top of the page, a header
+      // pinned to the top would cover the evidence it is describing. It moves
+      // to the bottom instead — the one place it can never hide the subject.
+      const rTop = el ? el.getBoundingClientRect().top : 999;
+      const atBottom = rTop < 66;
+      const head = document.createElement("div");
+      head.style.cssText = `position:absolute;left:0;right:0;${atBottom ? "bottom:0" : "top:0"};background:${accent};color:#fff;padding:8px 12px;display:flex;flex-direction:column;gap:2px`;
+      const l1 = document.createElement("div");
+      l1.style.cssText = "font-weight:600;display:flex;gap:10px;align-items:baseline";
+      const h1 = document.createElement("span"); h1.textContent = title || what;
+      const h2 = document.createElement("span"); h2.style.cssText = "font-weight:700;letter-spacing:.04em";
+      h2.textContent = notFound ? `COULD NOT FIND ${selector}` : (verdict || "");
+      l1.append(h1, h2);
+      const l2 = document.createElement("div");
+      l2.style.cssText = "font-weight:400;opacity:.95";
+      l2.textContent = [caption, cite].filter(Boolean).join("   ·   ");
+      head.append(l1); if (l2.textContent) head.append(l2);
+      box.append(head);
+
+      if (el) {
+        const r = el.getBoundingClientRect();
+        const pad = 6;
+        const ring = document.createElement("div");
+        ring.style.cssText = `position:absolute;left:${r.left - pad}px;top:${r.top - pad}px;width:${r.width + pad * 2}px;height:${r.height + pad * 2}px;border:3px solid ${accent};border-radius:6px;box-shadow:0 0 0 3px #fff, 0 0 0 9999px rgba(10,10,10,.10)`;
+        box.append(ring);
+
+      }
+
+      document.body.append(box);
+      return notFound;
+    }, { selector, title, caption, verdict, cite });
+  } catch { /* a page mid-navigation: the shot still goes out, unboxed */ }
+
+  const slug = String(what).toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "");
+  const caseNo = /^TC_(\d+)(?:_|$)/.exec(path.basename(dir));
+  const file = path.join(dir, `${caseNo ? `TC${caseNo[1]}_` : ""}${String(n).padStart(2, "0")}_${slug}_boxed.png`);
+  fs.mkdirSync(dir, { recursive: true });
+  await page.screenshot({ path: file, fullPage: false });
+  try { await page.evaluate(() => document.getElementById("__aiqa_overlay__")?.remove()); } catch { /* gone */ }
+
+  console.log(`  · ${path.relative(process.cwd(), file)}${missing ? "  ! selector matched nothing — the image says so" : ""}`);
+  return file;
+}
+
 /** Full-page variant, for the whole-screen sanity case. */
 export async function shotFull(page, dir, n, what) {
   const file = await shot(page, dir, n, what);
