@@ -1,0 +1,58 @@
+# ai-qa — the evidence gate, run by something that is not the agent.
+#
+# Everything else in this lane depends on an AI choosing to run a command and
+# report what it printed. This does not. It runs on the pull request, it runs
+# whether or not anybody asked, and a pack that cannot survive it does not merge.
+#
+# That is the whole point: the difference between "the gate passed" and "an
+# agent told me the gate passed" is the difference between evidence and a claim.
+#
+# Written once by `ai-qa init`, then yours — edit it freely.
+name: ai-qa evidence
+
+on:
+  pull_request:
+    paths:
+      - 'evd/**'
+  workflow_dispatch:
+
+jobs:
+  evidence:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The gate resolves COMMIT: against this repository's history, so it
+          # needs more than the single squashed commit a shallow clone gives it.
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Check every evidence pack the PR touches
+        run: |
+          set -u
+          packs=$(git diff --name-only origin/${{ github.base_ref }}...HEAD -- 'evd/*' \
+                  | cut -d/ -f1,2 | sort -u)
+          if [ -z "$packs" ]; then echo "no evidence pack changed"; exit 0; fi
+
+          failed=0
+          for p in $packs; do
+            [ -d "$p" ] || continue
+            echo "── $p"
+            python3 .ai-qa/scripts/evd_check.py --evd "$p" || failed=1
+            # --strict fails on anything the report needs and the pack does not
+            # carry, so the spreadsheet can never invent a value to fill a cell.
+            python3 .ai-qa/scripts/xlsx_export.py --evd "$p" --strict \
+              --out "$RUNNER_TEMP/$(basename "$p").xlsx" || failed=1
+          done
+          exit $failed
+
+      - name: Prove the gate can still fail
+        # A gate that cannot go red is decoration. This costs two seconds and is
+        # the only thing standing between a green tick and a green tick that
+        # means nothing.
+        run: |
+          python3 .ai-qa/scripts/evd_check.py --selftest
+          python3 .ai-qa/scripts/xlsx_export.py --selftest

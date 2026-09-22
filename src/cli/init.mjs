@@ -18,7 +18,7 @@ import {
 } from "./util.mjs";
 import { CONFIG_NAME, configPath } from "./config.mjs";
 import { ManifestGuard, walkFiles, MANIFEST_REL } from "./manifest.mjs";
-import { TOOLS, planWorkflows, applyPointers } from "./adapters.mjs";
+import { TOOLS, planWorkflows, applyPointers, pointerTargets } from "./adapters.mjs";
 import { grade } from "./scan.mjs";
 import {
   detectDefaults, detectBranch, detectStart, detectUrl, detectContract, detectSchema, detectDbEnv,
@@ -375,13 +375,13 @@ export function sideFiles(root, a) {
  * and the "written" line both come from. A count that omits the workflows (as
  * the summary used to) or the seeds (as the result line used to) is a number
  * nobody can check against the repo afterwards. */
-export function plannedFiles(root, a, plan, seeds) {
+export function plannedFiles(root, a, plan, seeds, pointers = []) {
   const absentSeeds = seeds.filter((s) => !fs.existsSync(path.join(root, s.rel))).map((s) => s.rel);
-  return [...plan.map((p) => p.rel), ...absentSeeds, ...sideFiles(root, a)];
+  return [...new Set([...plan.map((p) => p.rel), ...absentSeeds, ...sideFiles(root, a), ...pointers])];
 }
 
 // ---- the summary the user approves --------------------------------------------
-function printSummary(a, scanRes, plan, seeds, root) {
+function printSummary(a, scanRes, plan, seeds, root, pointers = []) {
   console.log(`\n${c.bold("  About to install")}\n`);
   const row = (k, v) => console.log(`    ${c.gray(k.padEnd(14))} ${v}`);
   row("project", `${a.name} (${a.key}-nnn, works in ${a.language === "vi" ? "Tiếng Việt" : "English"})`);
@@ -399,7 +399,7 @@ function printSummary(a, scanRes, plan, seeds, root) {
   row("autonomy", a.autonomy);
   row("tools", a.tools.join(", "));
   console.log(`\n${c.bold("  Files")}\n`);
-  console.log(`    ${c.gray(`${plannedFiles(root, a, plan, seeds).length} files`)} — ${CONFIG_NAME}, .ai-qa/ (gates + manifest), docs/qa/ (dossier skeleton), ${a.tools.join(" + ")} workflows`);
+  console.log(`    ${c.gray(`${plannedFiles(root, a, plan, seeds, pointers).length} files`)} — ${CONFIG_NAME}, .ai-qa/ (gates + manifest), docs/qa/ (dossier skeleton), ${a.tools.join(" + ")} workflows`);
 
   const unknowns = [];
   if (!a.start) unknowns.push("no start command — the lane cannot bring the app up on its own");
@@ -439,6 +439,10 @@ export function renderCfg(a) {
     app: { url: a.url, start: a.start },
     surfaces: a.surfaces,
     tracker: { provider: a.tracker },
+    // The pointer names the declared oracle, so it has to travel with the rest
+    // of the answers. Without this the section written on install day says "no
+    // oracle is declared" in a repo that just declared one.
+    oracle: { specs: a.specs || [] },
     autonomy: { level: a.autonomy },
     // update passes the user's edited environments through; init renders the
     // block it is about to write, so the workflows describe the same config.
@@ -489,6 +493,15 @@ export async function buildPlan(root, a, version, tools = a.tools || ["claude-co
     for (const entry of await planWorkflows(tool, root, renderCfg(a))) plan.push(entry);
   }
 
+  // The one enforcement that does not run inside an agent. Everything else in
+  // this lane depends on the agent choosing to run a command and report what it
+  // printed; CI runs whether anybody asked or not. Seeded, not owned, because a
+  // team's CI is a team's business after the first day.
+  seeds.push({
+    rel: ".github/workflows/aiqa-evidence.yml",
+    text: fs.readFileSync(path.join(pkgRoot, "core", "templates", "ci", "aiqa-evidence.yml"), "utf8"),
+  });
+
   // documents a human owns after this moment
   for (const rel of walkFiles(path.join(pkgRoot, "core", "templates", "docs"))) {
     seeds.push({
@@ -527,7 +540,7 @@ export async function init(flags) {
 
   const a = await gather(root, scanRes, flags);
   const { plan, seeds } = await buildPlan(root, a, pkg.version);
-  printSummary(a, scanRes, plan, seeds, root);
+  printSummary(a, scanRes, plan, seeds, root, await pointerTargets(a.tools));
 
   if (!flags.yes && process.stdin.isTTY) {
     const go = await askYesNo("Write these files?", true);
@@ -550,14 +563,18 @@ async function install(root, a, scanRes, version, flags) {
 
   // Discovery pointers merge into files a human owns, so they are applied
   // rather than planned — the workflows themselves are already in the plan.
-  for (const tool of a.tools) await applyPointers(tool, root, renderCfg(a));
+  // They ARE counted: the promise is the number of files this touches, and a
+  // count that omits the edit it is about to make is the small dishonesty this
+  // tool refuses in other people's work.
+  for (const tool of a.tools) created.push(...await applyPointers(tool, root, renderCfg(a)));
 
   created.push(...appendRules(root, guard, a.trackerEnv || TRACKER_ENV[a.tracker] || []));
   const manifestFile = guard.save(version);
   created.push(MANIFEST_REL);
+  const touched = [...new Set(created)];
 
   say.head("  Installed");
-  say.ok(`${created.length} files written  ${c.gray(`· manifest: ${path.relative(root, manifestFile)}`)}`);
+  say.ok(`${touched.length} files written  ${c.gray(`· manifest: ${path.relative(root, manifestFile)}`)}`);
   if (guard.unchanged.length) say.info(`${guard.unchanged.length} already present with the same content`);
   if (guard.skipped.length) say.warn(`${guard.skipped.length} left alone (you had edited them)`);
 

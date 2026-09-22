@@ -499,6 +499,72 @@ for (const [label, cmd, args] of [
   check(/doctor: RED/.test(d2), "a project with no oracle should not get a green doctor");
 }
 
+// ---- 17. five tools, one set of rules ------------------------------------------
+// The failure this prevents is not defiance, it is ignorance: a user types
+// "test ticket SHOP-142", the agent has never heard of /qa, and it improvises a
+// verdict out of the source code. Every tool must be TOLD, in the file it
+// actually reads, and told the SAME thing.
+{
+  const d = path.join(tmp, "fivetools");
+  fs.mkdirSync(path.join(d, "docs", "specs"), { recursive: true });
+  fs.writeFileSync(path.join(d, "docs", "specs", "orders.md"), "# Orders\n## 3.2\nR1\n");
+  fs.writeFileSync(path.join(d, "README.md"), "# five\n");
+  // A file the team already owns, to prove the pointer merges rather than wipes.
+  fs.writeFileSync(path.join(d, "CLAUDE.md"), "# House rules\n\nRun prettier before committing.\n");
+  spawnSync("git", ["init"], { cwd: d, encoding: "utf8" });
+  check(run(d, ["init", "--yes", "--key", "V", "--surfaces", "web",
+    "--tools", "claude-code,cursor,windsurf,codex,copilot"]).status === 0, "five-tool init failed");
+
+  const POINTERS = ["CLAUDE.md", ".windsurfrules", ".cursor/rules/aiqa-always.mdc",
+                    "AGENTS.md", ".github/copilot-instructions.md"];
+  const blocks = new Set();
+  for (const rel of POINTERS) {
+    const f = path.join(d, ...rel.split("/"));
+    check(fs.existsSync(f), `no pointer at ${rel} — that tool never learns the lane exists`);
+    if (!fs.existsSync(f)) continue;
+    const text = fs.readFileSync(f, "utf8");
+    const m = /<!-- ai-qa:start -->[\s\S]*?<!-- ai-qa:end -->/.exec(text);
+    check(!!m, `${rel} has no ai-qa block`);
+    if (m) blocks.add(m[0]);
+  }
+  check(blocks.size === 1,
+    `the five tools were given ${blocks.size} different sets of rules; they must be given one`);
+
+  // The human's own file survives.
+  check(fs.readFileSync(path.join(d, "CLAUDE.md"), "utf8").includes("Run prettier before committing."),
+    "the pointer overwrote the team's own CLAUDE.md");
+
+  // An upgrade REFRESHES the block instead of stacking another copy of it —
+  // and it has to refresh, or a project that upgrades keeps rules from the
+  // version it installed on, which is how five tools drift apart in the first
+  // place. (init refuses to run twice; update is the refresh path.)
+  fs.writeFileSync(path.join(d, "CLAUDE.md"),
+    fs.readFileSync(path.join(d, "CLAUDE.md"), "utf8").replace("evd_check.py", "OLD_GATE.py"));
+  check(run(d, ["update", "--yes"]).status === 0, "update failed");
+  const again = fs.readFileSync(path.join(d, "CLAUDE.md"), "utf8");
+  check((again.match(/ai-qa:start/g) || []).length === 1,
+    "the upgrade stacked another copy of the pointer");
+  check(again.includes("evd_check.py") && !again.includes("OLD_GATE.py"),
+    "the upgrade left a stale pointer in place — the tool would keep obeying the old rules");
+  check(again.includes("Run prettier before committing."),
+    "the upgrade wiped the team's own CLAUDE.md");
+
+  // The pointer names the project's OWN oracle, not the word "the spec". An
+  // instruction a reader cannot act on is not an instruction — this shipped
+  // saying "nothing is declared yet" in a repo that had just declared one.
+  check(/The spec is the oracle\*\* — `docs\/specs`/.test(again),
+    "the pointer does not name the declared oracle, so every tool is told to cite 'the spec'");
+
+  // Cursor's always-on rule is the one that has to load without being matched.
+  const mdc = fs.readFileSync(path.join(d, ".cursor", "rules", "aiqa-always.mdc"), "utf8");
+  check(/alwaysApply: true/.test(mdc),
+    "the Cursor pointer is match-on-demand, so a short prompt loads nothing and the agent improvises");
+
+  // And CI, which runs whether or not any agent felt like it.
+  check(fs.existsSync(path.join(d, ".github", "workflows", "aiqa-evidence.yml")),
+    "no CI workflow — every enforcement would depend on an agent choosing to run it");
+}
+
 // ---- report --------------------------------------------------------------------
 fs.rmSync(tmp, { recursive: true, force: true });
 if (fails.length) {

@@ -9,6 +9,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
+import { pathToFileURL } from "node:url";
 import { pkgRoot, parseFrontmatter, render } from "../src/cli/util.mjs";
 import { parseConfig, get } from "../src/cli/config.mjs";
 import { TOOLS, renderTool } from "../src/cli/adapters.mjs";
@@ -702,6 +703,49 @@ for (const [label, cmd, args] of [
     "the floor-rule escape hatch exists in one of the gate and the workflow but not the other");
   check(/ORACLE: NONE/.test(qa),
     "qa.md never says what ORACLE: NONE now costs — people will keep writing it under a PASS");
+
+  // Five tools, one set of rules. An agent that has never heard of the lane
+  // improvises, and five agents improvising differently is worse than one,
+  // because the disagreement is invisible until two verdicts contradict.
+  {
+    const { pointerSection } = await import(pathToFileURL(path.join(pkgRoot, "src/cli/pointer.mjs")).href);
+    const cfg = { oracle: { specs: ["docs/specs"] } };
+    const section = pointerSection(cfg);
+    for (const tool of ["claude-code", "cursor", "windsurf", "codex", "copilot"]) {
+      const a = await import(pathToFileURL(path.join(pkgRoot, "adapters", `${tool}.mjs`)).href);
+      check(typeof a.pointers === "function", `${tool} has no pointers() — an agent that is never told the lane exists will improvise`);
+      check(typeof a.pointerTarget === "string" && a.pointerTarget.length,
+        `${tool} does not declare WHERE its pointer lands, so the installer cannot count it`);
+    }
+    // The section has to carry the four rules, or it is a table of contents.
+    for (const [needle, why] of [
+      ["evd_check.py", "the pointer never names the gate, so nobody runs it"],
+      ["REQUIREMENT:", "the pointer never shows what a citation looks like"],
+      ["BLOCKED", "the pointer never offers the honest way out, so an agent invents an answer"],
+      ["never changes product code", "the pointer never says the lane does not fix things"],
+    ]) check(section.includes(needle), why);
+  }
+
+  // The one enforcement that does not run inside an agent.
+  {
+    const ci = fs.readFileSync(path.join(pkgRoot, "core/templates/ci/aiqa-evidence.yml"), "utf8");
+    check(/evd_check\.py --evd/.test(ci), "the CI template does not run the evidence gate");
+    check(/xlsx_export\.py .*--strict/.test(ci), "the CI template does not run the exporter strictly");
+    check(/evd_check\.py --selftest/.test(ci),
+      "the CI template never proves the gate can still fail — a green tick from a gate that cannot go red is decoration");
+    check(/fetch-depth: 0/.test(ci),
+      "a shallow checkout cannot resolve COMMIT:, so the gate would red on every honest pack");
+    check(fs.readFileSync(path.join(pkgRoot, "src/cli/init.mjs"), "utf8").includes("aiqa-evidence.yml"),
+      "the CI template is shipped but never installed");
+  }
+
+  // The gate opens the images. Each of these is a forgery it used to accept.
+  for (const [fn, why] of [
+    ["image_size", "the gate cannot tell a PNG from eight bytes named like one"],
+    ["check_images", "the image rules are defined but never run"],
+  ]) check(gate.includes(`def ${fn}(`), why);
+  check(/MIN_IMAGE_W/.test(gate), "the gate no longer has a minimum screen size");
+  check(/cat-file/.test(gate), "the gate stopped checking that COMMIT: resolves to a real commit");
 
   // A real-user move is demanded of EVERY case, not delegated to a case of its own.
   check(/At least one step is a thing a real user does/.test(qa),

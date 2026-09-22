@@ -16,6 +16,9 @@ import { spawnSync } from "node:child_process";
 import { gitRoot, repoRoot, readIfExists, c, say } from "./util.mjs";
 import { CONFIG_NAME, loadConfig, get } from "./config.mjs";
 import { verify } from "./manifest.mjs";
+import { pointerTargets } from "./adapters.mjs";
+import { installedTools } from "./update.mjs";
+import { pointerSection, SECTION_START } from "./pointer.mjs";
 
 function runCmd(root, cmd, env = {}) {
   const r = spawnSync(cmd, {
@@ -116,6 +119,31 @@ export async function doctor(flags) {
     record(gone.length ? "red" : "green", `oracle declared (${specs.join(", ")})`,
       gone.length ? `declared but not on disk: ${gone.join(", ")}\n`
         + "a citation pointing here cannot be opened, and the gate will refuse it" : "");
+  }
+
+  // ---- 1c. does each tool KNOW about the lane? ------------------------------
+  // A workflow only fires when its name is typed. The common way this lane gets
+  // bypassed is not defiance, it is ignorance: "test SHOP-142", the agent has
+  // never heard of /qa, and it improvises a verdict out of the source code.
+  const tools = await installedTools(root);
+  const targets = await pointerTargets(tools);
+  const current = pointerSection(cfg);
+  const missing = [];
+  const stale = [];
+  for (const rel of targets) {
+    const text = readIfExists(path.join(root, rel));
+    if (!text.includes(SECTION_START)) missing.push(rel);
+    else if (!text.includes(current)) stale.push(rel);
+  }
+  if (missing.length) {
+    record("red", `every tool is told the lane exists (${tools.join(", ")})`,
+      `no ai-qa section in: ${missing.join(", ")}\n`
+      + "that tool will improvise when nobody types a slash command — run: ai-qa update");
+  } else if (stale.length) {
+    record("amber", `every tool is told the lane exists (${tools.join(", ")})`,
+      `written by an older version: ${stale.join(", ")}\nrun: ai-qa update`);
+  } else if (targets.length) {
+    record("green", `every tool is told the lane exists (${tools.join(", ")})`, "");
   }
 
   // ---- 2. integrity ---------------------------------------------------------

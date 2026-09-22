@@ -210,6 +210,20 @@ export async function planWorkflows(tool, root, cfg) {
   return out;
 }
 
+/** Where each tool's pointer will land, without writing anything.
+ *
+ * The installer promises a file count before it touches the repo, and a promise
+ * that leaves out the file it is about to edit is the kind of small dishonesty
+ * this tool exists to refuse in other people's work. */
+export async function pointerTargets(tools) {
+  const out = [];
+  for (const tool of tools) {
+    const adapter = await loadAdapter(tool);
+    if (adapter.pointerTarget) out.push(adapter.pointerTarget);
+  }
+  return [...new Set(out)];
+}
+
 /** Discovery pointers — they MERGE into files a human also owns (AGENTS.md and
  * friends), so they are applied separately from the planned files and skipped
  * entirely on a dry run rather than trusted to behave. */
