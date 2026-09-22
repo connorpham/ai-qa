@@ -712,6 +712,12 @@ def check_report(evd, res, opts):
         if not re.search(r"(?im)^\s*{}:\s*\S".format(key), text):
             res.err("REPORT.md", "no {}: line — {}".format(key, why))
 
+    env_m = re.search(r"(?im)^\s*ENVIRONMENT:\s*(.+)$", text)
+    if env_m:
+        env_val = env_m.group(1).strip()
+        if not re.search(r"^[^\s—\-]+\s*[—\-]\s*\S+", env_val):
+            res.err("REPORT.md", "ENVIRONMENT must be formatted as <name — url> (e.g. 'local — http://localhost:3000'), got {!r}".format(env_val))
+
     if verdict in ("FAIL", "NEW-BUG", "PARTIAL"):
         if not re.search(r"(?i)severity", text):
             res.err("REPORT.md", "a failing verdict with no Severity — see docs/qa/method/severity.md")
@@ -816,6 +822,30 @@ def check_coverage(evd, res, cases):
             if no not in present:
                 res.err(INDEX_FILE, "COVERAGE says '{}: {}' but there is no such case folder — a "
                                        "citation to a case that does not exist".format(lens, value))
+                continue
+            if lens == "accessibility":
+                c_dir = os.path.join(evd, present[no])
+                c_doc, _ = resolve_doc(c_dir, CASE_FILE, CASE_FILE_OLD)
+                has_a11y = False
+                if c_doc and os.path.exists(c_doc):
+                    c_text = read(c_doc)
+                    has_a11y = bool(re.search(
+                        r"(?i)\b(contrast|wcag|a11y|accessibility|focus|keyboard|aria|label|"
+                        r"target size|computed style|\bpx\b|border-radius|24x24|4\.5:1|3:1)\b",
+                        c_text
+                    ))
+                if not has_a11y:
+                    shots_f = os.path.join(c_dir, "shots.json")
+                    if os.path.exists(shots_f):
+                        s_text = read(shots_f)
+                        has_a11y = bool(re.search(
+                            r"(?i)\b(contrast|wcag|a11y|focus|keyboard|label|target|px)\b",
+                            s_text
+                        ))
+                if not has_a11y:
+                    res.err(INDEX_FILE, "COVERAGE cites {} for accessibility, but that case does not check "
+                                           "any measurable accessibility or UI fidelity criteria (contrast, "
+                                           "focus ring, keyboard, target size, labels, WCAG)".format(present[no]))
             continue
         if _WAIVER.search(value):
             reason = _WAIVER.sub("", value).strip(" -—:.,").strip()
@@ -825,6 +855,54 @@ def check_coverage(evd, res, cases):
             continue
         res.err(INDEX_FILE, "COVERAGE line for '{}' is neither a case (TC_n) nor a waiver "
                                "(n/a — reason): {!r}".format(lens, value))
+
+
+def check_checklist(evd, root, res, opts, cases):
+    """When a project defines acceptance checklists (docs/qa/checklists.md),
+    the pack must audit them — mapping each to a case or waiving it with reason.
+    Silently ignoring checklist items is forbidden."""
+    chk = opts.get("checklists")
+    candidates = [chk] if chk else ["docs/qa/checklists.md", "docs/qa/checklist_master.md"]
+    checklist_path = None
+    for cand in candidates:
+        if cand:
+            p = os.path.join(root, cand)
+            if os.path.isfile(p):
+                checklist_path = p
+                break
+    if not checklist_path:
+        return
+
+    c_content = read(checklist_path)
+    has_items = bool(re.search(r"(?m)^\s*\|?\s*(?:CL[-_]?\d+|\d{1,3})\s*\|", c_content)
+                     or re.search(r"(?m)^\s*-\s*\[[ xX]?\]", c_content))
+    if not has_items:
+        return
+
+    path, _ = resolve_doc(evd, INDEX_FILE, INDEX_FILE_OLD)
+    index_text = read(path) if path and os.path.exists(path) else ""
+    has_audit = False
+
+    if re.search(r"(?im)^\s*#*\s*CHECKLIST\s*:", index_text):
+        after = re.split(r"(?im)^\s*#*\s*CHECKLIST\s*:", index_text, maxsplit=1)[1]
+        block = re.split(r"(?im)^\s*#{1,6}\s+\S", after, maxsplit=1)[0]
+        if len(block.strip()) >= 10:
+            has_audit = True
+
+    if not has_audit:
+        for c in cases:
+            c_doc, _ = resolve_doc(os.path.join(evd, c), CASE_FILE, CASE_FILE_OLD)
+            if c_doc and os.path.isfile(c_doc):
+                if re.search(r"(?im)^\s*CHECKLIST\s*:\s*\S+", read(c_doc)):
+                    has_audit = True
+                    break
+
+    if not has_audit:
+        rel = os.path.relpath(checklist_path, root)
+        res.err(INDEX_FILE, "the project defines acceptance checklists at {!r} but this pack does "
+                            "not declare a CHECKLIST: audit. Add a CHECKLIST: block to index.md "
+                            "(declaring which items were covered or waived with reasons) — no checklist "
+                            "item silently omitted".format(rel))
 
 
 def run(evd, expect_tcs, opts):
@@ -901,14 +979,43 @@ def run(evd, expect_tcs, opts):
                                     "what 'correct' means — until one exists, every PASS in this "
                                     "pack is an opinion".format(len(ran)))
 
+    floor_cases = 0
+    spec_cases = 0
+    for case in cases:
+        c_doc, _ = resolve_doc(os.path.join(evd, case), CASE_FILE, CASE_FILE_OLD)
+        if not c_doc or not os.path.isfile(c_doc):
+            continue
+        c_f = fields(read(c_doc))
+        if c_f.get("RESULT", "").upper() in ("PASS", "FAIL"):
+            req = c_f.get("REQUIREMENT", "")
+            if req:
+                parts = [p.strip() for p in CITE_SEP.split(req) if p.strip()]
+                has_spec = any(CITE_PATH.search(tok) for p in parts for tok in (w.strip("(),;\"'") for w in p.split()))
+                if has_spec:
+                    spec_cases += 1
+                elif any(CITE_FLOOR.match(p) for p in parts):
+                    floor_cases += 1
+
+    if opts.get("require_citation") and opts.get("sources") and len(ran) >= 2:
+        if spec_cases == 0 and floor_cases > 0:
+            res.err("REPORT.md", "every case in this pack cites FLOOR, but this project declared specs ({}). "
+                                 "A floor rule is only for unwritten baseline rules; a pack cannot use FLOOR on "
+                                 "every case to bypass reading the declared specifications.".format(", ".join(opts["sources"])))
+
     verdict = check_report(evd, res, opts)
     check_findings(evd, res, verdict)
     check_coverage(evd, res, cases)
+    check_checklist(evd, opts.get("root") or ".", res, opts, cases)
 
     for name, why in (("verifysheet.md", "where expected values are derived and cited"),
                       ("debate.md", "the challenger's card — a verdict nobody tried to break")):
-        if not os.path.exists(os.path.join(evd, name)):
+        p = os.path.join(evd, name)
+        if not os.path.exists(p):
             res.err(name, "missing — {}".format(why))
+        elif name == "debate.md":
+            d_text = read(p)
+            if len(d_text.strip()) < 20:
+                res.err(name, "empty or too short — record the verifier card, the challenger card, and the resolution")
     return res
 
 
@@ -941,7 +1048,9 @@ BACK: Back returns to Orders with the Pending filter intact
 """
 
 BOUNDARY_CASE = GREEN_CASE.replace("KIND: acceptance", "KIND: boundary")
-SCREEN_CASE = GREEN_CASE.replace("KIND: acceptance", "KIND: whole-screen")
+SCREEN_CASE = GREEN_CASE.replace("KIND: acceptance", "KIND: whole-screen").replace(
+    "total recalculates to 450,000 (spec 3.2)",
+    "total recalculates to 450,000 (spec 3.2); focus visible on Tab (WCAG 2.4.7)")
 
 GREEN_REPORT = """# SHOP-142 — PASS
 COMMIT: abc1234
@@ -1024,7 +1133,9 @@ def _fake_project(tmp):
     "the file is not an oracle" — two different lies, two different reds.
     """
     os.makedirs(os.path.join(tmp, "docs", "specs"), exist_ok=True)
+    os.makedirs(os.path.join(tmp, "docs", "qa"), exist_ok=True)
     for rel, body in (("docs/specs/orders.md", "# Orders\n## 3.2 Totals\nR1 total = qty x price\n"),
+                      ("docs/qa/checklists.md", "# Checklists\n| ID | Criteria |\n|---|---|\n| 01 | valid total |\n"),
                       ("README.md", "# demo\n")):
         with open(os.path.join(tmp, *rel.split("/")), "w", encoding="utf-8") as fh:
             fh.write(body)
@@ -1037,6 +1148,7 @@ def _green_fixture(root):
     # the gate does when nobody hands it a root.
     _fake_project(os.path.dirname(os.path.dirname(os.path.abspath(root))))
     for n, t in ((INDEX_FILE, "# SHOP-142\nWhat was checked, in plain language.\n\n"
+                  "CHECKLIST:\n- 01: TC_1\n- 02: waived — no table on this screen\n\n"
                   "COVERAGE:\n- security: n/a — read-only pricing display, no auth, session or "
                   "write path touched\n- accessibility: TC_3\n"),
                  ("REPORT.md", GREEN_REPORT),
@@ -1200,6 +1312,15 @@ def selftest():
         ("a boxed image with no box drawn on it", lambda d: shutil.copyfile(
             os.path.join(d, C1, "TC1_03_total_after_save.png"),
             os.path.join(d, C1, "TC1_03_total_after_save_boxed.png"))),
+        ("all cases cite FLOOR when specs exist", lambda d: [
+            _rewrite(d, c + "/case.md", lambda t: re.sub(r"(?m)^REQUIREMENT:.*$", "REQUIREMENT: FLOOR no unhandled 500", t))
+            for c in (C1, C2, C3)]),
+        ("COVERAGE cites accessibility case with no a11y checks", lambda d: _rewrite(
+            d, C3 + "/case.md", lambda t: t.replace("focus visible on Tab (WCAG 2.4.7)", "nothing checked here"))),
+        ("ENVIRONMENT has no URL", lambda d: _rewrite(
+            d, "REPORT.md", lambda t: t.replace("ENVIRONMENT: local — http://localhost:3000", "ENVIRONMENT: local"))),
+        ("project checklist present but pack omits audit", lambda d: _rewrite(
+            d, INDEX_FILE, lambda t: re.sub(r"(?is)\nCHECKLIST:.*?(?=\n\n|\n[A-Z]|\Z)", "", t))),
     ]
     for i, (label, mutate) in enumerate(mutations):
         d = fresh("mut{}".format(i))

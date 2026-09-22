@@ -714,8 +714,9 @@ in the template is for the person reading it.
       never from the ticket prose, never from the code
 - [ ] Every case that reached PASS or FAIL carries `REQUIREMENT:` naming a
       declared document and section, or a named `FLOOR` rule — the gate reds
-      on a section number with no document, a file that does not exist, and a
-      document `oracle.specs` never declared
+      on a section number with no document, a file that does not exist, a
+      document `oracle.specs` never declared, or putting FLOOR on every case
+      to bypass declared specs
 - [ ] No written oracle → `ORACLE: NONE` and the verdict is `BLOCKED`, with what
       needs writing. Never a PASS labelled as an opinion in the prose while the
       first line still reads PASS
@@ -730,7 +731,9 @@ in the template is for the person reading it.
 - [ ] Boundary case and whole-screen case both ran — not only the happy path;
       the boundary value came from `hostile-inputs.md`, the whole-screen case
       walked the `checklists.md` shape for that screen
-- [ ] Project checklist (`docs/qa/checklists.md`) audited if present; every applicable item covered with evidence or waived with reason — no item silently omitted
+- [ ] Project checklist (`docs/qa/checklists.md`) audited if present and declared
+      under `CHECKLIST:` in `index.md`; every applicable item covered with evidence
+      or waived with reason — gate strictly reds on silent omission
 - [ ] Ticket touches auth / sessions / roles / money / personal data / uploads →
       at least one `security-probes.md` probe ran (lockout real, enumeration by
       message *and* timing, session invalidation, server-side authorization,
@@ -739,7 +742,8 @@ in the template is for the person reading it.
 - [ ] Ticket has a design source or user-facing screen → `ui-fidelity.md` run:
       computed style measured against the design token, fonts proven to load, and
       the WCAG 2.2 AA checks that apply (contrast, focus visible, keyboard reach,
-      labels) proven with numbers — a11y failures cited against their SC as defects
+      labels) proven with numbers — gate reds on accessibility citation without
+      measurable UI fidelity criteria
 - [ ] Every case names a `PERSONA:` and carries at least one real-user move in
       its STEPS — none tested only the route
 - [ ] Exploratory slot used with a named `HEURISTIC:` when the budget allowed —
