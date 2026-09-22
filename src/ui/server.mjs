@@ -168,6 +168,16 @@ ${gaps.length ? `<div class="gaps">
   </div>
 </fieldset>
 
+<fieldset><legend>What decides &ldquo;correct&rdquo;</legend>
+  <p class="hint">The most important line in the config. Every expected value a verdict
+  rests on must cite one of these documents &mdash; the evidence gate resolves the
+  citation and reds if the file is not here. Left empty, a verification can still run,
+  but it can only report BLOCKED: there is nothing to be right or wrong against.</p>
+  <label class="field"><span>Folders or files that decide what is correct <em>&mdash; comma-separated</em></span>
+    <input type="text" name="specs" value="${esc((defaults.specs || []).join(", "))}"
+      placeholder="docs/specs, docs/prd"></label>
+</fieldset>
+
 <fieldset id="mobfs" hidden><legend>Mobile</legend>
   <div class="row">
     <label class="field"><span>Platform</span>

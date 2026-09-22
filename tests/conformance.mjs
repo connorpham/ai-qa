@@ -340,7 +340,13 @@ for (const [label, cmd, args] of [
   });
   await new Promise((r) => server.listen(0, "127.0.0.1", r));
   const base = `http://127.0.0.1:${server.address().port}`;
-  const evd = fs.mkdtempSync(path.join(process.env.TMPDIR || "/tmp", "aiqa-conf-evd-"));
+  // Nested under evd/ because that is where a real pack lives, and the gate
+  // resolves every citation against the project two levels above it.
+  const projectRoot = fs.mkdtempSync(path.join(process.env.TMPDIR || "/tmp", "aiqa-conf-evd-"));
+  fs.mkdirSync(path.join(projectRoot, "docs", "spec"), { recursive: true });
+  fs.writeFileSync(path.join(projectRoot, "docs", "spec", "discounts.md"),
+    "# Discounts\n## 3.2 Gold tier\nR1 orders of 500,000 or more take 10% off.\n");
+  const evd = path.join(projectRoot, "evd", "SHOP-1");
   try {
     const CASE = (kind) => [
       "RESULT: PASS", `KIND: ${kind}`, "TYPE: NON-UI",
@@ -348,6 +354,7 @@ for (const [label, cmd, args] of [
       "PRECONDITION: customer 1 exists, resolved read-only before the call",
       "ENTRY: the ordering call a customer's checkout makes",
       "STEPS: 1. place an order of 500,000  2. read the priced order back",
+      "REQUIREMENT: docs/spec/discounts.md 3.2 R1",
       "EXPECTED: discount 50,000 (spec 3.2 R1)",
       "ACTUAL: discount 50,000", "",
     ].join("\n");
@@ -672,6 +679,30 @@ for (const [label, cmd, args] of [
     check(qa.includes(`**${k}**`), `qa.md never asks for ${k}`);
     check(readDoc("evidence.md").includes(k), `evidence.md does not document ${k}`);
   }
+  // The citation rule, end to end: the gate enforces it, the wizard writes the
+  // switch and the list it resolves against, and the workflow tells a verifier
+  // what a legal citation looks like. A rule missing any one of the four is a
+  // rule people meet for the first time as a red they do not understand.
+  check(/require_citation/.test(gate), "the gate no longer knows about require_citation");
+  check(/cfg_get\("evidence\.require_citation"/.test(gate),
+    "the gate reads a different config key than evidence.require_citation");
+  const initSrc = fs.readFileSync(path.join(pkgRoot, "src/cli/init.mjs"), "utf8");
+  check(/^\s*require_citation: true/m.test(initSrc),
+    "the config the wizard writes does not carry require_citation");
+  for (const dotted of ["oracle.specs", "api.contract", "database.schema"]) {
+    check(gate.includes(`"${dotted}"`),
+      `the gate stopped resolving citations against ${dotted}`);
+    const [block, key] = dotted.split(".");
+    check(new RegExp(`^${block}:[\\s\\S]*?^\\s*${key}:`, "m").test(initSrc),
+      `aiqa.config.yaml no longer has ${dotted}, which the gate still reads`);
+  }
+  check(/\*\*REQUIREMENT\*\* — \*\*gate-enforced\.\*\*/.test(qa),
+    "qa.md no longer tells the verifier REQUIREMENT is enforced, only that it is nice to have");
+  check(/FLOOR/.test(qa) && /FLOOR/.test(gate),
+    "the floor-rule escape hatch exists in one of the gate and the workflow but not the other");
+  check(/ORACLE: NONE/.test(qa),
+    "qa.md never says what ORACLE: NONE now costs — people will keep writing it under a PASS");
+
   // A real-user move is demanded of EVERY case, not delegated to a case of its own.
   check(/At least one step is a thing a real user does/.test(qa),
     "qa.md no longer requires a real-user move in every case's STEPS");
@@ -716,7 +747,8 @@ for (const [label, cmd, args] of [
   // manifests carry PERSONA / HEURISTIC / OBSERVATIONS and whose report carries
   // the Observations section still passes, and the Observations stay out of the
   // Conclusion the spreadsheet prints.
-  const evd = fs.mkdtempSync(path.join(process.env.TMPDIR || "/tmp", "aiqa-conf-mind-"));
+  const evd = path.join(fs.mkdtempSync(path.join(process.env.TMPDIR || "/tmp", "aiqa-conf-mind-")),
+                        "evd", "SHOP-142");
   try {
     const built = spawnSync("python3", ["-c",
       `import sys; sys.path.insert(0, ${JSON.stringify(path.join(pkgRoot, "core/scripts"))}); ` +
@@ -846,7 +878,7 @@ for (const [label, cmd, args] of [
   try {
     for (const [key, value] of [["EXPECTED", "works as expected"], ["EXPECTED", "It should work correctly."],
                                 ["ACTUAL", "failed"], ["ACTUAL", "OK"], ["EXPECTED", "no errors"]]) {
-      const d = path.join(root, `vague_${key}_${value.replace(/\W+/g, "_")}`);
+      const d = path.join(root, "evd", `vague_${key}_${value.replace(/\W+/g, "_")}`);
       check(fixture(d).status === 0, "could not build the green fixture");
       setField(path.join(d, caseDirs(d)[0], "case.md"), key, value);
       reindex(d);
@@ -856,7 +888,7 @@ for (const [label, cmd, args] of [
     }
     // …and a value that merely CONTAINS a judgement word is not flagged.
     {
-      const d = path.join(root, "contains_word");
+      const d = path.join(root, "evd", "contains_word");
       fixture(d);
       setField(path.join(d, caseDirs(d)[0], "case.md"), "EXPECTED", "the total reads 450,000 (spec 3.2) and the screen works offline");
       reindex(d);
@@ -864,7 +896,7 @@ for (const [label, cmd, args] of [
     }
 
     // The new report shape, concrete, FAIL verdict, one failed case.
-    const d = path.join(root, "report_shape");
+    const d = path.join(root, "evd", "report_shape");
     fixture(d);
     const dirs = caseDirs(d).sort();
     const c2 = path.join(d, dirs[1], "case.md");

@@ -25,8 +25,29 @@ report says.
    is a finding. Spec silent or self-contradictory → that case is **BLOCKED and
    escalated for a decision**. You never invent an expected value.
 
-   `oracle.specs` empty in `aiqa.config.yaml` → say so in the report's first
-   line. A verdict with no oracle is an opinion, and it must be labelled one.
+   **The gate enforces this, it does not merely ask.** Every case that reaches
+   PASS or FAIL carries a `REQUIREMENT:` line, and `evd_check.py` reds unless it
+   is one of exactly three shapes:
+
+   | Shape | Example | When |
+   |---|---|---|
+   | a declared document, then the section | `docs/specs/orders.md 3.2 R1` | the normal case |
+   | the schema or the API contract | `prisma/schema.prisma Order:total` | a data or response-shape rule |
+   | a named floor rule | `FLOOR no unhandled 500 on a valid request` | nothing is written, and the outcome is wrong anyway |
+
+   A bare `3.2` is **not** a citation: it names a section to someone who already
+   knows the file, and that is never the person reading the report six weeks
+   later. A path that does not exist is worse than nothing — it is the
+   appearance of evidence. And the document must be one this project declared in
+   `oracle.specs` **before** the run: an oracle picked after the result is known
+   is not an oracle.
+
+   `oracle.specs` empty in `aiqa.config.yaml` → the pack goes red as soon as any
+   case reaches a verdict, and `ORACLE: NONE` is refused under a PASS or PARTIAL.
+   You cannot certify that the product matches the specification and in the same
+   breath say there is no specification. The honest verdict there is
+   `BLOCKED (no oracle)`, with what needs writing — and that is useful output,
+   not a failure to produce any.
 
 2. **Real runs only.** Every verdict comes from something you executed this
    session against the running product. Never from reading code, never from an
@@ -264,9 +285,14 @@ are what turn a folder of prose into a row somebody can sort, count and act on:
 - **HEURISTIC** — on an `exploratory` case, the one heuristic from
   `heuristics.md` being applied, and its timebox. A heuristic you ran but did
   not name was a hunch.
-- **REQUIREMENT** — the spec ids this case checks (`3.2 R1; 3.3`). Without it
-  the traceability matrix has to guess them out of your EXPECTED prose, and a
-  citation a tool guessed at is worth exactly as much as no citation.
+- **REQUIREMENT** — **gate-enforced.** Where this case's EXPECTED was read out
+  of: the document first, the section after it
+  (`docs/specs/orders.md 3.2 R1; docs/specs/orders.md 3.3`), or `FLOOR <rule>`
+  when nothing is written and the outcome is wrong anyway. Several sources are
+  separated by `;`. Only a `RESULT: BLOCKED` case may leave it out — a case that
+  never ran derived no expected value. Without it the traceability matrix has to
+  guess the ids out of your EXPECTED prose, and a citation a tool guessed at is
+  worth exactly as much as no citation.
 - **On a case whose RESULT is FAIL, two more, and neither is optional:**
   - **SEVERITY** — `Blocker` / `Critical` / `Major` / `Minor`, by consequence,
     per `docs/qa/method/severity.md`.
@@ -532,7 +558,8 @@ them so they can be pasted into a chat without the rest of the report.
 COMMIT: <sha the cases ran against>
 VERIFIED-AT: <ISO timestamp>
 ENVIRONMENT: <name — url, e.g. "stg — https://stg.shop.example">
-ORACLE: <spec files cited — or "NONE: this verdict compares against nothing written">
+ORACLE: <the declared documents this verdict was compared against, e.g. "docs/specs/orders.md 3.2">
+        <NONE is allowed only under BLOCKED / FAIL / NEW-BUG / UNCLEAR — never under PASS or PARTIAL>
 
 **Verdict:** <one sentence — what does or does not work, for whom, in the user's words>
 **What it means:** <the consequence for a person or for money, in one sentence>
@@ -680,8 +707,13 @@ in the template is for the person reading it.
 - [ ] Status verifiable; the exact code under test pinned by branch and SHA
 - [ ] Every expected value derived from the spec or schema **with a citation** —
       never from the ticket prose, never from the code
-- [ ] No written oracle → the report says so in its first lines and the verdict
-      is labelled an opinion, not a fact
+- [ ] Every case that reached PASS or FAIL carries `REQUIREMENT:` naming a
+      declared document and section, or a named `FLOOR` rule — the gate reds
+      on a section number with no document, a file that does not exist, and a
+      document `oracle.specs` never declared
+- [ ] No written oracle → `ORACLE: NONE` and the verdict is `BLOCKED`, with what
+      needs writing. Never a PASS labelled as an opinion in the prose while the
+      first line still reads PASS
 - [ ] Every case ran for real this session; bring-up proven by the quoted
       `APP: UP` line; blocked cases carry reason and unblock path
 - [ ] The environment resolved by NAME before bring-up, exported as `AIQA_ENV`,

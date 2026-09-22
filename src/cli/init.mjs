@@ -22,6 +22,7 @@ import { TOOLS, planWorkflows, applyPointers } from "./adapters.mjs";
 import { grade } from "./scan.mjs";
 import {
   detectDefaults, detectBranch, detectStart, detectUrl, detectContract, detectSchema, detectDbEnv,
+  detectSpecDirs,
 } from "./defaults.mjs";
 
 export const SURFACES = ["web", "api", "mobile", "database"];
@@ -160,10 +161,16 @@ database:
   schema: ${yamlStr(a.schema, "schema path")}
 
 oracle:
-  # The source of truth for "correct". When this list is empty, /qa cannot
-  # derive an expected value and will BLOCK the test case rather than guess —
-  # that is the single most important promise this tool makes.
-  specs: []
+  # The source of truth for "correct", and the most important list in this file.
+  #
+  # The evidence gate resolves every citation against it: a case that claims
+  # PASS must name a document from here (or the schema, or a named floor rule),
+  # the document must exist, and a section number on its own is not a citation.
+  # Empty, and /qa cannot derive an expected value — it BLOCKS the case rather
+  # than guess, which is the single most important promise this tool makes.
+  #
+  # A folder counts: declaring the shelf stays right as documents are added.
+  specs: ${list(a.specs || [])}
   # Design source for UI comparison, if any (a Figma link or a folder of frames)
   design: ''
 
@@ -213,6 +220,10 @@ evidence:
   require_reload_check: true    # a save that dies on refresh is not a save
   require_annotation: true      # a screenshot with no box and no caption explains nothing
   require_db_verify: true       # a write is verified by reading the row back
+  # Every claim names the document it was read out of. Turning this off does not
+  # make the verdicts better founded, only quieter about it — stage the adoption
+  # with it false if you must, and put it back the week the specs land.
+  require_citation: true
 `;
 }
 
@@ -236,7 +247,7 @@ export async function gather(root, scanRes, flags) {
   const get = (flag, q, def) => resolve(flag, def, () => ask(q, def));
   const getChoice = (flag, q, opts, def) => resolve(flag, def, () => askChoice(q, opts, def));
 
-  const total = 5;
+  const total = 6;
   const a = {};
 
   // ── 1. identity ──────────────────────────────────────────────────────────────
@@ -280,8 +291,26 @@ export async function gather(root, scanRes, flags) {
   a.dbUrlEnv = a.surfaces.includes("database") ? detectDbEnv(root) : "";
   a.schema = a.surfaces.includes("database") ? detectSchema(root) : "";
 
-  // ── 4. workflow ──────────────────────────────────────────────────────────────
-  if (interactive) say.step(4, total, "How work reaches you");
+  // ── 4. the oracle ────────────────────────────────────────────────────────────
+  // The one field in this file that decides whether a verdict is a fact or an
+  // opinion. It is asked, never inferred: detection can find documents, but
+  // only a human can say which of them the team agrees to be judged against.
+  // An oracle chosen after the result is known is not an oracle.
+  const foundDirs = detectSpecDirs(scanRes);
+  if (interactive) {
+    say.step(4, total, "What decides \"correct\"");
+    say.info(foundDirs.length
+      ? `found documents in: ${c.cyan(foundDirs.join(", "))}`
+      : c.gray("no spec-shaped documents found in this repo"));
+    say.info(c.gray("every expected value /qa writes must cite one of these — leave it blank and"));
+    say.info(c.gray("the evidence gate will refuse to let a verdict call itself a PASS"));
+  }
+  a.specs = (await get("specs",
+    "Folders or files that decide what is correct (comma-separated, blank = none yet)",
+    foundDirs.join(", "))).split(",").map((x) => x.trim()).filter(Boolean);
+
+  // ── 5. workflow ──────────────────────────────────────────────────────────────
+  if (interactive) say.step(5, total, "How work reaches you");
   a.tracker = await getChoice("tracker", "Where tickets live", TRACKERS, "markdown");
   a.trackerEnv = TRACKER_ENV[a.tracker] || [];
   const coords = TRACKER_COORDS[a.tracker];
@@ -301,7 +330,7 @@ export async function gather(root, scanRes, flags) {
   a.autonomy = await getChoice("autonomy", "Autonomy (evidence rules never relax — this only moves who presses go)", AUTONOMY, "assisted");
 
   // ── 5. agent tools ───────────────────────────────────────────────────────────
-  if (interactive) say.step(5, total, "Which agent tools to install for");
+  if (interactive) say.step(6, total, "Which agent tools to install for");
   a.tools = flags.tools
     ? String(flags.tools).split(",").map((s) => s.trim()).filter(Boolean)
     : interactive ? await askMulti("Agent tools", TOOLS, ["claude-code"]) : ["claude-code"];

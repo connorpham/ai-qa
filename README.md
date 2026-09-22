@@ -365,7 +365,7 @@ The same distinction runs through every command:
 | What `ai-qa scan` shows | a high **ORACLE** score | ORACLE near **0** — printed as the number-one gap, because it weighs most (25 pts) |
 | What `/onboard` does | maps each area to its spec in the dossier's §4 oracle map | tags the area `[UNKNOWN]` and turns it into the first question for the team |
 | The config line | `oracle.specs: [docs/spec/…]` | `oracle.specs: []` — an honest blank the workflows report as a blocker |
-| What `/qa` produces | **defects** — PASS / FAIL with severity and citation | **differences** and consistency findings, each with an owner; the verdict is labelled an opinion |
+| What `/qa` produces | **defects** — PASS / FAIL with severity and citation | **differences** and consistency findings, each with an owner — and the verdict is `BLOCKED`, not a PASS: the gate refuses `ORACLE: NONE` under a PASS |
 | The way forward | verify tickets against the spec | let the questions ai-qa asks *become* your first written spec — then the area flips to the left column |
 
 **You do not need documentation to start** — you need to be honest about not
@@ -511,7 +511,7 @@ each mutation turns it red. A gate that has never failed does not exist.
 
 | Gate | Refuses |
 |---|---|
-| `evd_check.py` | Missing actor, precondition, entry path, reload check, boundary case, annotation, severity, or challenger card. A case folder called `TC_2` and nothing else, a screenshot carrying another case's number, an index that no longer matches the folders. Catches "planned 5 cases, ran 1". A report that does not say which environment produced the verdict. A case with no screen is evidenced by a read-only query, a command record, or a recorded request/response pair — the artefacts this toolchain actually writes — here or in one folder per call. An `EXPECTED` or `ACTUAL` that is only a judgement word — "works as expected", "failed" — because that is a wish, not a value. A pack that never declares whether **security** and **accessibility** were in scope — the two lenses skipped in silence more than any other — instead of naming the case that covered each or waiving it with a reason. **44 mutations, each proven to go red.** |
+| `evd_check.py` | Missing actor, precondition, entry path, reload check, boundary case, annotation, severity, or challenger card. A case folder called `TC_2` and nothing else, a screenshot carrying another case's number, an index that no longer matches the folders. Catches "planned 5 cases, ran 1". A report that does not say which environment produced the verdict. A case with no screen is evidenced by a read-only query, a command record, or a recorded request/response pair — the artefacts this toolchain actually writes — here or in one folder per call. An `EXPECTED` or `ACTUAL` that is only a judgement word — "works as expected", "failed" — because that is a wish, not a value. A pack that never declares whether **security** and **accessibility** were in scope — the two lenses skipped in silence more than any other — instead of naming the case that covered each or waiving it with a reason. **Every expected value must cite the document it was read out of** — a section number with no document, a file that does not exist, or a document this project never declared as an oracle is a red, and so is `ORACLE: NONE` under a PASS. **51 mutations, each proven to go red.** |
 | `evd_index.py` | Writes the case table into `evd/<TICKET>/index.md` from the case records, so `what was tested here` is answered by the folder itself — and cannot drift from it. `xlsx_export.py` reads that table for each case's one-line title. |
 | `db_verify.py` | Any write — including one hidden inside a CTE, behind a comment, or batched after a `SELECT`. **7 reads allowed, 18 writes refused.** |
 | `api_check.mjs` | Silent assertion failures; a token reaching an evidence file; an unreachable host being reported as a failure rather than as BLOCKED. Writes the command it ran and what it asserted into `cmd_verify.md`, so the case can be re-run without anyone retyping it. |
@@ -590,6 +590,12 @@ yet know what the product is supposed to show.
 
 - **The spec is the oracle** — not the ticket prose, not the code. Spec silent →
   the case is BLOCKED and escalated, never guessed.
+- **Every expected value cites the document it came from**, and the gate opens
+  it. `REQUIREMENT: docs/specs/orders.md 3.2 R1` — the document first, the
+  section after. A bare `3.2` is not a citation, a path that does not exist is
+  the *appearance* of evidence, and a document `oracle.specs` never declared is
+  an oracle chosen after the result was known. `FLOOR <rule>` is the honest
+  third option when nothing is written and the outcome is wrong anyway.
 - **A verdict needs a run that happened.** Not a status code, not a previous
   session, not the developer's demo.
 - **Test data comes through the product**, under a write gate, marked `ZZTEST`,

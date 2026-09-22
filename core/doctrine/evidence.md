@@ -38,6 +38,7 @@ AS:           staff@demo (role STAFF)
 PRECONDITION: order #4102 exists, status Pending, 2 × item A at 150,000 (checked read-only at 10:02)
 ENTRY:        signed in → Orders → filter "Pending" → row #4102 → "Edit"
 STEPS:        1. clear "Quantity" · 2. type 3 · 3. press "Save"
+REQUIREMENT:  docs/specs/orders.md 3.2 R1
 EXPECTED:     "Total" reads 450,000 ₫ (spec §3.2)
 ACTUAL:       "Total" reads 450,000 ₫; banner "Order #4102 saved" — as expected
 AFTER:        list row shows 3 · "Total" 450,000 survives a reload · "Pending" badge unchanged
@@ -57,6 +58,27 @@ Every field is there because a verification went wrong without it:
   working.
 - **BACK** — Cancel that does not cancel, filters that reset. Cheap to check,
   frequently broken.
+- **REQUIREMENT** — where the EXPECTED was read out of. The **document first**,
+  the section after it, because the reader needs to know which file to open
+  before knowing where to look in it. Several sources separate with `;`.
+
+  The gate resolves it, so only three things are a citation:
+
+  | | |
+  |---|---|
+  | `docs/specs/orders.md 3.2 R1` | a document declared in `oracle.specs` |
+  | `prisma/schema.prisma Order:total` | the schema or the API contract — a data or response-shape rule |
+  | `FLOOR no unhandled 500 on a valid request` | nothing is written, and the outcome is wrong anyway |
+
+  A bare `3.2` is not a citation; it names a section to someone who already
+  knows the file. A path that does not exist is worse than nothing, because it
+  is the *appearance* of evidence and it survives review. And the document has
+  to be one the project declared **before** the run — an oracle chosen after
+  the result is known is not an oracle.
+
+  Only a `RESULT: BLOCKED` case may leave it out: a case that never ran derived
+  no expected value. That is the honest use of BLOCKED, and it is why the rule
+  does not push anyone into inventing a citation.
 
 ## The coverage decision, per pack
 
