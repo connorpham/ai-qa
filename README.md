@@ -511,13 +511,14 @@ each mutation turns it red. A gate that has never failed does not exist.
 
 | Gate | Refuses |
 |---|---|
-| `evd_check.py` | Missing actor, precondition, entry path, reload check, boundary case, annotation, severity, or challenger card. A case folder called `TC_2` and nothing else, a screenshot carrying another case's number, an index that no longer matches the folders. Catches "planned 5 cases, ran 1". A report that does not say which environment produced the verdict. A case with no screen is evidenced by a read-only query, a command record, or a recorded request/response pair — the artefacts this toolchain actually writes — here or in one folder per call. An `EXPECTED` or `ACTUAL` that is only a judgement word — "works as expected", "failed" — because that is a wish, not a value. A pack that never declares whether **security** and **accessibility** were in scope — the two lenses skipped in silence more than any other — instead of naming the case that covered each or waiving it with a reason. **Every expected value must cite the document it was read out of** — a section number with no document, a file that does not exist, or a document this project never declared as an oracle is a red, and so is `ORACLE: NONE` under a PASS. **51 mutations, each proven to go red.** |
+| `evd_check.py` | Missing actor, precondition, entry path, reload check, boundary case, annotation, severity, or challenger card. A case folder called `TC_2` and nothing else, a screenshot carrying another case's number, an index that no longer matches the folders. Catches "planned 5 cases, ran 1". A report that does not say which environment produced the verdict. A case with no screen is evidenced by a read-only query, a command record, or a recorded request/response pair — the artefacts this toolchain actually writes — here or in one folder per call. An `EXPECTED` or `ACTUAL` that is only a judgement word — "works as expected", "failed" — because that is a wish, not a value. A pack that never declares whether **security** and **accessibility** were in scope — the two lenses skipped in silence more than any other — instead of naming the case that covered each or waiving it with a reason. **Every expected value must cite the document it was read out of** — a section number with no document, a file that does not exist, or a document this project never declared as an oracle is a red, and so is `ORACLE: NONE` under a PASS. **It opens the images**: a screenshot that is not a PNG or JPEG, one too small to be a screen, one screenshot filed under two step names, and a `_boxed` image identical to the shot it was drawn from are all reds — the cheapest forgeries, and the ones a prose-only gate cannot see. A `COMMIT:` that resolves to no commit in this repository is a red. **55 mutations, each proven to go red.** |
 | `evd_index.py` | Writes the case table into `evd/<TICKET>/index.md` from the case records, so `what was tested here` is answered by the folder itself — and cannot drift from it. `xlsx_export.py` reads that table for each case's one-line title. |
 | `db_verify.py` | Any write — including one hidden inside a CTE, behind a comment, or batched after a `SELECT`. **7 reads allowed, 18 writes refused.** |
 | `api_check.mjs` | Silent assertion failures; a token reaching an evidence file; an unreachable host being reported as a failure rather than as BLOCKED. Writes the command it ran and what it asserted into `cmd_verify.md`, so the case can be re-run without anyone retyping it. |
 | `annotate.py` | An "annotation" with no box and no caption — that is a copy. |
 | `tracker.py` | A credential reaching an evidence file or an error message; a missing token being reported as a failed verification rather than a blocked one. |
 | `browser.mjs` | Falling back to headless when Playwright is missing. That is a BLOCKED run with an install command. |
+| CI (`.github/workflows/aiqa-evidence.yml`) | Seeded on install, then yours. Runs the evidence gate and the strict export on every PR that touches `evd/`, plus both selftests. It is the only enforcement in the lane that does not run inside an agent — the difference between *the gate passed* and *an agent told me the gate passed*. |
 | `xlsx_export.py` | A guessed severity, a citation nobody wrote, a conclusion the pack does not support, a missing environment, a cell of terminal escape codes that would make the workbook unopenable. **18 honesty mutations, each proven to be reported in the file itself.** |
 
 **Every gate uses the same exit codes**: `0` green · `1` a real finding · `2`
@@ -588,6 +589,13 @@ yet know what the product is supposed to show.
 
 ## Rules the lane will not bend
 
+- **Every tool is told, whether or not a slash command is typed.** Installing
+  writes the same short section into the file each agent reads by itself —
+  `CLAUDE.md`, `.cursor/rules/aiqa-always.mdc` (`alwaysApply: true`),
+  `.windsurfrules`, `AGENTS.md`, `.github/copilot-instructions.md`. The most
+  common way a QA lane gets bypassed is not defiance, it is an agent that never
+  heard of it. `ai-qa doctor` reds if a tool is missing its section and ambers
+  if the section is older than the installed version.
 - **The spec is the oracle** — not the ticket prose, not the code. Spec silent →
   the case is BLOCKED and escalated, never guessed.
 - **Every expected value cites the document it came from**, and the gate opens

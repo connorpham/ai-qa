@@ -15,7 +15,7 @@ import { buildPlan, renderCfg, TRACKER_ENV } from "./init.mjs";
 /** Which agent tools are already installed here, by looking for each adapter's
  * marker file. Re-rendering only what exists means `update` never installs a
  * tool the user did not ask for. */
-async function installedTools(root) {
+export async function installedTools(root) {
   const found = [];
   for (const t of TOOLS) {
     const marker = await adapterMarker(t);
@@ -50,6 +50,10 @@ export async function update(flags) {
     mobileDriver: get(cfg, "mobile.driver", ""),
     dbUrlEnv: get(cfg, "database.url_env", ""),
     schema: get(cfg, "database.schema", ""),
+    // update re-renders the pointers, and the pointer names the oracle. Read it
+    // back from the config the user may have edited since install day — that
+    // edit is exactly the one worth propagating to five tools at once.
+    specs: [].concat(get(cfg, "oracle.specs", []) || []).filter(Boolean),
     tracker: get(cfg, "tracker.provider", "markdown"),
     trackerBaseUrl: get(cfg, "tracker.base_url", ""),
     trackerProject: get(cfg, "tracker.project", ""),

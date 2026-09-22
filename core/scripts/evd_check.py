@@ -17,12 +17,16 @@ not exist.
 Python 3.9 compatible.
 """
 import argparse
+import hashlib
 import json
 import os
 import re
+import struct
+import subprocess
 import sys
 import shutil
 import tempfile
+import zlib
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(_HERE, "lib"))
@@ -97,6 +101,101 @@ BOXED_IMAGE = re.compile(r"_boxed\.(png|jpg|jpeg)$", re.I)
 # TC_<n>_<what_it_proves>. The number orders the case; the words are what make
 # `ls evd/SHOP-142` a test plan instead of a row of drawer handles.
 CASE_DIR = re.compile(r"^TC_(\d+)(?:_([A-Za-z0-9][A-Za-z0-9_-]*))?$")
+
+
+# An 8-byte file called `03_total_after_save_boxed.png` used to pass every rule
+# in this gate. That is not a hypothetical: it is the fixture THIS FILE builds to
+# prove itself, and it went green. Writing a plausible screenshot of an
+# application you never opened is a far harder thing to do than writing a
+# convincing paragraph about one, which is exactly why the gate should look at
+# the pixels and not only at the prose around them.
+MIN_IMAGE_W, MIN_IMAGE_H = 320, 240
+
+
+def image_size(path):
+    """(width, height) of a PNG or JPEG, or None if the bytes are not one.
+
+    Stdlib only, header only — this runs on every image in every pack and must
+    not depend on Pillow being installed or read a 4MB screenshot to learn two
+    numbers.
+    """
+    try:
+        with open(path, "rb") as fh:
+            head = fh.read(32)
+            if head[:8] == b"\x89PNG\r\n\x1a\n":
+                if len(head) < 24 or head[12:16] != b"IHDR":
+                    return None
+                return struct.unpack(">II", head[16:24])
+            if head[:2] == b"\xff\xd8":
+                fh.seek(2)
+                while True:
+                    marker = fh.read(2)
+                    if len(marker) < 2 or marker[0] != 0xFF:
+                        return None
+                    if 0xC0 <= marker[1] <= 0xCF and marker[1] not in (0xC4, 0xC8, 0xCC):
+                        fh.read(3)
+                        h, w = struct.unpack(">HH", fh.read(4))
+                        return (w, h)
+                    (length,) = struct.unpack(">H", fh.read(2))
+                    fh.seek(length - 2, 1)
+    except (OSError, struct.error):
+        return None
+    return None
+
+
+def _sha(path):
+    h = hashlib.sha256()
+    try:
+        with open(path, "rb") as fh:
+            for chunk in iter(lambda: fh.read(65536), b""):
+                h.update(chunk)
+    except OSError:
+        return ""
+    return h.hexdigest()
+
+
+def check_images(case_dir, where, images, res):
+    """Look at the pixels.
+
+    Three things a forged pack cannot survive and a real run always does: the
+    file is an image, it is the size of a screen, and the pictures differ from
+    each other. The third one catches the cheapest forgery of all — one
+    screenshot copied under five step names.
+    """
+    seen = {}
+    for name in images:
+        full = os.path.join(case_dir, name)
+        size = image_size(full)
+        if size is None:
+            res.err(where, "{} is not a PNG or JPEG — {} bytes of something else. A screenshot "
+                           "nobody can open proves nothing, and a file named like one is the "
+                           "cheapest possible forgery"
+                    .format(name, os.path.getsize(full) if os.path.exists(full) else 0))
+            continue
+        w, h = size
+        if w < MIN_IMAGE_W or h < MIN_IMAGE_H:
+            res.err(where, "{} is {}x{} — too small to be a screen. Evidence is what the tester "
+                           "saw, at the size they saw it".format(name, w, h))
+            continue
+        digest = _sha(full)
+        if digest and digest in seen:
+            res.err(where, "{} is byte-for-byte the same image as {} — one screenshot filed under "
+                           "two step names is one step, whatever the names say"
+                    .format(name, seen[digest]))
+        elif digest:
+            seen[digest] = name
+
+    # The box is the point of a boxed image. If it is identical to the shot it
+    # was drawn from, nothing was drawn.
+    for name in images:
+        if not BOXED_IMAGE.search(name):
+            continue
+        plain = BOXED_IMAGE.sub(lambda m: "." + m.group(1), name)
+        if plain in images:
+            a, b = _sha(os.path.join(case_dir, name)), _sha(os.path.join(case_dir, plain))
+            if a and a == b:
+                res.err(where, "{} is identical to {} — the overlay was never drawn, so the reader "
+                               "still has to guess which pixels mattered".format(name, plain))
 
 
 def _dirs_of(case_dir):
@@ -352,6 +451,8 @@ def check_case(case_dir, res, opts):
     images = sorted(os.listdir(case_dir)) if os.path.isdir(case_dir) else []
     step_shots = [i for i in images if STEP_IMAGE.match(i)]
     boxed = [i for i in images if BOXED_IMAGE.search(i)]
+    if opts.get("open_images", True):
+        check_images(case_dir, name, step_shots, res)
 
     # An image whose prefix names a DIFFERENT case is the copy-paste that turns
     # a report into fiction: the picture proves something, just not this.
@@ -608,6 +709,29 @@ def check_report(evd, res, opts):
             res.err("REPORT.md", "a failing verdict with no Origin (DEV or SPEC) — a spec-origin "
                                  "finding sent to a developer produces a fix that is still wrong")
 
+    # A sha is the one field in the report that can be checked against something
+    # outside the pack. An invented one is the signature of a verdict written
+    # without a run — and it costs a subprocess to catch.
+    m = re.search(r"(?im)^\s*COMMIT:\s*([0-9a-f]{7,40})\b", text)
+    if m and opts.get("check_commit", True):
+        sha = m.group(1)
+        root = opts.get("root") or "."
+        try:
+            found = subprocess.run(["git", "-C", root, "cat-file", "-e", sha + "^{commit}"],
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                   timeout=10).returncode == 0
+            in_repo = subprocess.run(["git", "-C", root, "rev-parse", "--git-dir"],
+                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                     timeout=10).returncode == 0
+        except (OSError, subprocess.SubprocessError):
+            found, in_repo = True, False   # no git here; the pack is not the liar
+        # Only inside a repository. A pack copied somewhere else to be read is
+        # still evidence, and reding it for its surroundings teaches nobody.
+        if in_repo and not found:
+            res.err("REPORT.md", "COMMIT: {} is not a commit in this repository. A verdict binds "
+                                 "to the code it ran against; a sha that resolves to nothing binds "
+                                 "to nothing".format(sha))
+
     # ORACLE: NONE used to be free. It is not: a PASS is a statement that the
     # product matches something, and NONE says there was nothing to match. The
     # honest verdict in that situation is BLOCKED, and saying so is the service.
@@ -830,6 +954,35 @@ C2 = "TC_2_quantity_zero_is_refused"
 C3 = "TC_3_the_orders_screen_is_intact"
 
 
+def _png(path, w=360, h=270, tint=0):
+    """A real PNG, cheap to write and honest to read.
+
+    The fixture used to write eight bytes. That is how the forgery this gate now
+    refuses got into the gate's own proof of itself.
+
+    One row repeated: the selftest builds a few hundred of these, and a
+    per-pixel loop turns a two-second suite into a two-minute one for a picture
+    nobody looks at.
+    """
+    row = b"\x00" + bytes((x + tint) % 256 for x in range(w * 3))
+    rows = row * h
+
+    def chunk(kind, data):
+        return (struct.pack(">I", len(data)) + kind + data
+                + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF))
+
+    with open(path, "wb") as fh:
+        fh.write(b"\x89PNG\r\n\x1a\n")
+        fh.write(chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0)))
+        fh.write(chunk(b"IDAT", zlib.compress(rows, 1)))
+        fh.write(chunk(b"IEND", b""))
+
+
+def _rewrite_bytes(path, data):
+    with open(path, "wb") as fh:
+        fh.write(data)
+
+
 def _mkcase(root, name, manifest, images=True):
     d = os.path.join(root, name)
     os.makedirs(d, exist_ok=True)
@@ -837,9 +990,11 @@ def _mkcase(root, name, manifest, images=True):
         fh.write(manifest)
     if images:
         pre = "TC{}_".format(CASE_DIR.match(name).group(1)) if CASE_DIR.match(name) else ""
-        for fn in ("01_orders_list.png", "03_total_after_save.png", "03_total_after_save_boxed.png"):
-            with open(os.path.join(d, pre + fn), "wb") as fh:
-                fh.write(b"\x89PNG\r\n\x1a\n")
+        # Each one different, because the gate now refuses a pack where every
+        # step is the same picture under a new name.
+        for tint, fn in enumerate(("01_orders_list.png", "03_total_after_save.png",
+                                   "03_total_after_save_boxed.png")):
+            _png(os.path.join(d, pre + fn), tint=tint * 37)
         # An annotated image DECLARES what it proves. Without this the fixture
         # would only exercise the filename rule — which is the rule that turned
         # out not to be enough.
@@ -886,8 +1041,7 @@ def _green_fixture(root):
     with open(os.path.join(fdir, "finding.md"), "w", encoding="utf-8") as fh:
         fh.write("SEVERITY: Major\nORIGIN: DEV\nDEDUP: not in known-issues\n"
                  "FILED-AS: SHOP-210\nWHAT: the discount rounds down on odd totals\n")
-    with open(os.path.join(fdir, "01_rounding.png"), "wb") as fh:
-        fh.write(b"\x89PNG\r\n\x1a\n")
+    _png(os.path.join(fdir, "01_rounding.png"), tint=131)
 
     _mkcase(root, C1, GREEN_CASE)
     _mkcase(root, C2, BOUNDARY_CASE)
@@ -902,6 +1056,7 @@ DEFAULT_OPTS = {
     "require_reload": True, "require_annotation": True, "require_db_verify": True,
     "require_click_entry": True, "require_citation": True,
     "sources": ["docs/specs"], "config_found": True,
+    "open_images": True, "check_commit": True,
 }
 
 
@@ -1023,6 +1178,18 @@ def selftest():
             lambda t: t.replace("ORACLE: docs/specs/orders.md 3.2", "ORACLE: NONE"))),
         ("ORACLE cites a file that does not exist", lambda d: _rewrite(d, "REPORT.md",
             lambda t: t.replace("ORACLE: docs/specs/orders.md 3.2", "ORACLE: docs/specs/gone.md 3.2"))),
+        # The pixels. Every one of these passed every other rule in this gate
+        # until the gate started opening the files.
+        ("a screenshot that is not an image", lambda d: _rewrite_bytes(
+            os.path.join(d, C1, "TC1_01_orders_list.png"), b"\x89PNG\r\n\x1a\n")),
+        ("a screenshot too small to be a screen", lambda d: _png(
+            os.path.join(d, C1, "TC1_01_orders_list.png"), 100, 80)),
+        ("one screenshot filed under two step names", lambda d: shutil.copyfile(
+            os.path.join(d, C1, "TC1_01_orders_list.png"),
+            os.path.join(d, C1, "TC1_03_total_after_save.png"))),
+        ("a boxed image with no box drawn on it", lambda d: shutil.copyfile(
+            os.path.join(d, C1, "TC1_03_total_after_save.png"),
+            os.path.join(d, C1, "TC1_03_total_after_save_boxed.png"))),
     ]
     for i, (label, mutate) in enumerate(mutations):
         d = fresh("mut{}".format(i))
@@ -1063,6 +1230,26 @@ def selftest():
              .replace("ORACLE: docs/specs/orders.md 3.2", "ORACLE: NONE"))
     expect(run(d, None, DEFAULT_OPTS).ok,
            "ORACLE: NONE under a BLOCKED verdict is the honest answer and must pass")
+
+    # 3c. the one field that can be checked against something outside the pack.
+    #     An invented sha is the signature of a verdict written without a run.
+    gitroot = os.path.join(tmp, "repo")
+    os.makedirs(gitroot, exist_ok=True)
+    quiet = dict(stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    if subprocess.run(["git", "-C", gitroot, "init"], **quiet).returncode == 0:
+        _fake_project(gitroot)
+        subprocess.run(["git", "-C", gitroot, "add", "-A"], **quiet)
+        subprocess.run(["git", "-C", gitroot, "-c", "user.email=t@t", "-c", "user.name=t",
+                        "commit", "-m", "specs"], **quiet)
+        real = subprocess.run(["git", "-C", gitroot, "rev-parse", "HEAD"],
+                              stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        sha = real.stdout.decode().strip()
+        d = _green_fixture(os.path.join(gitroot, "evd", "SHOP-142"))
+        _rewrite(d, "REPORT.md", lambda t: t.replace("COMMIT: abc1234", "COMMIT: " + sha))
+        expect(run(d, None, DEFAULT_OPTS).ok, "a report naming a real commit was rejected")
+        _rewrite(d, "REPORT.md", lambda t: t.replace("COMMIT: " + sha, "COMMIT: deadbee"))
+        expect(not run(d, None, DEFAULT_OPTS).ok,
+               "a report naming a commit that does not exist did not go red")
 
     d = fresh("undeclared-oracle")
     expect(not run(d, None, dict(DEFAULT_OPTS, sources=[])).ok,
