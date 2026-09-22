@@ -62,9 +62,15 @@ ORIGINS = ("DEV", "SPEC")
 # person who already knows which file it lives in, and that person is never the
 # one reading the report six weeks later.
 CITE_FLOOR = re.compile(r"(?i)^floor\b[\s:]*(.*)$")
-CITE_SEP = re.compile(r"[;\n]|\s+and\s+")
-# A path token: it has a directory in it, or an extension on the end.
-CITE_PATH = re.compile(r"^[^\s]*(?:/[^\s]*|\.[A-Za-z0-9]{1,9})$")
+# `;` and a newline separate sources. NOT the word "and": "orders.md 3.2 and
+# 3.3" is one citation of two sections written the way people write, and a gate
+# that reds on it has taught the writer to distrust the gate rather than to cite
+# better. False reds on correct work are the most expensive kind.
+CITE_SEP = re.compile(r"[;\n]")
+# A path token: it has a directory in it, or a LETTER-led extension on the end.
+# "3.2" must not qualify — `.2` is not an extension, and treating it as one
+# turned "that is a section number" into "there is no such file as 3.2".
+CITE_PATH = re.compile(r"^(?:[^\s]*/[^\s]*|[^\s]+\.[A-Za-z][A-Za-z0-9]{0,8})$")
 
 # Fields every case manifest must carry. The names are the discipline: a field
 # you have to fill in is a question you cannot skip.
@@ -591,10 +597,14 @@ def check_citation(where, label, value, res, opts):
                 res.err(where, "{} says FLOOR and stops — name which floor rule this rests on, "
                                "e.g. 'FLOOR: no unhandled 500 on a valid request'".format(label))
             continue
-        tok = part.split()[0].rstrip(",;") if part.split() else ""
-        if not CITE_PATH.match(tok):
-            res.err(where, "{} is {!r} — that is a section number, not a citation. Which document "
-                           "is it in? Write the path first and the section after it: "
+        # The path anywhere in the part, not only at the front. "See
+        # docs/specs/orders.md 3.2" is a citation; refusing it teaches people to
+        # write worse sentences, not better citations.
+        tok = next((t for t in (w.strip("(),;\"'") for w in part.split())
+                    if CITE_PATH.match(t)), "")
+        if not tok:
+            res.err(where, "{} is {!r} — a section number with no document. Which file is it in? "
+                           "Name the path and the section together: "
                            "'docs/specs/orders.md 3.2 R1'".format(label, part))
             continue
         if not os.path.exists(os.path.join(root, tok)):
@@ -1225,6 +1235,18 @@ def selftest():
         r"(?m)^REQUIREMENT:.*$", "REQUIREMENT: FLOOR no unhandled 500 on a valid request", t))
     expect(run(d, None, DEFAULT_OPTS).ok, "a named floor rule is a legal citation and must pass")
 
+    # A citation people actually write. Both of these were refused by the first
+    # version of this rule, which is how a gate teaches writers to distrust it.
+    for label, value in (
+            ("two sections joined by 'and'", "docs/specs/orders.md 3.2 and 3.3"),
+            ("a lead-in word before the path", "See docs/specs/orders.md 3.2"),
+            ("the section in brackets", "docs/specs/orders.md (3.2)")):
+        d = fresh("cite-{}".format(abs(hash(label)) % 10000))
+        _rewrite(d, C1 + "/case.md", lambda t, v=value: re.sub(
+            r"(?m)^REQUIREMENT:.*$", "REQUIREMENT: " + v, t))
+        expect(run(d, None, DEFAULT_OPTS).ok,
+               "a legal citation was refused — {}: {!r}".format(label, value))
+
     d = fresh("oracle-none-blocked")
     _rewrite(d, "REPORT.md", lambda t: t.replace("— PASS", "— BLOCKED")
              .replace("ORACLE: docs/specs/orders.md 3.2", "ORACLE: NONE"))
@@ -1348,6 +1370,7 @@ def main():
     if not args.evd:
         ap.error("--evd is required (or use --selftest)")
 
+    _root = _project_root()
     opts = {
         "min_tcs": int(cfg_get("evidence.min_test_cases", 2)),
         "max_tcs": int(cfg_get("evidence.max_test_cases", 5)),
@@ -1358,8 +1381,8 @@ def main():
         "require_db_verify": bool(cfg_get("evidence.require_db_verify", True)),
         "require_click_entry": True,
         "require_citation": bool(cfg_get("evidence.require_citation", True)),
-        "root": _project_root(),
-        "config_found": bool(_project_root()),
+        "root": _root,
+        "config_found": bool(_root),
         "sources": oracle_sources(),
     }
     return report(run(args.evd, args.expect_tcs, opts), args.evd)
