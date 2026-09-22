@@ -226,6 +226,10 @@ function dimOracle(root, ix) {
     id: "oracle.specs", label: "requirement/spec documents exist as files", max: 10,
     got: specLike.length >= 3 ? 10 : specLike.length >= 1 ? 6 : 0,
     evidence: specLike.slice(0, 3).join(", "),
+    // The FOLDERS, not the files: a project declares the shelf, and the shelf
+    // stays right as documents are added to it. init writes these into
+    // oracle.specs, which is the one config field nobody can detect twice.
+    dirs: [...new Set(specLike.map((f) => f.split("/").slice(0, -1).join("/")).filter(Boolean))].slice(0, 4),
     gap: "Where is the written description of correct behaviour? Without it every verdict is my opinion against the developer's — and I will not guess an expected value.",
   });
 

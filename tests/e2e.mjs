@@ -426,6 +426,12 @@ for (const [label, cmd, args] of [
   const probed = path.join(tmp, "probed");
   fs.mkdirSync(probed, { recursive: true });
   fs.writeFileSync(path.join(probed, "README.md"), "# probed\n");
+  // A project with written requirements, because doctor now reds on one that
+  // has none: the gate resolves every citation against oracle.specs, and a
+  // lane installed over an empty list cannot produce a PASS anybody can check.
+  fs.mkdirSync(path.join(probed, "docs", "specs"), { recursive: true });
+  fs.writeFileSync(path.join(probed, "docs", "specs", "orders.md"),
+    "# Orders\n## 3.2 Totals\nR1 total = qty x price\n");
   spawnSync("git", ["init"], { cwd: probed, encoding: "utf8" });
   check(run(probed, ["init", "--yes", "--key", "P", "--surfaces", "web,api",
     "--start", "npm run dev", "--url", "http://127.0.0.1:1"]).status === 0,
@@ -453,6 +459,44 @@ for (const [label, cmd, args] of [
   const appLines = (doc.stdout.match(/^\s*[·✓]\s+app\s/gm) || []).length;
   check(appLines === 1, `doctor ran the app preflight ${appLines} times; it should dedupe to 1`);
   check(/doctor: (GREEN|AMBER)/.test(doc.stdout), `doctor verdict missing:\n${doc.stdout.slice(-400)}`);
+}
+
+// ---- 16. the oracle, end to end through the CLI -------------------------------
+// Everything else in this file proves a mechanism. This proves the promise: a
+// repo with written requirements installs a lane that can produce a PASS, and a
+// repo without them installs one that says so on the first doctor run instead
+// of on the evening somebody needs the verdict.
+{
+  const mk = (name, withSpecs) => {
+    const d = path.join(tmp, name);
+    fs.mkdirSync(d, { recursive: true });
+    fs.writeFileSync(path.join(d, "README.md"), `# ${name}\n`);
+    if (withSpecs) {
+      fs.mkdirSync(path.join(d, "docs", "specs"), { recursive: true });
+      fs.writeFileSync(path.join(d, "docs", "specs", "orders.md"),
+        "# Orders\n## 3.2 Totals\nR1 total = qty x price\n");
+    }
+    spawnSync("git", ["init"], { cwd: d, encoding: "utf8" });
+    check(run(d, ["init", "--yes", "--key", "O", "--surfaces", "web"]).status === 0,
+      `init failed for ${name}`);
+    return d;
+  };
+
+  const withDocs = mk("oracle-yes", true);
+  const cfg = fs.readFileSync(path.join(withDocs, "aiqa.config.yaml"), "utf8");
+  check(/^\s*specs: \[docs\/specs\]/m.test(cfg),
+    `init found docs/specs and did not declare it:\n${/^oracle:[\s\S]*?^\S/m.exec(cfg)?.[0] || cfg.slice(0, 200)}`);
+  check(/^\s*require_citation: true/m.test(cfg), "the citation rule is not on by default");
+  check(/✓ oracle declared/.test(run(withDocs, ["doctor"]).stdout),
+    "doctor did not confirm the declared oracle");
+
+  const without = mk("oracle-no", false);
+  const bare = fs.readFileSync(path.join(without, "aiqa.config.yaml"), "utf8");
+  check(/^\s*specs: \[\]/m.test(bare), "init invented an oracle in a repo that has none");
+  const d2 = run(without, ["doctor"]).stdout;
+  check(/oracle\.specs is empty/.test(d2),
+    `doctor stayed quiet about a project with no oracle:\n${d2.slice(-400)}`);
+  check(/doctor: RED/.test(d2), "a project with no oracle should not get a green doctor");
 }
 
 // ---- report --------------------------------------------------------------------

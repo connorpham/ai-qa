@@ -99,6 +99,25 @@ export async function doctor(flags) {
     record("red", "Python config reader installed", `missing ${path.relative(root, pyCtx)}`);
   }
 
+  // ---- 1b. the oracle -------------------------------------------------------
+  // Declared and missing is the worst of the three states: the gate resolves
+  // citations against this list, so a deleted spec turns every honest citation
+  // into a red nobody can explain from the case record alone.
+  const specs = [].concat(get(cfg, "oracle.specs", []) || []).map(String).filter(Boolean);
+  const citing = get(cfg, "evidence.require_citation", true) !== false;
+  if (!specs.length) {
+    record(citing ? "red" : "amber", "an oracle is declared",
+      "oracle.specs is empty — every case that reaches a verdict will red the evidence gate.\n"
+      + (citing
+        ? "list the documents that decide what 'correct' means, or set evidence.require_citation: false"
+        : "require_citation is off, so this is only recorded, not enforced"));
+  } else {
+    const gone = specs.filter((p) => !fs.existsSync(path.join(root, p)));
+    record(gone.length ? "red" : "green", `oracle declared (${specs.join(", ")})`,
+      gone.length ? `declared but not on disk: ${gone.join(", ")}\n`
+        + "a citation pointing here cannot be opened, and the gate will refuse it" : "");
+  }
+
   // ---- 2. integrity ---------------------------------------------------------
   const man = verify(root);
   if (!man.total) {

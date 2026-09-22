@@ -63,6 +63,19 @@ export function detectDbEnv(root) {
   return m ? m[1] : (env ? "" : "DATABASE_URL");
 }
 
+/** The folders that look like they hold the written requirements.
+ *
+ * A SUGGESTION, never a decision: the answer set carries it so a wizard can
+ * offer it, and both wizards make a human confirm. An oracle the tool picked
+ * on its own is the thing the whole doctrine exists to refuse.
+ */
+export function detectSpecDirs(scan) {
+  const check = (scan.dimensions || []).flatMap((d) => d.checks || [])
+    .find((k) => k.id === "oracle.specs");
+  return ((check && check.dirs) || [])
+    .filter((d) => !d.startsWith(".") && !/(^|\/)(node_modules|vendor|dist|build)(\/|$)/.test(d));
+}
+
 /** One pre-filled answer set, shared by both wizards. Flags win over detection,
  * detection wins over a blank field, and a blank field stays blank. */
 export function detectDefaults(root, scan, flags = {}) {
@@ -79,6 +92,8 @@ export function detectDefaults(root, scan, flags = {}) {
     url: flags.url ? String(flags.url) : detectUrl(root, f),
     health: "",
     apiBase: "",
+    specs: flags.specs ? String(flags.specs).split(",").map((x) => x.trim()).filter(Boolean)
+                       : detectSpecDirs(scan),
     contract: detectContract(root),
     schema: detectSchema(root),
     dbUrlEnv: detectDbEnv(root),

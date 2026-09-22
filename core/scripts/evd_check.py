@@ -48,6 +48,20 @@ FINDING_DIR = re.compile(r"^F(\d+)(?:_([A-Za-z0-9][A-Za-z0-9_-]*))?$")
 SEVERITIES = ("Blocker", "Critical", "Major", "Minor")
 ORIGINS = ("DEV", "SPEC")
 
+# A citation nobody can open is worse than no citation: it wears the uniform of
+# evidence. Three shapes are legal here and no fourth — a document this project
+# declared as its oracle, with the section inside it; the schema, for a data
+# rule; or a named floor rule, the small set of outcomes (no 500, no data loss,
+# no secret in a response) that are wrong whether or not anyone wrote them down.
+#
+# A bare section number is none of the three. "3.2" is a citation only to the
+# person who already knows which file it lives in, and that person is never the
+# one reading the report six weeks later.
+CITE_FLOOR = re.compile(r"(?i)^floor\b[\s:]*(.*)$")
+CITE_SEP = re.compile(r"[;\n]|\s+and\s+")
+# A path token: it has a directory in it, or an extension on the end.
+CITE_PATH = re.compile(r"^[^\s]*(?:/[^\s]*|\.[A-Za-z0-9]{1,9})$")
+
 # Fields every case manifest must carry. The names are the discipline: a field
 # you have to fill in is a question you cannot skip.
 REQUIRED_FIELDS = ("RESULT", "AS", "PRECONDITION", "ENTRY", "STEPS", "EXPECTED", "ACTUAL")
@@ -225,6 +239,41 @@ def cfg_get(dotted, default):
         return default
 
 
+def _project_root():
+    """The project a citation resolves against — or "" when there isn't one.
+
+    Empty on purpose. `ctx.find_root()` falls back to the CURRENT directory
+    when no config is found, and a root that is merely wherever you happened to
+    be standing turns every citation into a lie about a file that exists
+    somewhere else. Empty lets run() use the evidence's own location instead.
+    """
+    if ctx is None:
+        return ""
+    try:
+        root = ctx.find_root()
+    except Exception:
+        return ""
+    return root if os.path.exists(os.path.join(root, "aiqa.config.yaml")) else ""
+
+
+def oracle_sources():
+    """The documents this project has declared decide what 'correct' means.
+
+    The schema and the API contract count: a data rule is cited from the model
+    and a response shape from the contract, and neither belongs in oracle.specs.
+    A design URL does not — you cannot open it from a gate, so it is not a
+    document this can resolve.
+    """
+    out = []
+    for dotted in ("oracle.specs", "api.contract", "database.schema"):
+        v = cfg_get(dotted, None)
+        if isinstance(v, list):
+            out.extend(str(x) for x in v if str(x).strip())
+        elif isinstance(v, str) and v.strip():
+            out.append(v.strip())
+    return [_norm(x) for x in out if "://" not in x]
+
+
 def check_case(case_dir, res, opts):
     name = os.path.basename(case_dir)
     m = CASE_DIR.match(name)
@@ -264,6 +313,17 @@ def check_case(case_dir, res, opts):
     result = f.get("RESULT", "").upper()
     if result and result not in CASE_RESULTS:
         res.err(name, "RESULT is {!r}; must be one of {}".format(result, "/".join(CASE_RESULTS)))
+
+    # The citation, before the early return for BLOCKED: a case that ran made a
+    # claim, and a claim with no source is this tester's opinion in a uniform.
+    if opts.get("require_citation") and result and result != "BLOCKED":
+        req = f.get("REQUIREMENT", "")
+        if not req:
+            res.err(name, "case.md has no REQUIREMENT: — a {} with nothing cited is an opinion. "
+                          "Name the document and section the EXPECTED was read out of, or the "
+                          "floor rule it rests on (REQUIREMENT: FLOOR <rule>)".format(result))
+        else:
+            check_citation(name, "REQUIREMENT", req, res, opts)
 
     if kind and kind not in KINDS:
         res.err(name, "KIND is {!r}; must be one of {}".format(kind, ", ".join(KINDS)))
@@ -392,7 +452,62 @@ def _why(key):
         "ACTUAL": "what actually happened",
         "AFTER": "what changed, including whether it survives a reload",
         "BACK": "Back and Cancel — where 'it works' usually stops working",
+        "REQUIREMENT": "the document and section the EXPECTED was read out of",
     }.get(key, "required")
+
+
+def _norm(p):
+    return p.replace("\\", "/").strip().strip("/")
+
+
+def _declared(path, sources):
+    """Is this document one the project declared as a source of 'correct'?
+
+    A source may be a file or a folder; citing `docs/specs/orders.md` against a
+    declared `docs/specs` is the ordinary case, because a project declares the
+    shelf, not every book on it.
+    """
+    p = _norm(path)
+    return any(p == _norm(s) or p.startswith(_norm(s) + "/") for s in sources)
+
+
+def check_citation(where, label, value, res, opts):
+    """Every claim names where 'correct' is written down — and the name resolves.
+
+    Checked in that order on purpose. A citation that names nothing is the
+    common failure; a citation that names a file which does not exist is the
+    dangerous one, because it survives review.
+    """
+    root, sources = opts.get("root") or ".", opts.get("sources") or []
+    parts = [p.strip() for p in CITE_SEP.split(value) if p.strip()]
+    if not parts:
+        res.err(where, "{} is empty — name the document and section, or the floor rule".format(label))
+        return
+    for part in parts:
+        floor = CITE_FLOOR.match(part)
+        if floor:
+            if not floor.group(1).strip():
+                res.err(where, "{} says FLOOR and stops — name which floor rule this rests on, "
+                               "e.g. 'FLOOR: no unhandled 500 on a valid request'".format(label))
+            continue
+        tok = part.split()[0].rstrip(",;") if part.split() else ""
+        if not CITE_PATH.match(tok):
+            res.err(where, "{} is {!r} — that is a section number, not a citation. Which document "
+                           "is it in? Write the path first and the section after it: "
+                           "'docs/specs/orders.md 3.2 R1'".format(label, part))
+            continue
+        if not os.path.exists(os.path.join(root, tok)):
+            res.err(where, "{} cites {!r}, and there is no such file under {}. A citation nobody "
+                           "can open is not evidence; it is the APPEARANCE of evidence, "
+                           "which is worse"
+                           .format(label, tok, os.path.abspath(root)))
+            continue
+        if sources and not _declared(tok, sources):
+            res.err(where, "{} cites {!r}, which this project has not declared as an oracle. "
+                           "Declared: {}. Either cite one of those, or add this document to "
+                           "oracle.specs in aiqa.config.yaml — an oracle nobody agreed on in "
+                           "advance is one picked after the result was known"
+                           .format(label, tok, ", ".join(sources)))
 
 
 def check_findings(evd, res, verdict):
@@ -465,7 +580,7 @@ def check_findings(evd, res, verdict):
                            "response that made you believe it")
 
 
-def check_report(evd, res):
+def check_report(evd, res, opts):
     path = os.path.join(evd, "REPORT.md")
     if not os.path.exists(path):
         res.err("REPORT.md", "missing — the report is the deliverable; everything else is preparation")
@@ -492,6 +607,21 @@ def check_report(evd, res):
         if not re.search(r"(?i)origin", text):
             res.err("REPORT.md", "a failing verdict with no Origin (DEV or SPEC) — a spec-origin "
                                  "finding sent to a developer produces a fix that is still wrong")
+
+    # ORACLE: NONE used to be free. It is not: a PASS is a statement that the
+    # product matches something, and NONE says there was nothing to match. The
+    # honest verdict in that situation is BLOCKED, and saying so is the service.
+    m = re.search(r"(?im)^\s*ORACLE:\s*(.+)$", text)
+    oracle = m.group(1).strip() if m else ""
+    if opts.get("require_citation") and oracle:
+        if re.match(r"(?i)^none\b", oracle):
+            if verdict in ("PASS", "PARTIAL"):
+                res.err("REPORT.md", "ORACLE: NONE on a {} verdict — you cannot certify that the "
+                                     "product matches the specification and in the same breath say "
+                                     "there is no specification. Cite the document, or report "
+                                     "BLOCKED (no oracle) and say what needs writing".format(verdict))
+        else:
+            check_citation("REPORT.md", "ORACLE", oracle, res, opts)
 
     # Jargon in the body is not fatal, but it is the most common reason a report
     # gets ignored by the person who most needed to read it.
@@ -565,6 +695,12 @@ def check_coverage(evd, res, cases):
 
 def run(evd, expect_tcs, opts):
     res = Result()
+    # Two levels up from evd/<TICKET> is the project, and citations resolve
+    # against it. main() passes the root it found from the config, which is
+    # better; this is the fallback that keeps the gate usable when someone runs
+    # it by hand from somewhere else.
+    opts = dict(opts, root=opts.get("root")
+                or os.path.dirname(os.path.dirname(os.path.abspath(evd))))
     if not os.path.isdir(evd):
         res.err(evd, "no such evidence folder")
         return res
@@ -621,7 +757,17 @@ def run(evd, expect_tcs, opts):
             res.err(INDEX_FILE, "{} — the folder cannot introduce itself. Run: "
                                    "python3 .ai-qa/scripts/evd_index.py --evd {}".format(why, evd))
 
-    verdict = check_report(evd, res)
+    # Only when a config was actually found. "Nothing declared" and "nobody
+    # asked me to read a config" are different facts, and a gate that reds on
+    # the second one is a gate people learn to ignore. The per-case citations
+    # still hold either way — every claim names a document that opens.
+    if opts.get("require_citation") and ran and opts.get("config_found") and not opts.get("sources"):
+        res.err("aiqa.config.yaml", "no oracle is declared (oracle.specs is empty) and {} case(s) "
+                                    "here still reached a verdict. List the documents that decide "
+                                    "what 'correct' means — until one exists, every PASS in this "
+                                    "pack is an opinion".format(len(ran)))
+
+    verdict = check_report(evd, res, opts)
     check_findings(evd, res, verdict)
     check_coverage(evd, res, cases)
 
@@ -653,6 +799,7 @@ AS: staff@demo (role STAFF)
 PRECONDITION: order #4102 exists, state PENDING
 ENTRY: signed in -> Orders -> filter Pending -> row #4102 -> Edit
 STEPS: 1. change quantity 2 -> 3   2. press Save
+REQUIREMENT: docs/specs/orders.md 3.2 R1
 EXPECTED: total recalculates to 450,000 (spec 3.2)
 ACTUAL: total shows 450,000, "Saved" message appears
 AFTER: list row shows 3; value survives a reload
@@ -704,8 +851,26 @@ def _mkcase(root, name, manifest, images=True):
     return d
 
 
+def _fake_project(tmp):
+    """A project around the evidence, because citations resolve against one.
+
+    `docs/specs/orders.md` is the declared oracle; `README.md` exists and is
+    NOT declared, which is how the selftest can tell "the file is missing" from
+    "the file is not an oracle" — two different lies, two different reds.
+    """
+    os.makedirs(os.path.join(tmp, "docs", "specs"), exist_ok=True)
+    for rel, body in (("docs/specs/orders.md", "# Orders\n## 3.2 Totals\nR1 total = qty x price\n"),
+                      ("README.md", "# demo\n")):
+        with open(os.path.join(tmp, *rel.split("/")), "w", encoding="utf-8") as fh:
+            fh.write(body)
+
+
 def _green_fixture(root):
     os.makedirs(root, exist_ok=True)
+    # A pack cites documents, so the fixture has to stand in a project that has
+    # them. Two levels up from evd/<TICKET> is that project — the same arithmetic
+    # the gate does when nobody hands it a root.
+    _fake_project(os.path.dirname(os.path.dirname(os.path.abspath(root))))
     for n, t in ((INDEX_FILE, "# SHOP-142\nWhat was checked, in plain language.\n\n"
                   "COVERAGE:\n- security: n/a — read-only pricing display, no auth, session or "
                   "write path touched\n- accessibility: TC_3\n"),
@@ -735,7 +900,8 @@ def _green_fixture(root):
 DEFAULT_OPTS = {
     "min_tcs": 2, "max_tcs": 5, "require_boundary": True, "require_whole_screen": True,
     "require_reload": True, "require_annotation": True, "require_db_verify": True,
-    "require_click_entry": True,
+    "require_click_entry": True, "require_citation": True,
+    "sources": ["docs/specs"], "config_found": True,
 }
 
 
@@ -748,7 +914,9 @@ def selftest():
             fails.append(msg)
 
     def fresh(name):
-        d = os.path.join(tmp, name)
+        # Under evd/ so the gate's own "two levels up is the project" fallback
+        # is what resolves the citations — the selftest runs the real rule.
+        d = os.path.join(tmp, "evd", name)
         if os.path.exists(d):
             shutil.rmtree(d)
         return _green_fixture(d)
@@ -839,6 +1007,22 @@ def selftest():
             lambda t: re.sub(r"(?im)^(\s*-\s*security:).*$", r"\1 n/a", t))),
         ("COVERAGE cites a case that does not exist", lambda d: _rewrite(d, INDEX_FILE,
             lambda t: t.replace("accessibility: TC_3", "accessibility: TC_9"))),
+        # Citations. Each of these has been a real report: a claim with no
+        # source, a source nobody can open, a source nobody agreed on.
+        ("case with no REQUIREMENT", lambda d: _rewrite(d, C1 + "/case.md",
+            lambda t: re.sub(r"(?m)^REQUIREMENT:.*\n", "", t))),
+        ("REQUIREMENT is a section number with no document", lambda d: _rewrite(d, C1 + "/case.md",
+            lambda t: re.sub(r"(?m)^REQUIREMENT:.*$", "REQUIREMENT: 3.2 R1", t))),
+        ("REQUIREMENT cites a file that does not exist", lambda d: _rewrite(d, C1 + "/case.md",
+            lambda t: re.sub(r"(?m)^REQUIREMENT:.*$", "REQUIREMENT: docs/specs/gone.md 3.2", t))),
+        ("REQUIREMENT cites a document nobody declared an oracle", lambda d: _rewrite(d, C1 + "/case.md",
+            lambda t: re.sub(r"(?m)^REQUIREMENT:.*$", "REQUIREMENT: README.md intro", t))),
+        ("REQUIREMENT says FLOOR and names no rule", lambda d: _rewrite(d, C1 + "/case.md",
+            lambda t: re.sub(r"(?m)^REQUIREMENT:.*$", "REQUIREMENT: FLOOR", t))),
+        ("ORACLE: NONE under a PASS verdict", lambda d: _rewrite(d, "REPORT.md",
+            lambda t: t.replace("ORACLE: docs/specs/orders.md 3.2", "ORACLE: NONE"))),
+        ("ORACLE cites a file that does not exist", lambda d: _rewrite(d, "REPORT.md",
+            lambda t: t.replace("ORACLE: docs/specs/orders.md 3.2", "ORACLE: docs/specs/gone.md 3.2"))),
     ]
     for i, (label, mutate) in enumerate(mutations):
         d = fresh("mut{}".format(i))
@@ -863,7 +1047,28 @@ def selftest():
              + "REASON: no account has refund permission\nUNBLOCK: ops to grant refund role to qa@demo\n")
     if evd_index is not None:
         evd_index.write(d)
+    _rewrite(d, C1 + "/case.md", lambda t: re.sub(r"(?m)^REQUIREMENT:.*\n", "", t))
     expect(run(d, None, DEFAULT_OPTS).ok, "a fully-declared BLOCKED case should not red the gate")
+
+    # 3b. citations: the three legal shapes, and the one situation that has no
+    #     shape at all. A rule with no way to say "nothing is written down"
+    #     does not produce citations, it produces invented ones.
+    d = fresh("floor")
+    _rewrite(d, C1 + "/case.md", lambda t: re.sub(
+        r"(?m)^REQUIREMENT:.*$", "REQUIREMENT: FLOOR no unhandled 500 on a valid request", t))
+    expect(run(d, None, DEFAULT_OPTS).ok, "a named floor rule is a legal citation and must pass")
+
+    d = fresh("oracle-none-blocked")
+    _rewrite(d, "REPORT.md", lambda t: t.replace("— PASS", "— BLOCKED")
+             .replace("ORACLE: docs/specs/orders.md 3.2", "ORACLE: NONE"))
+    expect(run(d, None, DEFAULT_OPTS).ok,
+           "ORACLE: NONE under a BLOCKED verdict is the honest answer and must pass")
+
+    d = fresh("undeclared-oracle")
+    expect(not run(d, None, dict(DEFAULT_OPTS, sources=[])).ok,
+           "a pack that reached a verdict with no declared oracle did not go red")
+    expect(run(d, None, dict(DEFAULT_OPTS, require_citation=False)).ok,
+           "require_citation: false did not turn the rule off")
 
     # 4. a non-UI case WITH its verification file must pass
     d = fresh("nonui")
@@ -965,6 +1170,10 @@ def main():
         "require_annotation": bool(cfg_get("evidence.require_annotation", True)),
         "require_db_verify": bool(cfg_get("evidence.require_db_verify", True)),
         "require_click_entry": True,
+        "require_citation": bool(cfg_get("evidence.require_citation", True)),
+        "root": _project_root(),
+        "config_found": bool(_project_root()),
+        "sources": oracle_sources(),
     }
     return report(run(args.evd, args.expect_tcs, opts), args.evd)
 
