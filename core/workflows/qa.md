@@ -33,7 +33,7 @@ report says.
    |---|---|---|
    | a declared document, then the section | `docs/specs/orders.md 3.2 R1` | the normal case |
    | the schema or the API contract | `prisma/schema.prisma Order:total` | a data or response-shape rule |
-   | a named floor rule | `FLOOR no unhandled 500 on a valid request` | nothing is written, and the outcome is wrong anyway |
+   | a named floor rule | `FLOOR unhandled-error` | nothing is written, and the outcome is wrong anyway |
 
    A bare `3.2` is **not** a citation: it names a section to someone who already
    knows the file, and that is never the person reading the report six weeks
@@ -292,7 +292,11 @@ are what turn a folder of prose into a row somebody can sort, count and act on:
   not name was a hunch.
 - **REQUIREMENT** — **gate-enforced.** Where this case's EXPECTED was read out
   of: the document first, the section after it
-  (`docs/specs/orders.md 3.2 R1; docs/specs/orders.md 3.3`), or `FLOOR <rule>`
+  (`docs/specs/orders.md 3.2 R1; docs/specs/orders.md 3.3`), or `FLOOR <id>`
+  where `<id>` is one of `auth-bypass`, `authz-bypass`, `injection-executed`,
+  `secret-leaked`, `session-outlives`, `unhandled-error`, `data-loss` — the
+  gate refuses free text there, because a baseline you wrote yourself is not a
+  baseline
   when nothing is written and the outcome is wrong anyway. Several sources are
   separated by `;`. Only a `RESULT: BLOCKED` case may leave it out — a case that
   never ran derived no expected value. Without it the traceability matrix has to
@@ -521,6 +525,25 @@ COVERAGE:
 - accessibility: TC_6  (or)   accessibility: n/a — backend migration, no UI in this change
 ```
 
+**Audit the project's own checklist.** If `docs/qa/checklists.md` exists and
+gives its rows ids, write a `CHECKLIST:` block in the same prose — **one line
+per id**, and the gate reds on any id you leave out by name:
+
+```markdown
+CHECKLIST:
+- CL-01: TC_2
+- CL-02: n/a — this screen has no export
+```
+
+"All items covered" is not an audit. It is a sentence, and the gate refuses it
+for the same reason it refuses `EXPECTED: works as expected`.
+
+**The accessibility case is decided by numbers.** Whatever case `COVERAGE:`
+names for accessibility must record a measurement — a contrast ratio (`7.1:1`),
+a target size (`44x44`, `44px`) — not a sentence saying something looks fine.
+Numbers survive translation; "the label is visible" is an opinion about a
+screen.
+
 The gate reds on a pack that says nothing — because "nobody wrote it into the
 ticket" is exactly how a whole class of defect goes untested while the pack
 looks complete. A waiver is a five-second honest answer; the silent skip is what
@@ -626,6 +649,13 @@ in the template is for the person reading it.
 3. Challenger finds a hole → **run the decisive experiment**. Never argue in
    prose. Append the resolution and a `Remaining dissent:` line.
 4. Agreement reached without any run that actually executed = UNCLEAR, not PASS.
+
+**The gate reads `debate.md`, it does not count it.** Three things by name, or
+it goes red: `MY WEAK SPOT:` (written *before* the challenger arrives), a
+challenge that names a `TC_n`, and `RESOLUTION:` or `Remaining dissent:`. On a
+tool that cannot spawn a subagent the same model writes both cards, so an
+empty ritual is the default outcome rather than the unlucky one — these three
+lines are what stop it being a file containing the word "ok".
 
 ## V7 — REPORT AND CLOSE
 

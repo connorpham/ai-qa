@@ -87,14 +87,18 @@ project:
   language: ${a.language}
   adopted: ${today}
 
-paths:
-  specs: docs/specs
-  qa: docs/qa
-  evidence: evd
-  onboarding: docs/qa/onboarding.md
-  known_issues: docs/qa/known-issues.md
-  lessons: docs/qa/lessons.md
-  checklists: docs/qa/checklists.md
+# Where things live. FIXED, not configurable — every one of these paths is
+# written into the gates and the workflows, so a 'paths:' block that looked
+# editable was a lie: changing 'evidence: evd' to anything else moved nothing
+# and broke nothing, because nothing read it.
+#
+#   docs/specs/              the oracle (declare the ones that count under 'oracle:')
+#   docs/qa/onboarding.md    the dossier a new QA reads first
+#   docs/qa/known-issues.md  deduped against before anything is called a bug
+#   docs/qa/lessons.md       what previous verifications learned
+#   docs/qa/checklists.md    this project's acceptance criteria, audited per pack
+#   docs/qa/method/          the doctrine the lane reads at runtime
+#   evd/<TICKET>/            one evidence pack per ticket
 
 # Which surfaces this product presents. Each one activates its gates and its
 # branch of the /qa workflow — a migration is not verified the way a screen is.

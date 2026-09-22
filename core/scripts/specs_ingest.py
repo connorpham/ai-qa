@@ -33,6 +33,72 @@ def clean_val(c):
     return val.replace("\r\n", " ").replace("\n", " ").replace("|", "\\|")
 
 
+def read_text(path):
+    with open(path, "r", encoding="utf-8", errors="replace") as fh:
+        return fh.read()
+
+
+def spec_id_of(file_path):
+    """The id a spec is cited by. From the filename, because that is the one
+    thing a reader can see before opening anything."""
+    fname = os.path.basename(file_path)
+    m = re.search(r"(SC-[A-Z0-9]+-[A-Z0-9]+|[A-Z]{2,}-[A-Z0-9_-]+)", fname)
+    return m.group(1) if m else os.path.splitext(fname)[0]
+
+
+def parse_markdown_spec(file_path):
+    """A spec already written in Markdown.
+
+    It needs no conversion — only an identity, so the index can list it and a
+    case can cite it. This function existed as the word `pass` for one release:
+    the feature was announced, markdown sources were collected into nothing,
+    and the run reported success.
+    """
+    text = read_text(file_path)
+    mtime = datetime.fromtimestamp(os.path.getmtime(file_path)).strftime("%Y-%m-%d %H:%M:%S")
+    title_m = re.search(r"(?m)^#\s+(.+?)\s*$", text)
+    return {
+        "id": spec_id_of(file_path),
+        "title": title_m.group(1) if title_m else os.path.splitext(os.path.basename(file_path))[0],
+        "file_mtime": mtime,
+        "latest_version": "1.0",
+        "latest_author": "",
+        "latest_change": "Imported as written",
+        "latest_date": mtime.split(" ")[0],
+        "history": [],
+        "functions": [],
+        "validations": [],
+        "source_file": file_path,
+    }
+
+
+def _yaml_str(value):
+    """A YAML double-quoted scalar that survives a quote in a spreadsheet cell.
+
+    Unescaped, one `"` in an author's name broke the frontmatter of the
+    document the whole verification then cites.
+    """
+    return '"{}"'.format(str(value).replace("\\", "\\\\").replace('"', '\\"')
+                         .replace("\n", " ").replace("\r", " "))
+
+
+def render_md_frontmatter(data, rel_source):
+    converted_at = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+    return "\n".join([
+        "---",
+        "id: " + _yaml_str(data["id"]),
+        "title: " + _yaml_str(data["title"]),
+        "version: " + _yaml_str(data["latest_version"]),
+        "last_updated: " + _yaml_str(data["latest_date"]),
+        "source_file: " + _yaml_str(rel_source),
+        "source_mtime: " + _yaml_str(data["file_mtime"]),
+        "converted_at: " + _yaml_str(converted_at),
+        "---",
+        "",
+        "",
+    ])
+
+
 def parse_xlsx_spec(file_path):
     """Extract structured data from an Excel design specification file."""
     if openpyxl is None:
@@ -162,15 +228,15 @@ def render_spec_markdown(data, rel_source=None):
 
     lines = [
         "---",
-        f"id: \"{data['id']}\"",
-        f"title: \"{data['title']}\"",
-        f"version: \"{data['latest_version']}\"",
-        f"last_updated: \"{data['latest_date']}\"",
-        f"last_author: \"{data['latest_author']}\"",
-        f"last_change: \"{data['latest_change']}\"",
-        f"source_file: \"{src}\"",
-        f"source_mtime: \"{data['file_mtime']}\"",
-        f"converted_at: \"{converted_at}\"",
+        "id: " + _yaml_str(data["id"]),
+        "title: " + _yaml_str(data["title"]),
+        "version: " + _yaml_str(data["latest_version"]),
+        "last_updated: " + _yaml_str(data["latest_date"]),
+        "last_author: " + _yaml_str(data["latest_author"]),
+        "last_change: " + _yaml_str(data["latest_change"]),
+        "source_file: " + _yaml_str(src),
+        "source_mtime: " + _yaml_str(data["file_mtime"]),
+        "converted_at: " + _yaml_str(converted_at),
         "---",
         "",
         f"# [{data['id']}] {data['title']}",
@@ -235,30 +301,49 @@ def ingest_directory(source_dir, out_dir):
     screens_dir = os.path.join(out_dir, "screens")
     os.makedirs(screens_dir, exist_ok=True)
 
+    # A single file is a legal source. `--source <dir|file>` said so from the
+    # first line of the usage text, and os.walk on a file yields nothing — so
+    # the documented form reported "no specifications found" and exited 0.
+    if os.path.isfile(source_dir):
+        candidates = [(os.path.dirname(source_dir) or ".", [os.path.basename(source_dir)])]
+        base = os.path.dirname(source_dir) or "."
+    else:
+        candidates = [(root, files) for root, _dirs, files in os.walk(source_dir)
+                      if not any(p in ("[old]", "old", "bk", "BK", "対象外", "backup", "tmp")
+                                 for p in root.split(os.sep))]
+        base = source_dir
+
     active_files = []
-    for root, dirs, files in os.walk(source_dir):
-        parts = root.split(os.sep)
-        if any(p in ("[old]", "old", "bk", "BK", "対象外", "backup", "tmp") for p in parts):
-            continue
+    for root, files in candidates:
         for f in files:
-            if f.endswith(".xlsx") and not f.startswith("~$"):
+            if f.startswith("~$"):
+                continue
+            # Markdown counts. The feature was announced, and the code said
+            # `pass` — a spec already written in Markdown was silently dropped.
+            if f.endswith(".xlsx") or (f.endswith(".md") and f not in ("README.md", "index.md")):
                 active_files.append(os.path.join(root, f))
-            elif f.endswith(".md") and f not in ("README.md", "index.md"):
-                # Also accept markdown specs
-                pass
 
     if not active_files:
-        print(f"No valid specification files found in {source_dir}")
-        return 0
+        # (converted, failed) — one shape for every exit, so a caller never has
+        # to ask which kind of zero it just got back.
+        print(f"No valid specification files found in {source_dir}", file=sys.stderr)
+        return 0, 0
 
     index_entries = []
     count = 0
 
+    failed = []
     for fpath in sorted(active_files):
         try:
-            rel = os.path.relpath(fpath, source_dir)
-            data = parse_xlsx_spec(fpath)
-            md_text = render_spec_markdown(data, rel_source=rel)
+            rel = os.path.relpath(fpath, base)
+            if fpath.endswith(".md"):
+                data = parse_markdown_spec(fpath)
+                md_text = read_text(fpath)
+                if not md_text.lstrip().startswith("---"):
+                    md_text = render_md_frontmatter(data, rel) + md_text
+            else:
+                data = parse_xlsx_spec(fpath)
+                md_text = render_spec_markdown(data, rel_source=rel)
             out_file = os.path.join(screens_dir, f"{data['id']}.md")
 
             with open(out_file, "w", encoding="utf-8") as fh:
@@ -275,6 +360,7 @@ def ingest_directory(source_dir, out_dir):
             })
             count += 1
         except Exception as e:
+            failed.append((os.path.basename(fpath), str(e)))
             print(f"Warning: Failed to convert {os.path.basename(fpath)}: {e}", file=sys.stderr)
 
     # Master index README.md
@@ -297,61 +383,176 @@ def ingest_directory(source_dir, out_dir):
     with open(index_path, "w", encoding="utf-8") as fh:
         fh.write("\n".join(index_lines) + "\n")
 
-    print(f"Successfully converted {count} specifications into {out_dir}")
+    print(f"Converted {count} of {len(active_files)} specifications into {out_dir}")
     print(f"Master index generated at {index_path}")
-    return count
+    # A spec that did not convert is an oracle that is not there. Reporting that
+    # as success is how a verification later cites a document nobody wrote.
+    if failed:
+        print(f"{len(failed)} source(s) did NOT convert — these specs do not exist to cite:",
+              file=sys.stderr)
+        for name, why in failed:
+            print(f"  x {name}: {why}", file=sys.stderr)
+    return count, len(failed)
+
+
+def audit_specs(specs_dir):
+    """What is in docs/specs, and what a case could not cite.
+
+    `--audit` was in the usage text, in --help and in argparse, and `main()`
+    never handled it: the flag printed the help and exited 1. A documented
+    capability that silently does nothing is worse than a missing one, because
+    somebody builds a process on top of it.
+    """
+    if not os.path.isdir(specs_dir):
+        print("No specs directory at {}".format(specs_dir), file=sys.stderr)
+        return 1
+
+    found, problems = [], []
+    for root, _dirs, files in os.walk(specs_dir):
+        for f in sorted(files):
+            if not f.endswith(".md") or f in ("README.md", "index.md"):
+                continue
+            p = os.path.join(root, f)
+            rel = os.path.relpath(p, specs_dir)
+            text = read_text(p)
+            fm = re.match(r"(?s)^---\n(.*?)\n---\n", text)
+            sid = ""
+            if fm:
+                m = re.search(r"(?m)^id:\s*\"?([^\"\n]+)\"?\s*$", fm.group(1))
+                sid = (m.group(1).strip() if m else "")
+            found.append((rel, sid))
+            if not fm:
+                problems.append((rel, "no YAML frontmatter — nothing records where this came from"))
+            elif not sid:
+                problems.append((rel, "frontmatter has no id — a case cannot cite it by name"))
+            if len(text.strip()) < 40:
+                problems.append((rel, "almost empty — it cannot decide what 'correct' means"))
+
+    print("{} spec document(s) under {}".format(len(found), specs_dir))
+    for rel, sid in found:
+        print("  {:<48} {}".format(rel, sid or "(no id)"))
+    if problems:
+        print("\n{} problem(s) — these cannot serve as an oracle:".format(len(problems)),
+              file=sys.stderr)
+        for rel, why in problems:
+            print("  x {}: {}".format(rel, why), file=sys.stderr)
+        return 1
+    return 0
 
 
 def selftest():
-    """Verify that specs_ingest functions properly."""
+    """Prove this converter can fail.
+
+    The previous selftest built a dictionary by hand, rendered it, and asserted
+    four substrings. Both parsers could be replaced with `return {}` and it
+    still printed PASS — a gate that cannot go red, wired into `ai-qa doctor`,
+    printing a tick beside work nobody had checked.
+
+    So: mutations. Each one breaks something real, and each one must be caught.
+    """
     tmp = tempfile.mkdtemp(prefix="aiqa-specs-test-")
+    fails = []
+
+    def expect(cond, msg):
+        if not cond:
+            fails.append(msg)
+
     try:
-        sample_data = {
-            "id": "SC-DEMO-001",
-            "title": "Order Placement",
-            "file_mtime": "2026-09-22 10:00:00",
-            "latest_version": "1.2",
-            "latest_author": "Tester",
-            "latest_change": "Added quantity check",
-            "latest_date": "2026-09-22",
-            "history": [
-                {"no": "1", "date": "2026-09-01", "author": "Alice", "desc": "Initial draft"},
-                {"no": "2", "date": "2026-09-22", "author": "Tester", "desc": "Added quantity check"},
-            ],
-            "functions": [
-                {"no": "1", "name": "Place Order", "desc": "Submits cart to DB", "table": "orders"}
-            ],
-            "validations": [
-                {"no": "1", "name": "Min Qty", "desc": "Quantity must be >= 1", "type": "Error"}
-            ],
-            "source_file": "/tmp/orders.xlsx"
+        src = os.path.join(tmp, "src")
+        out = os.path.join(tmp, "out")
+        os.makedirs(src)
+        with open(os.path.join(src, "SC-ORD-001.md"), "w", encoding="utf-8") as fh:
+            fh.write("# Order screen\n\n## 3.2 Totals\nR1 total = qty x price\n")
+
+        # 1. a Markdown spec is INGESTED, not silently dropped
+        count, failed = ingest_directory(src, out)
+        expect(count == 1, "a markdown spec was not ingested (count={})".format(count))
+        expect(failed == 0, "a clean run reported {} failures".format(failed))
+        produced = os.path.join(out, "screens", "SC-ORD-001.md")
+        expect(os.path.isfile(produced), "no output file for the markdown spec")
+        body = read_text(produced) if os.path.isfile(produced) else ""
+        expect(body.startswith("---"), "the ingested spec carries no frontmatter")
+        expect("SC-ORD-001" in body, "the ingested spec lost its id")
+        expect("R1 total = qty x price" in body, "the ingested spec lost the rule it exists to state")
+
+        # 2. a single FILE is a legal source — the usage text always said so
+        out2 = os.path.join(tmp, "out2")
+        count2, _ = ingest_directory(os.path.join(src, "SC-ORD-001.md"), out2)
+        expect(count2 == 1, "--source <file> ingested {} specs".format(count2))
+
+        # 3. a source that cannot convert is REPORTED, not counted as success
+        bad = os.path.join(tmp, "bad")
+        os.makedirs(bad)
+        with open(os.path.join(bad, "broken.xlsx"), "wb") as fh:
+            fh.write(b"this is not a workbook")
+        count3, failed3 = ingest_directory(bad, os.path.join(tmp, "out3"))
+        expect(count3 == 0 and failed3 == 1,
+               "a source that failed to convert was reported as {} converted / {} failed"
+               .format(count3, failed3))
+
+        # 4. an empty source is not a failure, and says so
+        empty = os.path.join(tmp, "empty")
+        os.makedirs(empty)
+        expect(ingest_directory(empty, os.path.join(tmp, "out4")) == (0, 0),
+               "an empty source directory did not report (0, 0)")
+
+        # 5. a quote in a cell must not break the frontmatter of the document
+        #    every later verdict cites
+        hostile = {
+            "id": 'SC-"X"-1', "title": 'The "Orders" screen', "file_mtime": "2026-09-22 10:00:00",
+            "latest_version": "1.0", "latest_author": 'A "B" C', "latest_change": 'said "no"',
+            "latest_date": "2026-09-22", "history": [], "functions": [], "validations": [],
+            "source_file": "/tmp/x.xlsx",
         }
-        md = render_spec_markdown(sample_data, rel_source="orders.xlsx")
-        assert "SC-DEMO-001" in md, "Missing ID in markdown"
-        assert "Added quantity check" in md, "Missing changelog description in markdown"
-        assert "source_mtime: \"2026-09-22 10:00:00\"" in md, "Missing source_mtime in frontmatter"
-        assert "converted_at:" in md, "Missing converted_at in frontmatter"
-        print("specs_ingest selftest: PASS")
-        return 0
+        md = render_spec_markdown(hostile, rel_source='a "b".xlsx')
+        fm = re.match(r"(?s)^---\n(.*?)\n---\n", md)
+        expect(fm is not None, "a quote in a cell destroyed the frontmatter block")
+        if fm:
+            for line in fm.group(1).splitlines():
+                k, _, v = line.partition(":")
+                v = v.strip()
+                expect(v.startswith('"') and v.endswith('"') and len(v) >= 2,
+                       "frontmatter field {!r} is not a quoted scalar: {!r}".format(k, v))
+
+        # 6. --audit reports, and reports PROBLEMS rather than a clean bill
+        expect(audit_specs(out) == 0, "--audit failed a directory it had just written")
+        with open(os.path.join(out, "screens", "naked.md"), "w", encoding="utf-8") as fh:
+            fh.write("# no frontmatter, nothing says where this came from\n" + "x" * 60 + "\n")
+        expect(audit_specs(out) == 1, "--audit passed a spec with no frontmatter")
+        expect(audit_specs(os.path.join(tmp, "nope")) == 1, "--audit passed a missing directory")
+
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+
+    if fails:
+        print("specs_ingest --selftest FAILED", file=sys.stderr)
+        for f in fails:
+            print("  x {}".format(f), file=sys.stderr)
+        return 1
+    print("specs_ingest --selftest passed  (markdown ingested, single file, failures counted, "
+          "quotes escaped, audit reports)")
+    return 0
 
 
 def main():
     parser = argparse.ArgumentParser(description="Ingest specifications into Git-tracked Markdown")
     parser.add_argument("--source", type=str, help="Source directory or file of specifications")
     parser.add_argument("--out", type=str, default="docs/specs", help="Target output directory (default: docs/specs)")
-    parser.add_argument("--audit", action="store_true", help="Audit existing specs in docs/specs")
-    parser.add_argument("--selftest", action="store_true", help="Run self-test")
+    parser.add_argument("--specs", type=str, default="docs/specs", help="Directory to audit (with --audit)")
+    parser.add_argument("--audit", action="store_true", help="Audit existing specs and name the ones that cannot serve as an oracle")
+    parser.add_argument("--selftest", action="store_true", help="Prove this converter can fail")
 
     args = parser.parse_args()
 
     if args.selftest:
         return selftest()
-
+    if args.audit:
+        return audit_specs(args.specs)
     if args.source:
-        ingest_directory(args.source, args.out)
-        return 0
+        _count, failed = ingest_directory(args.source, args.out)
+        # A spec that did not convert is an oracle that is not there, and an
+        # exit code is the only part of this a script downstream can read.
+        return 1 if failed else 0
 
     parser.print_help()
     return 1

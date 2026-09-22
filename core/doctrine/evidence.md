@@ -68,7 +68,7 @@ Every field is there because a verification went wrong without it:
   |---|---|
   | `docs/specs/orders.md 3.2 R1` | a document declared in `oracle.specs` |
   | `prisma/schema.prisma Order:total` | the schema or the API contract — a data or response-shape rule |
-  | `FLOOR no unhandled 500 on a valid request` | nothing is written, and the outcome is wrong anyway |
+  | `FLOOR unhandled-error` | nothing is written, and the outcome is wrong anyway |
 
   A bare `3.2` is not a citation; it names a section to someone who already
   knows the file. A path that does not exist is worse than nothing, because it
@@ -79,6 +79,24 @@ Every field is there because a verification went wrong without it:
   Only a `RESULT: BLOCKED` case may leave it out: a case that never ran derived
   no expected value. That is the honest use of BLOCKED, and it is why the rule
   does not push anyone into inventing a citation.
+
+  **The floor is a named list, not a blank line.** `FLOOR` takes one of exactly
+  seven ids — five from `security-probes.md`, plus the two general ones — and
+  the gate refuses anything else, because free text after `FLOOR` is a baseline
+  nobody agreed to and a way to skip the specification entirely:
+
+| id | the outcome |
+|---|---|
+| `auth-bypass` | a path into a session without valid credentials |
+| `authz-bypass` | one role or user reaching another's data or another's action |
+| `injection-executed` | a payload runs as SQL, HTML/JS, a template or a command |
+| `secret-leaked` | a password, hash, token, session id or another user's data in a response, a URL, a log line or an error message |
+| `session-outlives` | logout, password change or reset, or an admin lock — and the old session still works |
+| `unhandled-error` | a valid request answered with a 5xx or a stack trace |
+| `data-loss` | a saved value gone after a reload, or a record destroyed without asking |
+
+  Write the id first; anything after it is your note:
+  `REQUIREMENT: FLOOR data-loss — the total is gone after F5`.
 
 ## The coverage decision, per pack
 
