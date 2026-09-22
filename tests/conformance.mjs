@@ -952,6 +952,72 @@ for (const [label, cmd, args] of [
     `README says the export has ${readmeXlsx && readmeXlsx[1]} honesty mutations; the selftest ran ${xlsxN && xlsxN[1]}`);
 }
 
+
+// ---- an image that explains itself -------------------------------------------
+// "evd thiếu khoanh vùng chỗ kiểm thử · nhìn vào hình ảnh không biết đang làm
+// gì cả." The gate's rule was on the FILENAME: anything ending in `_boxed.png`
+// counted, including a plain screenshot somebody renamed. So the requirement
+// moved to the picture, and the picture now declares itself.
+{
+  const browser = await import("../core/scripts/browser.mjs");
+  check(typeof browser.shotAnnotated === "function", "browser.mjs no longer exports shotAnnotated");
+
+  // Both arguments are REFUSED rather than defaulted, because both of them are
+  // the complaint this exists to answer.
+  const refuses = async (opts, why) => {
+    try { await browser.shotAnnotated(null, "/tmp", 1, "x", opts); check(false, `NOT REFUSED — ${why}`); }
+    catch (e) { check(/required/.test(e.message), `${why}: threw the wrong error — ${e.message.slice(0, 80)}`); }
+  };
+  await refuses({}, "no selector");
+  await refuses({ proves: "something" }, "no selector, only prose");
+  await refuses({ selector: "#x" }, "a selector but nothing saying what it proves");
+
+  const src = fs.readFileSync(path.join(pkgRoot, "core/scripts/browser.mjs"), "utf8");
+
+  // The box is drawn from the selector the check already reads. Picking
+  // coordinates by hand is how you box the wrong element.
+  check(/getBoundingClientRect/.test(src), "the overlay does not measure the element — it is boxing something else");
+  check(/shots\.json/.test(src), "shotAnnotated does not write the sidecar the gate reads");
+  check(/annotated: !overlayError/.test(src),
+    "the sidecar does not record whether the overlay actually drew — which is how a bare screenshot once passed as annotated");
+
+  // A swallowed overlay failure produced the worst artefact this tool can make:
+  // a bare image named _boxed, with a sidecar swearing the element was found.
+  check(!/catch \{ \/\* a page mid-navigation/.test(src),
+    "the overlay failure is swallowed silently again — that is what produced a lying artefact");
+  check(/could not draw the overlay/.test(src), "an overlay failure is not reported to the person running it");
+
+  // `what` was passed to the page but never destructured inside it, so the
+  // header threw ReferenceError whenever no explicit title was given — which
+  // is every hand-written journey. Latent for as long as only the generator
+  // called it.
+  const evalArgs = /page\.evaluate\(\(\{([^}]*)\}\)/.exec(src);
+  check(!!evalArgs, "could not find the overlay's page.evaluate signature");
+  if (evalArgs) {
+    const destructured = evalArgs[1].split(",").map((x) => x.trim());
+    for (const name of ["selector", "title", "caption", "verdict", "cite", "what"]) {
+      check(destructured.includes(name),
+        `the overlay uses \`${name}\` but does not destructure it — it will throw inside the page`);
+    }
+  }
+}
+
+// ---- the gate reads what the image claims ------------------------------------
+{
+  const gate = fs.readFileSync(path.join(pkgRoot, "core/scripts/evd_check.py"), "utf8");
+  check(/def read_shots\(/.test(gate), "evd_check no longer reads shots.json");
+  check(/is not declared in shots\.json/.test(gate), "a boxed image nobody declared is accepted again");
+  check(/declares no `proves`/.test(gate), "an image that says nothing about itself is accepted again");
+  check(/the overlay failed to draw/.test(gate), "an image admitting it was never annotated is accepted again");
+  check(/no shots\.json beside the images/.test(gate),
+    "a hand-annotated folder is not even warned about");
+
+  // The hand-annotation path stays legitimate — it just cannot say what it
+  // drew, so it warns rather than fails.
+  const handDrawn = gate.split("no shots.json beside the images")[0].slice(-400);
+  check(/res\.warn/.test(handDrawn), "a missing sidecar FAILS rather than warns — annotate.py is still a valid path");
+}
+
 // ---- report -------------------------------------------------------------------
 if (fails.length) {
   console.error(`conformance: ${fails.length} FAILED of ${checks} checks\n`);
